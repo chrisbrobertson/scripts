@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""Enhanced gh pr list with CI check rollup and review state.
+
+Usage:
+  prs                 list open PRs
+  prs --limit N       limit results (default 50)
+  prs --json          raw JSON from gh
+  prs --help
+"""
+import argparse, json, subprocess, sys
+
+
+def rollup_checks(checks):
+    if not checks:
+        return ""
+    states = {c.get("state", "").upper() for c in checks}
+    if "FAILURE" in states or "ERROR" in states:
+        return "FAIL"
+    if "PENDING" in states or "IN_PROGRESS" in states or "QUEUED" in states:
+        return "pending"
+    if states <= {"SUCCESS", "SKIPPED", "NEUTRAL"}:
+        return "pass"
+    return ""
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Enhanced gh pr list.")
+    ap.add_argument("--limit", type=int, default=50)
+    ap.add_argument("--json", action="store_true", dest="as_json", help="Raw JSON output")
+    args = ap.parse_args()
+
+    result = subprocess.run(
+        [
+            "gh", "pr", "list",
+            "--json", "number,title,headRefName,statusCheckRollup,reviewDecision,author,url",
+            "--limit", str(args.limit),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(result.stderr.strip(), file=sys.stderr)
+        sys.exit(result.returncode)
+
+    prs = json.loads(result.stdout)
+
+    if args.as_json:
+        print(json.dumps(prs, indent=2))
+        return
+
+    if not prs:
+        print("No open PRs.")
+        return
+
+    for pr in prs:
+        pr["_checks"] = rollup_checks(pr.get("statusCheckRollup") or [])
+        pr["_review"] = (pr.get("reviewDecision") or "").lower().replace("_", " ")
+        pr["_author"] = (pr.get("author") or {}).get("login", "?")
+
+    w_num = max(len("#NUM"), len("#" + str(max(pr["number"] for pr in prs))) + 1)
+    w_title = min(52, max(len("TITLE"), max(len(pr["title"]) for pr in prs)))
+    w_branch = min(30, max(len("BRANCH"), max(len(pr.get("headRefName", "")) for pr in prs)))
+    w_checks = max(len("CHECKS"), max(len(pr["_checks"]) for pr in prs))
+    w_review = max(len("REVIEW"), max(len(pr["_review"]) for pr in prs))
+
+    def row(num, title, branch, checks, review, author):
+        return (
+            f"{num:<{w_num}}  "
+            f"{title:<{w_title}}  "
+            f"{branch:<{w_branch}}  "
+            f"{checks:<{w_checks}}  "
+            f"{review:<{w_review}}  "
+            f"{author}"
+        )
+
+    header = row("#", "TITLE", "BRANCH", "CHECKS", "REVIEW", "AUTHOR")
+    print(header)
+    print("-" * len(header))
+    for pr in prs:
+        print(
+            row(
+                f"#{pr['number']}",
+                pr["title"][:w_title],
+                pr.get("headRefName", "")[:w_branch],
+                pr["_checks"],
+                pr["_review"],
+                pr["_author"],
+            )
+        )
+
+
+if __name__ == "__main__":
+    main()

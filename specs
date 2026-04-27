@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+"""List spec files with frontmatter metadata.
+
+Usage:
+  specs                       list all specs with status and components
+  specs --status approved     filter by status value
+  specs --check-impl          show whether component dirs contain source files
+  specs --json                JSON output
+  specs --help
+"""
+import argparse, json, os, re, sys
+from pathlib import Path
+
+
+def parse_frontmatter(path):
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return {}
+    if not text.startswith("---"):
+        return {}
+    lines = text.splitlines()
+    end_idx = None
+    for i, line in enumerate(lines[1:], 1):
+        if line.strip() == "---":
+            end_idx = i
+            break
+    if end_idx is None:
+        return {}
+    fm_lines = lines[1:end_idx]
+    result = {}
+    i = 0
+    while i < len(fm_lines):
+        line = fm_lines[i]
+        m = re.match(r"^(\w[\w-]*):\s*(.*)", line)
+        if m:
+            key, val = m.group(1), m.group(2).strip()
+            if val == "":
+                # Might be a block list
+                items = []
+                i += 1
+                while i < len(fm_lines):
+                    item_m = re.match(r"^\s+-\s+(.*)", fm_lines[i])
+                    if item_m:
+                        items.append(item_m.group(1).strip())
+                        i += 1
+                    elif fm_lines[i].startswith((" ", "\t")):
+                        i += 1
+                    else:
+                        break
+                result[key] = items if items else ""
+                continue
+            result[key] = val
+        i += 1
+    return result
+
+
+def parse_components(fm):
+    val = fm.get("components", [])
+    if isinstance(val, list):
+        return [str(v) for v in val if v]
+    val = str(val).strip()
+    if not val:
+        return []
+    if val.startswith("[") and val.endswith("]"):
+        return [x.strip().strip("\"'") for x in val[1:-1].split(",") if x.strip()]
+    return [x.strip() for x in val.split(",") if x.strip()]
+
+
+def has_impl(root, components):
+    """Return True/False if component dirs have non-markdown source files, None if unknown."""
+    if not components:
+        return None
+    found_dir = False
+    for comp in components:
+        comp_path = root / comp
+        if not comp_path.exists():
+            continue
+        found_dir = True
+        for f in comp_path.rglob("*"):
+            if (
+                f.is_file()
+                and f.suffix not in (".md", ".txt", "")
+                and not any(p.startswith(".") for p in f.parts)
+            ):
+                return True
+    return False if found_dir else None
+
+
+def find_specs(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+        if os.path.basename(dirpath) == "specs":
+            for fn in sorted(filenames):
+                if fn.endswith(".md"):
+                    yield Path(dirpath) / fn
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="List spec files with frontmatter.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ap.add_argument("--status", help="Filter by status (e.g. approved, draft, review)")
+    ap.add_argument(
+        "--check-impl",
+        action="store_true",
+        help="Show whether component dirs contain source files",
+    )
+    ap.add_argument("--json", action="store_true", dest="as_json", help="JSON output")
+    args = ap.parse_args()
+
+    root = Path.cwd()
+    specs = []
+    for path in find_specs(root):
+        fm = parse_frontmatter(path)
+        status = fm.get("status", "")
+        if args.status and status != args.status:
+            continue
+        components = parse_components(fm)
+        impl = has_impl(root, components) if args.check_impl else None
+        specs.append(
+            {
+                "path": str(path.relative_to(root)),
+                "status": status,
+                "components": components,
+                "impl": impl,
+            }
+        )
+
+    if args.as_json:
+        print(json.dumps(specs, indent=2))
+        return
+
+    if not specs:
+        msg = "No specs found"
+        if args.status:
+            msg += f" with status: {args.status}"
+        print(msg + ".")
+        return
+
+    w_status = max(len("STATUS"), max(len(s["status"]) for s in specs))
+    comp_strs = [", ".join(s["components"]) for s in specs]
+    w_comp = min(40, max(len("COMPONENTS"), max((len(c) for c in comp_strs), default=0)))
+
+    header_parts = [f"{'STATUS':<{w_status}}"]
+    if args.check_impl:
+        header_parts.append(f"{'IMPL':<5}")
+    header_parts += [f"{'COMPONENTS':<{w_comp}}", "PATH"]
+    header = "  ".join(header_parts)
+    print(header)
+    print("-" * len(header))
+
+    for s, comp_str in zip(specs, comp_strs):
+        parts = [f"{s['status']:<{w_status}}"]
+        if args.check_impl:
+            impl_str = {True: "yes", False: "no", None: "?"}.get(s["impl"], "?")
+            parts.append(f"{impl_str:<5}")
+        parts += [f"{comp_str[:w_comp]:<{w_comp}}", s["path"]]
+        print("  ".join(parts))
+
+
+if __name__ == "__main__":
+    main()

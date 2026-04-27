@@ -44,20 +44,90 @@ PROJECT=$(basename "$PWD")
 LOG_DIR="$HOME/sisyphus-logs"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/${PROJECT}-$(date +%Y%m%d-%H%M%S)-$$.log"
-touch "$LOG"
+STOP_FILE="$LOG_DIR/${PROJECT}.stop"
+
+if [ -f "$STOP_FILE" ]; then
+  cat >&2 <<EOF
+ERROR: $STOP_FILE already exists.
+
+Another babysit.sh may already be running for '$PROJECT'.
+
+To check:
+  pgrep -af babysit
+
+If no other instance is running (e.g. a previous run crashed), remove the
+lock file and try again:
+  rm $STOP_FILE
+EOF
+  exit 1
+fi
+
+TMP_RESULT=$(mktemp)
+TMP_STDERR=$(mktemp)
+touch "$LOG" "$STOP_FILE"
+trap 'rm -f "$STOP_FILE" "$TMP_RESULT" "$TMP_STDERR"' EXIT
 
 echo "Babysitting $PROJECT (max=$MAX_ITER, stuck=$STUCK_N) → $LOG"
+echo "  graceful stop: rm $STOP_FILE"
 
-PROMPT=$(cat <<'PROMPT_EOF'
+# ---------------------------------------------------------------------------
+# Exponential backoff for usage/rate limits
+# ---------------------------------------------------------------------------
+BACKOFF_SEC=0
+BACKOFF_INITIAL=$((15 * 60))  # 15 minutes
+BACKOFF_MAX=$((4 * 60 * 60))  # 4 hours
+
+is_rate_limited() {
+  printf '%s' "$*" | grep -qiE \
+    'usage.?limit|rate.?limit|monthly.?limit|too.?many.?request|overloaded|try.?again.?(in|after|later)|529|capacity.?exceed'
+}
+
+backoff_sleep() {
+  local secs=$1
+  local mins=$(( secs / 60 ))
+  local resume
+  resume=$(date -v "+${secs}S" '+%H:%M' 2>/dev/null \
+        || date -d "+${secs} seconds" '+%H:%M' 2>/dev/null \
+        || echo "?")
+  printf 'Usage limit — backing off %dm (resuming ~%s)\n' "$mins" "$resume" \
+    | tee -a "$LOG" >&2
+  local elapsed=0
+  while [ "$elapsed" -lt "$secs" ]; do
+    local remaining=$(( secs - elapsed ))
+    local step=$(( remaining < 60 ? remaining : 60 ))
+    sleep "$step"
+    elapsed=$(( elapsed + step ))
+    if [ "$elapsed" -lt "$secs" ]; then
+      local left=$(( secs - elapsed ))
+      printf '  [backoff] %dm%ds remaining...\n' \
+        "$(( left / 60 ))" "$(( left % 60 ))" >&2
+    fi
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Prompt
+# ---------------------------------------------------------------------------
+BASE_PROMPT=$(cat <<'PROMPT_EOF'
 You are working autonomously on this project as one iteration of a long-running babysitter loop. Each invocation should ship ONE well-scoped unit of progress. Over many iterations, the project gets built.
+
+The current project state (PRs, issues, specs) is provided above — use it directly without re-running discovery commands.
 
 Start by reading ./CLAUDE.md and the spec(s) relevant to whatever you decide to work on. Specs live under ./specs/ at the root and recursively under component directories; each has YAML frontmatter with a `status` field (draft|review|approved|deprecated) and a `components` field naming the directories it governs.
 
+Helper scripts (available for targeted mid-iteration queries):
+  ~/repos/scripts/prs              — enhanced `gh pr list` with CI check rollup and review state
+  ~/repos/scripts/issues           — enhanced `gh issue list` sorted by priority labels
+  ~/repos/scripts/specs            — list all specs with status/components (*/specs/**/*.md)
+  ~/repos/scripts/specs --status STATUS      — filter by status value (approved|draft|review|deprecated)
+  ~/repos/scripts/specs --check-impl         — also show whether component dirs contain source files
+  ~/repos/scripts/specs --json / ~/repos/scripts/prs --json / ~/repos/scripts/issues --json  — machine-readable output
+
 Pick the next unit of work in this priority order — stop at the first level that yields an actionable item:
 
-1. Open PRs you can advance. Run `gh pr list`. Address review comments or CI failures on any PR you (or a previous iteration) opened.
-2. Open issues you can complete in one iteration. Run `gh issue list`. Pick the highest-priority one that fits the scope discipline below.
-3. Approved specs with no implementation. Find specs with `status: approved` in frontmatter whose `components` directories contain no source code yet. Scaffold the next missing piece — project skeleton, an interface stub, the first integration test, etc.
+1. Open PRs you can advance. See open PRs in the project state above. Address review comments or CI failures on any PR you (or a previous iteration) opened.
+2. Open issues you can complete in one iteration. See open issues in the project state above. Pick the highest-priority one that fits the scope discipline below.
+3. Approved specs with no implementation. See specs in the project state above — look for rows where IMPL is `no` or `?`. Scaffold the next missing piece — project skeleton, an interface stub, the first integration test, etc.
 4. Proto definitions without consumers. Files under ./proto/ that no service implements. Generate stubs or wire a service skeleton that consumes them.
 5. Specs needing refinement. Specs with `status: draft` or `status: review` that are actively blocking implementation work. Tighten ambiguous sections, resolve contradictions, expand thin areas.
 6. Open questions. Pick one from ./specs/open-questions.md (if it exists), propose a resolution grounded in existing specs, and update the relevant spec(s) to record the decision.
@@ -79,6 +149,21 @@ If you hit a transient obstacle (failing test, missing dependency, ambiguous spe
 PROMPT_EOF
 )
 
+collect_state() {
+  echo "=== project state @ $(date -u +%FT%TZ) ==="
+  echo ""
+  echo "## open PRs"
+  ~/repos/scripts/prs 2>/dev/null || echo "(unavailable)"
+  echo ""
+  echo "## open issues"
+  ~/repos/scripts/issues 2>/dev/null || echo "(unavailable)"
+  echo ""
+  echo "## specs"
+  ~/repos/scripts/specs --check-impl 2>/dev/null || echo "(none found)"
+  echo ""
+  echo "==="
+}
+
 {
   echo "=== babysit.sh @ $(date -u +%FT%TZ) ==="
   echo "project:  $PROJECT"
@@ -86,33 +171,43 @@ PROMPT_EOF
   echo "max_iter: $MAX_ITER"
   echo "sleep:    ${SLEEP_SEC}s"
   echo "stuck_n:  $STUCK_N"
-  echo "--- prompt ---"
-  printf '%s\n' "$PROMPT"
-  echo "--- end prompt ---"
+  echo "--- base prompt ---"
+  printf '%s\n' "$BASE_PROMPT"
+  echo "--- end base prompt ---"
 } >> "$LOG"
 
 # Ring buffer of recent result hashes for stuck detection.
 declare -a HASHES=()
-
-# Tmp file for capturing the final .result of each iteration without
-# losing claude's exit code (which $(...) would hide behind the pipeline).
-TMP_RESULT=$(mktemp)
-trap 'rm -f "$TMP_RESULT"' EXIT
 
 iter=0
 while [ "$iter" -lt "$MAX_ITER" ]; do
   iter=$((iter + 1))
   HEADER="=== iter $iter @ $(date -u +%FT%TZ) ==="
   echo "$HEADER" | tee -a "$LOG" >&2
+  echo "  [stop file: $STOP_FILE]" >&2
+  if [ ! -f "$STOP_FILE" ]; then
+    echo "Stop file removed; exiting before iter $iter." | tee -a "$LOG"
+    break
+  fi
 
-  # Stream NDJSON events from claude → tee them verbatim into the log →
-  # parse them in python to print a live human-readable summary on stderr
-  # and emit the final .result on stdout.
+  STATE=$(collect_state)
+  PROMPT="${STATE}
+
+${BASE_PROMPT}"
+
+  echo "--- state ---" >> "$LOG"
+  printf '%s\n' "$STATE" >> "$LOG"
+  echo "--- end state ---" >> "$LOG"
+
+  # Stream NDJSON events from claude → tee stdout into log →
+  # parse in python for live human-readable summary on stderr and final result on stdout.
+  # Stderr is captured separately so we can inspect it for rate-limit signals.
+  > "$TMP_STDERR"
   claude -p "$PROMPT" \
     --model opusplan \
     --dangerously-skip-permissions \
     --output-format stream-json \
-    --verbose 2>>"$LOG" \
+    --verbose 2>"$TMP_STDERR" \
     | tee -a "$LOG" \
     | python3 -c '
 import json, sys
@@ -150,17 +245,37 @@ for line in sys.stdin:
 sys.stdout.write(final)
 ' > "$TMP_RESULT"
   RC=${PIPESTATUS[0]}
+
+  # Flush stderr capture to log regardless of outcome.
+  cat "$TMP_STDERR" >> "$LOG"
   echo "---" >> "$LOG"
 
+  STDERR_CONTENT=$(cat "$TMP_STDERR")
+  RESULT=$(cat "$TMP_RESULT")
+
+  # Rate-limit / usage-limit check — backoff and retry without consuming an iteration.
+  if is_rate_limited "$STDERR_CONTENT" || is_rate_limited "$RESULT"; then
+    iter=$(( iter - 1 ))
+    if [ "$BACKOFF_SEC" -eq 0 ]; then
+      BACKOFF_SEC=$BACKOFF_INITIAL
+    else
+      BACKOFF_SEC=$(( BACKOFF_SEC * 2 ))
+      [ "$BACKOFF_SEC" -gt "$BACKOFF_MAX" ] && BACKOFF_SEC=$BACKOFF_MAX
+    fi
+    backoff_sleep "$BACKOFF_SEC"
+    continue
+  fi
+
+  # Non-rate-limit failure — bail out.
   if [ "$RC" -ne 0 ]; then
     echo "claude exited $RC on iter $iter; see $LOG" >&2
     break
   fi
 
-  RESULT=$(cat "$TMP_RESULT")
+  # Successful response — reset backoff.
+  BACKOFF_SEC=0
 
-  # STOP only if the trimmed result ends with the literal token on its own line
-  # (or the whole result is just "STOP"). Avoids false positives from STOP appearing in code blocks.
+  # STOP only if the trimmed result ends with the literal token on its own line.
   TRIMMED=$(printf '%s' "$RESULT" | sed -e 's/[[:space:]]*$//')
   LAST_LINE=$(printf '%s' "$TRIMMED" | tail -n 1)
   if [ "$LAST_LINE" = "STOP" ]; then
