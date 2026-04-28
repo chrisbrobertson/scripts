@@ -10,14 +10,14 @@
 #   find-bailed-merged-prs.sh [--log-dir DIR] [--repo-map FILE] [--repo OWNER/REPO]
 #
 #   --log-dir DIR       Babysit log directory (default: ~/sisyphus-logs)
-#   --repo-map FILE     TSV file mapping project names to OWNER/REPO (default: ~/.config/babysit-audit/repo-map.tsv)
-#   --repo OWNER/REPO   Override: query this repo for ALL bailed PRs found (useful for single-project runs)
+#   --repo-map FILE     TSV file: project<TAB>OWNER/REPO (default: ~/.config/babysit-audit/repo-map.tsv)
+#   --repo OWNER/REPO   Override: query this repo for ALL bailed PRs found
 #
 # Repo map format (no header, tab-separated):
 #   scripts	chrisrobertson/scripts
 #   home-lab-monitor	chrisrobertson/home-lab-monitor
 #
-# Output: TSV to stdout. MERGED rows sorted first.
+# Output: TSV to stdout (MERGED rows first). Summary to stderr.
 # Exit code: 0 always (audit, not a gate).
 
 set -uo pipefail
@@ -39,207 +39,186 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-# ---------- parse one log file into TSV rows ----------
-# Output: project<TAB>pr_num<TAB>outcome<TAB>reason
-parse_log() {
-  local log_path="$1"
-  local project
-  project=$(basename "$log_path" | sed -E 's/-[0-9]{8}-[0-9]{6}-[0-9]+\.log$//')
+python3 - "$LOG_DIR" "$REPO_MAP_FILE" "$REPO_OVERRIDE" <<'PYEOF'
+import json
+import os
+import re
+import subprocess
+import sys
 
-  awk -v project="$project" '
-    BEGIN {
-      is_review_log = 0
-      pr = ""; outcome = ""; reason = ""
-    }
+log_dir, repo_map_file, repo_override = sys.argv[1], sys.argv[2], sys.argv[3]
 
-    /^=== babysit-with-review\.sh @/ { is_review_log = 1 }
-    !is_review_log { next }
+# ---- load repo map ----
 
-    /^=== review handoff: PR #[0-9]+ @/ {
-      if (pr != "") emit()
-      match($0, /PR #([0-9]+)/, m)
-      pr = m[1]
-      outcome = "UNKNOWN"
-      reason = "no terminal marker in block"
-    }
+repo_map = {}
+if repo_override:
+    pass  # applied per-row below
+elif os.path.isfile(repo_map_file):
+    with open(repo_map_file) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            parts = line.split('\t', 1)
+            if len(parts) == 2:
+                repo_map[parts[0]] = parts[1]
 
-    pr == "" { next }
+# ---- parse logs ----
 
-    /cleared after/ && outcome != "CLEARED" {
-      outcome = "CLEARED"; reason = substr($0, 1, 120)
-    }
+BAILED_PHRASES = [
+    'bailing review cycle',
+    'hit MAX_REVIEW_CYCLES',
+    'HEAD unchanged',
+    'STUCK_REVIEW',
+    'gh pr checkout',   # "gh pr checkout N failed"
+    'marking PR',       # fail_review_cycle log line (post-fix)
+]
 
-    /bailing review cycle/ && outcome != "CLEARED" {
-      outcome = "BAILED"; reason = substr($0, 1, 120)
-    }
-    /hit MAX_REVIEW_CYCLES/ && outcome != "CLEARED" {
-      outcome = "BAILED"; reason = substr($0, 1, 120)
-    }
-    /HEAD unchanged/ && outcome != "CLEARED" {
-      outcome = "BAILED"; reason = substr($0, 1, 120)
-    }
-    /STUCK_REVIEW/ && outcome != "CLEARED" {
-      outcome = "BAILED"; reason = substr($0, 1, 120)
-    }
-    /gh pr checkout.*failed/ && outcome != "CLEARED" {
-      outcome = "BAILED"; reason = substr($0, 1, 120)
-    }
-    /marking PR.*incomplete/ && outcome != "CLEARED" {
-      outcome = "BAILED"; reason = substr($0, 1, 120)
-    }
+log_files = sorted(
+    f for f in (
+        os.path.join(log_dir, fn)
+        for fn in os.listdir(log_dir)
+        if fn.endswith('.log')
+    )
+    if os.path.isfile(f)
+) if os.path.isdir(log_dir) else []
 
-    /^=== (review handoff|iter) / && FNR > 1 {
-      if (pr != "") { emit(); pr = "" }
-    }
+if not log_files:
+    print(f'No log files found in {log_dir} — nothing to audit.', file=sys.stderr)
+    sys.exit(0)
 
-    END { if (pr != "") emit() }
+# key: (project, pr_num) → {'outcome': ..., 'reason': ..., 'log': ...}
+# Worst outcome wins: BAILED > UNKNOWN > CLEARED
+RANK = {'BAILED': 2, 'UNKNOWN': 1, 'CLEARED': 0}
+results = {}
 
-    function emit() {
-      printf("%s\t%s\t%s\t%s\n", project, pr, outcome, reason)
-    }
-  ' "$log_path"
-}
+review_log_count = 0
 
-# ---------- collect all handoffs across all logs ----------
+for log_path in log_files:
+    with open(log_path, errors='replace') as f:
+        lines = f.readlines()
 
-declare -A WORST_OUTCOME   # key: "project|pr" → BAILED > UNKNOWN > CLEARED
-declare -A WORST_REASON
-declare -A WORST_LOG
+    # Check header
+    if not any(line.startswith('=== babysit-with-review.sh @') for line in lines[:5]):
+        continue
+    review_log_count += 1
 
-outcome_rank() {
-  case "$1" in
-    BAILED)  echo 2 ;;
-    UNKNOWN) echo 1 ;;
-    CLEARED) echo 0 ;;
-    *)       echo 0 ;;
-  esac
-}
+    # Extract filename → project name
+    basename = os.path.basename(log_path)
+    project = re.sub(r'-\d{8}-\d{6}-\d+\.log$', '', basename)
 
-shopt -s nullglob
-logs=("$LOG_DIR"/*.log)
-if [ "${#logs[@]}" -eq 0 ]; then
-  echo "No log files found in $LOG_DIR — nothing to audit." >&2
-  exit 0
-fi
+    # Parse handoff blocks
+    pr_num = None
+    outcome = 'UNKNOWN'
+    reason = 'no terminal marker in block'
 
-review_log_count=0
-for log in "${logs[@]}"; do
-  # Skip logs that don't have the babysit-with-review.sh header.
-  if ! grep -q "^=== babysit-with-review\.sh @" "$log" 2>/dev/null; then
-    continue
-  fi
-  review_log_count=$((review_log_count + 1))
+    def emit(project, pr_num, outcome, reason, log_path):
+        key = (project, pr_num)
+        cur_rank = RANK.get(results.get(key, {}).get('outcome', 'CLEARED'), 0)
+        new_rank = RANK.get(outcome, 0)
+        if new_rank >= cur_rank:
+            results[key] = {'outcome': outcome, 'reason': reason[:200], 'log': log_path}
 
-  while IFS=$'\t' read -r proj pr outcome reason; do
-    key="${proj}|${pr}"
-    cur_rank=$(outcome_rank "${WORST_OUTCOME[$key]:-CLEARED}")
-    new_rank=$(outcome_rank "$outcome")
-    if [ "$new_rank" -ge "$cur_rank" ]; then
-      WORST_OUTCOME[$key]="$outcome"
-      WORST_REASON[$key]="$reason"
-      WORST_LOG[$key]="$log"
-    fi
-  done < <(parse_log "$log")
-done
+    for i, line in enumerate(lines):
+        line_s = line.rstrip('\n')
 
-if [ "$review_log_count" -eq 0 ]; then
-  echo "No babysit-with-review.sh logs found in $LOG_DIR — nothing to audit." >&2
-  exit 0
-fi
+        handoff_m = re.match(r'^=== review handoff: PR #(\d+) @', line_s)
+        if handoff_m:
+            if pr_num is not None:
+                emit(project, pr_num, outcome, reason, log_path)
+            pr_num = handoff_m.group(1)
+            outcome = 'UNKNOWN'
+            reason = 'no terminal marker in block'
+            continue
 
-# ---------- filter to BAILED/UNKNOWN only ----------
+        if pr_num is None:
+            continue
 
-declare -a CANDIDATES=()
-for key in "${!WORST_OUTCOME[@]}"; do
-  o="${WORST_OUTCOME[$key]}"
-  if [ "$o" = "BAILED" ] || [ "$o" = "UNKNOWN" ]; then
-    CANDIDATES+=("$key")
-  fi
-done
+        # Block boundary (new iter or next handoff handled above)
+        if re.match(r'^=== iter \d+', line_s) and i > 0:
+            emit(project, pr_num, outcome, reason, log_path)
+            pr_num = None
+            continue
 
-if [ "${#CANDIDATES[@]}" -eq 0 ]; then
-  echo "No bailed handoffs found — no candidates to audit." >&2
-  exit 0
-fi
+        # Outcome detection
+        if 'cleared after' in line_s:
+            outcome = 'CLEARED'
+            reason = line_s.strip()
+        elif outcome != 'CLEARED':
+            for phrase in BAILED_PHRASES:
+                if phrase in line_s:
+                    if 'gh pr checkout' in phrase and 'failed' not in line_s:
+                        continue
+                    outcome = 'BAILED'
+                    reason = line_s.strip()
+                    break
 
-# ---------- load repo map ----------
+    if pr_num is not None:
+        emit(project, pr_num, outcome, reason, log_path)
 
-declare -A REPO_MAP
-if [ -n "$REPO_OVERRIDE" ]; then
-  : # will use override per-row
-elif [ -f "$REPO_MAP_FILE" ]; then
-  while IFS=$'\t' read -r proj repo; do
-    [[ "$proj" =~ ^# ]] && continue
-    REPO_MAP["$proj"]="$repo"
-  done < "$REPO_MAP_FILE"
-fi
+if review_log_count == 0:
+    print(f'No babysit-with-review.sh logs found in {log_dir} — nothing to audit.', file=sys.stderr)
+    sys.exit(0)
 
-# ---------- query GitHub and build output rows ----------
+# ---- filter to BAILED/UNKNOWN ----
 
-declare -a MERGED_ROWS=()
-declare -a OTHER_ROWS=()
-declare -a NO_MAP_ROWS=()
+candidates = {k: v for k, v in results.items() if v['outcome'] in ('BAILED', 'UNKNOWN')}
 
-n_bailed=0
-n_merged=0
+if not candidates:
+    print('No bailed handoffs found — no candidates to audit.', file=sys.stderr)
+    sys.exit(0)
 
-for key in "${CANDIDATES[@]}"; do
-  proj="${key%%|*}"
-  pr="${key##*|}"
-  outcome="${WORST_OUTCOME[$key]}"
-  reason="${WORST_REASON[$key]}"
+# ---- query GitHub ----
 
-  n_bailed=$((n_bailed + 1))
+merged_rows = []
+other_rows = []
+no_map_rows = []
+n_merged = 0
 
-  # Resolve repo.
-  local_repo="$REPO_OVERRIDE"
-  if [ -z "$local_repo" ]; then
-    local_repo="${REPO_MAP[$proj]:-}"
-  fi
+for (project, pr_num), info in sorted(candidates.items()):
+    outcome = info['outcome']
+    reason = info['reason']
 
-  if [ -z "$local_repo" ]; then
-    NO_MAP_ROWS+=("$(printf '%s\t%s\t%s\t%s\tUNKNOWN\t-\t-\t(no repo mapping)' "$proj" "$pr" "$outcome" "$reason")")
-    continue
-  fi
+    gh_repo = repo_override or repo_map.get(project, '')
 
-  # Query GitHub.
-  pr_json=$(gh pr view "$pr" --repo "$local_repo" \
-    --json number,state,mergedAt,mergedBy,url,headRefName,additions,deletions 2>/dev/null) || {
-    OTHER_ROWS+=("$(printf '%s\t%s\t%s\t%s\tUNKNOWN\t-\thttps://github.com/%s/pull/%s\t(gh query failed)' \
-      "$proj" "$pr" "$outcome" "$reason" "$local_repo" "$pr")")
-    continue
-  }
+    if not gh_repo:
+        no_map_rows.append((project, pr_num, outcome, reason, 'UNKNOWN', '-', '-', '(no repo mapping)'))
+        continue
 
-  state=$(printf '%s' "$pr_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('state','?'))")
-  merged_at=$(printf '%s' "$pr_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('mergedAt') or '-')")
-  url=$(printf '%s' "$pr_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('url','?'))")
+    try:
+        result = subprocess.run(
+            ['gh', 'pr', 'view', pr_num, '--repo', gh_repo,
+             '--json', 'number,state,mergedAt,mergedBy,url,headRefName,additions,deletions'],
+            capture_output=True, text=True, timeout=15
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip())
+        d = json.loads(result.stdout)
+        state = d.get('state', '?')
+        merged_at = d.get('mergedAt') or '-'
+        url = d.get('url', f'https://github.com/{gh_repo}/pull/{pr_num}')
+    except Exception as e:
+        other_rows.append((project, pr_num, outcome, reason[:80], 'UNKNOWN', '-',
+                           f'https://github.com/{gh_repo}/pull/{pr_num}', f'gh query failed: {e}'))
+        continue
 
-  row="$(printf '%s\t%s\t%s\t%.100s\t%s\t%s\t%s' "$proj" "$pr" "$outcome" "$reason" "$state" "$merged_at" "$url")"
+    row = (project, pr_num, outcome, reason[:80], state, merged_at, url, '')
+    if state == 'MERGED':
+        n_merged += 1
+        merged_rows.append(row)
+    else:
+        other_rows.append(row)
 
-  if [ "$state" = "MERGED" ]; then
-    n_merged=$((n_merged + 1))
-    MERGED_ROWS+=("$row")
-  else
-    OTHER_ROWS+=("$row")
-  fi
-done
+# ---- output ----
 
-# ---------- output ----------
+print('PROJECT\tPR\tOUTCOME\tREASON\tSTATE\tMERGED_AT\tURL\tNOTE')
+for row in merged_rows + other_rows + no_map_rows:
+    print('\t'.join(str(x) for x in row))
 
-printf 'PROJECT\tPR\tOUTCOME\tREASON\tSTATE\tMERGED_AT\tURL\tNOTE\n'
-for row in "${MERGED_ROWS[@]+"${MERGED_ROWS[@]}"}"; do
-  printf '%s\t\n' "$row"
-done
-for row in "${OTHER_ROWS[@]+"${OTHER_ROWS[@]}"}"; do
-  printf '%s\t\n' "$row"
-done
-for row in "${NO_MAP_ROWS[@]+"${NO_MAP_ROWS[@]}"}"; do
-  printf '%s\n' "$row"
-done
-
-printf '\n%d bailed handoff(s) across %d unique PR(s) examined; %d already merged.\n' \
-  "$n_bailed" "$n_bailed" "$n_merged" >&2
-
-if [ "$n_merged" -gt 0 ]; then
-  printf 'ACTION REQUIRED: %d merged PR(s) contain unreviewed AI-generated commits.\n' "$n_merged" >&2
-fi
+n_bailed = len(candidates)
+print(f'\n{n_bailed} bailed handoff(s) across {n_bailed} unique PR(s) examined; {n_merged} already merged.',
+      file=sys.stderr)
+if n_merged > 0:
+    print(f'ACTION REQUIRED: {n_merged} merged PR(s) contain unreviewed AI-generated commits.',
+          file=sys.stderr)
+PYEOF
