@@ -277,6 +277,48 @@ count_blocking() {
   '
 }
 
+# Mark a PR as needing manual review when a review cycle bails for any reason.
+# Args: <pr_num> <reason_string> [<review_file>]
+# Best-effort: gh failures are logged but do not abort the caller.
+fail_review_cycle() {
+  local pr_num="$1"
+  local reason="$2"
+  local review_file="${3:-}"
+
+  echo "  [review] marking PR #$pr_num incomplete: $reason" | tee -a "$LOG" >&2
+
+  # Ensure the label exists (idempotent via --force).
+  gh label create review-incomplete \
+    --color B60205 \
+    --description "Babysit review cycle did not complete cleanly" \
+    --force >>"$LOG" 2>&1 || true
+
+  # Convert to draft so the PR cannot be merged without operator action.
+  gh pr ready "$pr_num" --undo >>"$LOG" 2>&1 \
+    || echo "  [review] WARNING: gh pr ready --undo failed for PR #$pr_num" | tee -a "$LOG" >&2
+
+  # Add the label.
+  gh pr edit "$pr_num" --add-label review-incomplete >>"$LOG" 2>&1 \
+    || echo "  [review] WARNING: gh pr edit --add-label failed for PR #$pr_num" | tee -a "$LOG" >&2
+
+  # Post a comment with the reason and last codex review (if available).
+  local body
+  body="**babysit-with-review: review cycle bailed — manual review required**
+
+Reason: ${reason}"
+  if [ -n "$review_file" ] && [ -f "$review_file" ] && [ -s "$review_file" ]; then
+    body="${body}
+
+Last codex review:
+\`\`\`
+$(cat "$review_file")
+\`\`\`"
+  fi
+  printf '%s\n' "$body" \
+    | gh pr comment "$pr_num" --body-file - >>"$LOG" 2>&1 \
+    || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
+}
+
 # Run the Claude<->Codex review cycle for a PR number.
 run_review_cycle() {
   local pr_num="$1"
@@ -287,6 +329,7 @@ run_review_cycle() {
   # Make sure we're on the PR branch.
   if ! gh pr checkout "$pr_num" >>"$LOG" 2>&1; then
     echo "  [review] gh pr checkout $pr_num failed; skipping review cycle" | tee -a "$LOG" >&2
+    fail_review_cycle "$pr_num" "gh pr checkout failed before review could run"
     return 0
   fi
 
@@ -306,6 +349,7 @@ run_review_cycle() {
         "$codex_prompt" 2>&1 \
         | tee -a "$LOG" >&2 ; then
       echo "  [codex] non-zero exit; bailing review cycle" | tee -a "$LOG" >&2
+      fail_review_cycle "$pr_num" "codex exec exited non-zero during cycle $cycle" "$TMP_REVIEW"
       return 0
     fi
 
@@ -313,6 +357,7 @@ run_review_cycle() {
     review=$(cat "$TMP_REVIEW")
     if [ -z "$review" ]; then
       echo "  [codex] empty review output; bailing review cycle" | tee -a "$LOG" >&2
+      fail_review_cycle "$pr_num" "codex produced empty review output during cycle $cycle"
       return 0
     fi
 
@@ -342,6 +387,7 @@ run_review_cycle() {
     echo "  [claude] addressing findings..." >&2
     if ! run_claude "$claude_prompt" "$TMP_REVIEW_RESULT"; then
       echo "  [claude] non-zero exit during review pass; bailing review cycle" | tee -a "$LOG" >&2
+      fail_review_cycle "$pr_num" "claude exited non-zero while addressing review (cycle $cycle)" "$TMP_REVIEW"
       return 0
     fi
 
@@ -353,6 +399,7 @@ run_review_cycle() {
     case "$last_line" in
       "STUCK_REVIEW"*)
         echo "  [claude] $last_line — bailing review cycle" | tee -a "$LOG" >&2
+        fail_review_cycle "$pr_num" "claude reported STUCK_REVIEW (cycle $cycle)" "$TMP_REVIEW"
         return 0
         ;;
       "DONE_REVIEW")
@@ -366,11 +413,13 @@ run_review_cycle() {
     post_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
     if [ -n "$pre_sha" ] && [ "$pre_sha" = "$post_sha" ]; then
       echo "  [claude] HEAD unchanged (no commits made) — bailing review cycle to avoid infinite loop" | tee -a "$LOG" >&2
+      fail_review_cycle "$pr_num" "claude reported DONE_REVIEW but made no commits (cycle $cycle)" "$TMP_REVIEW"
       return 0
     fi
   done
 
   echo "  [review] hit MAX_REVIEW_CYCLES=$MAX_REVIEW_CYCLES on PR #$pr_num; resuming outer loop" | tee -a "$LOG" >&2
+  fail_review_cycle "$pr_num" "exhausted MAX_REVIEW_CYCLES=$MAX_REVIEW_CYCLES without clearing all blocking findings" "$TMP_REVIEW"
 }
 
 # ---------- log header ----------
