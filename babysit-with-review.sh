@@ -104,7 +104,9 @@ Helper scripts (available for targeted mid-iteration queries):
 
 Pick the next unit of work in this priority order — stop at the first level that yields an actionable item:
 
-1. Open PRs you can advance. See open PRs in the project state above. Address review comments or CI failures on any PR you (or a previous iteration) opened.
+1. Open PRs you can advance. Top priority: PRs in the project state above that are NOT draft and NOT labelled `review-incomplete` (STATE column shows empty). Address review comments or CI failures on any such PR (yours or a previous iteration's) before considering anything else.
+
+   SKIP any PR whose STATE is `draft` or `BLOCKED` in the prs table (or `isDraft: true` / labels include `review-incomplete` in the JSON). These PRs were marked by a previous review cycle as needing human intervention — re-attempting them wastes iterations. Move on to item 2.
 2. Open issues you can complete in one iteration. See open issues in the project state above. Pick the highest-priority one that fits the scope discipline below.
 3. Approved specs with no implementation. See specs in the project state above — look for rows where IMPL is `no` or `?`. Scaffold the next missing piece — project skeleton, an interface stub, the first integration test, etc.
 4. Proto definitions without consumers. Files under ./proto/ that no service implements. Generate stubs or wire a service skeleton that consumes them.
@@ -277,6 +279,61 @@ count_blocking() {
   '
 }
 
+# Post a codex review as a PR comment. Best-effort: failures logged, do not abort.
+# Args: <pr_num> <cycle> <max_cycles> <review_file>
+post_codex_review() {
+  local pr_num="$1"
+  local cycle="$2"
+  local max="$3"
+  local review_file="$4"
+
+  [ -s "$review_file" ] || return 0
+
+  local body
+  body="**Codex review — PR #${pr_num} cycle ${cycle} of ${max}**
+
+\`\`\`
+$(cat "$review_file")
+\`\`\`"
+
+  printf '%s\n' "$body" \
+    | gh pr comment "$pr_num" --body-file - >>"$LOG" 2>&1 \
+    || echo "  [review] WARNING: gh pr comment (codex review) failed for PR #$pr_num" | tee -a "$LOG" >&2
+}
+
+# Mark a PR as needing manual review when a review cycle bails for any reason.
+# Args: <pr_num> <reason_string>
+# Best-effort: gh failures are logged but do not abort the caller.
+fail_review_cycle() {
+  local pr_num="$1"
+  local reason="$2"
+
+  echo "  [review] marking PR #$pr_num incomplete: $reason" | tee -a "$LOG" >&2
+
+  # Ensure the label exists (idempotent via --force).
+  gh label create review-incomplete \
+    --color B60205 \
+    --description "Babysit review cycle did not complete cleanly" \
+    --force >>"$LOG" 2>&1 || true
+
+  # Convert to draft so the PR cannot be merged without operator action.
+  gh pr ready "$pr_num" --undo >>"$LOG" 2>&1 \
+    || echo "  [review] WARNING: gh pr ready --undo failed for PR #$pr_num" | tee -a "$LOG" >&2
+
+  # Add the label.
+  gh pr edit "$pr_num" --add-label review-incomplete >>"$LOG" 2>&1 \
+    || echo "  [review] WARNING: gh pr edit --add-label failed for PR #$pr_num" | tee -a "$LOG" >&2
+
+  # Post the bail reason. (Codex review content is already on the PR via post_codex_review.)
+  local body
+  body="**babysit-with-review: review cycle bailed — manual review required**
+
+Reason: ${reason}"
+  printf '%s\n' "$body" \
+    | gh pr comment "$pr_num" --body-file - >>"$LOG" 2>&1 \
+    || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
+}
+
 # Run the Claude<->Codex review cycle for a PR number.
 run_review_cycle() {
   local pr_num="$1"
@@ -287,6 +344,7 @@ run_review_cycle() {
   # Make sure we're on the PR branch.
   if ! gh pr checkout "$pr_num" >>"$LOG" 2>&1; then
     echo "  [review] gh pr checkout $pr_num failed; skipping review cycle" | tee -a "$LOG" >&2
+    fail_review_cycle "$pr_num" "gh pr checkout failed before review could run"
     return 0
   fi
 
@@ -306,6 +364,7 @@ run_review_cycle() {
         "$codex_prompt" 2>&1 \
         | tee -a "$LOG" >&2 ; then
       echo "  [codex] non-zero exit; bailing review cycle" | tee -a "$LOG" >&2
+      fail_review_cycle "$pr_num" "codex exec exited non-zero during cycle $cycle"
       return 0
     fi
 
@@ -313,8 +372,11 @@ run_review_cycle() {
     review=$(cat "$TMP_REVIEW")
     if [ -z "$review" ]; then
       echo "  [codex] empty review output; bailing review cycle" | tee -a "$LOG" >&2
+      fail_review_cycle "$pr_num" "codex produced empty review output during cycle $cycle"
       return 0
     fi
+
+    post_codex_review "$pr_num" "$cycle" "$MAX_REVIEW_CYCLES" "$TMP_REVIEW"
 
     {
       echo "--- codex review (cycle $cycle) ---"
@@ -342,6 +404,7 @@ run_review_cycle() {
     echo "  [claude] addressing findings..." >&2
     if ! run_claude "$claude_prompt" "$TMP_REVIEW_RESULT"; then
       echo "  [claude] non-zero exit during review pass; bailing review cycle" | tee -a "$LOG" >&2
+      fail_review_cycle "$pr_num" "claude exited non-zero while addressing review (cycle $cycle)"
       return 0
     fi
 
@@ -353,6 +416,7 @@ run_review_cycle() {
     case "$last_line" in
       "STUCK_REVIEW"*)
         echo "  [claude] $last_line — bailing review cycle" | tee -a "$LOG" >&2
+        fail_review_cycle "$pr_num" "claude reported STUCK_REVIEW (cycle $cycle)"
         return 0
         ;;
       "DONE_REVIEW")
@@ -366,11 +430,13 @@ run_review_cycle() {
     post_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
     if [ -n "$pre_sha" ] && [ "$pre_sha" = "$post_sha" ]; then
       echo "  [claude] HEAD unchanged (no commits made) — bailing review cycle to avoid infinite loop" | tee -a "$LOG" >&2
+      fail_review_cycle "$pr_num" "claude reported DONE_REVIEW but made no commits (cycle $cycle)"
       return 0
     fi
   done
 
   echo "  [review] hit MAX_REVIEW_CYCLES=$MAX_REVIEW_CYCLES on PR #$pr_num; resuming outer loop" | tee -a "$LOG" >&2
+  fail_review_cycle "$pr_num" "exhausted MAX_REVIEW_CYCLES=$MAX_REVIEW_CYCLES without clearing all blocking findings"
 }
 
 # ---------- log header ----------

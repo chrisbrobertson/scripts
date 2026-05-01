@@ -1,14 +1,14 @@
 # scripts
 
 Personal helper scripts for working with Claude Code and the home-lab fleet:
-autonomous Claude loops (`babysit*.sh`), `gh` CLI wrappers (`prs`, `issues`,
+autonomous Claude loop (`babysit-with-review.sh`), `gh` CLI wrappers (`prs`, `issues`,
 `specs`), and one-off empirical tests (`test-*`). No formal test suite, no build
 step, no CI.
 
 ## Conventions
 
 - **Tracking.** Most files are intentionally untracked. Commit when something
-  stabilises. Currently only `babysit.sh` is in git.
+  stabilises.
 - **Helpers are repo-agnostic.** `prs`, `issues`, and `specs` wrap `gh` and
   operate on whichever repo the caller is in. Don't add cwd-specific assumptions
   to them.
@@ -20,8 +20,7 @@ step, no CI.
 
 | File | Purpose |
 | --- | --- |
-| `babysit.sh` | Autonomous `claude -p` loop with stop-file lock; see its header for env vars |
-| `babysit-with-review.sh` | Variant that interleaves adversarial code review |
+| `babysit-with-review.sh` | Autonomous `claude -p` loop with stop-file lock and Claude↔Codex PR-review cycle; see header for env vars |
 | `test-llm-routing.py` | Empirical test: model-alias forwarding + OAuth rejection by Anthropic |
 | `test-codex-review.sh` | Codex review helper |
 | `prs` | `gh pr list` with CI rollup and review state |

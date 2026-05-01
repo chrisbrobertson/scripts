@@ -1,4 +1,5 @@
 #!/bin/bash
+# DEPRECATED 2026-04-30 — superseded by babysit-with-review.sh; kept for git history.
 # babysit.sh — run from inside any project root.
 # Loops `claude -p` against the specs in ./specs/ until Claude says STOP,
 # the loop gets stuck, or MAX_ITER is reached.
