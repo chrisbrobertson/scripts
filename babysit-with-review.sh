@@ -479,6 +479,13 @@ run_review_cycle() {
 
     if [ "$n_blocking" -eq 0 ]; then
       echo "  [review] zero blocking findings; PR #$pr_num cleared after $cycle cycle(s)" | tee -a "$LOG" >&2
+      if gh pr merge "$pr_num" --squash --auto >>"$LOG" 2>&1; then
+        echo "  [review] PR #$pr_num queued for auto-merge (merges when CI passes)" | tee -a "$LOG" >&2
+      elif gh pr merge "$pr_num" --squash >>"$LOG" 2>&1; then
+        echo "  [review] PR #$pr_num merged." | tee -a "$LOG" >&2
+      else
+        echo "  [review] WARNING: merge failed for PR #$pr_num; left open for next iteration. See $LOG." | tee -a "$LOG" >&2
+      fi
       return 0
     fi
 
