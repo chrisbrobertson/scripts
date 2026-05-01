@@ -536,6 +536,32 @@ run_review_cycle() {
   echo "--- end claude review prompt template ---"
 } >> "$LOG"
 
+# ---------- pre-flight checks ----------
+
+# Refuse to start if local default branch is ahead of origin. This prevents
+# review tools from computing the wrong diff and falling back to the codex MCP
+# path (incident 2026-04-30: local main was 2 commits ahead of origin/main,
+# causing codex to see an empty local diff and reach out to the MCP backend).
+_preflight_default_branch=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo main)
+git fetch origin >>"$LOG" 2>&1 || echo "[preflight] WARN: git fetch origin failed; continuing" >&2
+_preflight_ahead=$(git rev-list --count "origin/${_preflight_default_branch}..${_preflight_default_branch}" 2>/dev/null || echo 0)
+if [ "${_preflight_ahead}" -gt 0 ]; then
+  cat >&2 <<EOF
+ERROR: local '${_preflight_default_branch}' is ${_preflight_ahead} commit(s) ahead of origin/${_preflight_default_branch}.
+This causes review tools to compute the wrong diff (incident 2026-04-30).
+
+Inspect the local commits first:
+  git log --oneline origin/${_preflight_default_branch}..${_preflight_default_branch}
+
+If the work is sound, push it:
+  git push origin ${_preflight_default_branch}
+
+Then re-run the babysitter.
+EOF
+  exit 1
+fi
+unset _preflight_default_branch _preflight_ahead
+
 # ---------- outer loop ----------
 
 declare -a HASHES=()
