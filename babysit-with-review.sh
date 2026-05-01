@@ -551,29 +551,99 @@ run_review_cycle() {
 
 # ---------- pre-flight checks ----------
 
-# Refuse to start if local default branch is ahead of origin. This prevents
-# review tools from computing the wrong diff and falling back to the codex MCP
-# path (incident 2026-04-30: local main was 2 commits ahead of origin/main,
-# causing codex to see an empty local diff and reach out to the MCP backend).
-_preflight_default_branch=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo main)
-git fetch origin >>"$LOG" 2>&1 || echo "[preflight] WARN: git fetch origin failed; continuing" >&2
-_preflight_ahead=$(git rev-list --count "origin/${_preflight_default_branch}..${_preflight_default_branch}" 2>/dev/null || echo 0)
-if [ "${_preflight_ahead}" -gt 0 ]; then
+# Ensures the working tree is clean and on the default branch before the outer
+# loop starts. Auto-cleans when safe (switches branch, fast-forwards); refuses
+# with corrective instructions when it could clobber WIP.
+_pf_default=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo main)
+git fetch origin >>"$LOG" 2>&1 \
+  || echo "[preflight] WARN: git fetch origin failed; continuing without remote state" >&2
+
+# 1. Refuse if tracked files have unstaged modifications.
+if ! git diff --quiet 2>/dev/null; then
   cat >&2 <<EOF
-ERROR: local '${_preflight_default_branch}' is ${_preflight_ahead} commit(s) ahead of origin/${_preflight_default_branch}.
+ERROR: working tree has unstaged modifications. Inspect: git status
+Resolve before starting:
+  git stash push -u -m "pre-babysit"   # save them
+  # or commit them on a feature branch and push
+EOF
+  exit 1
+fi
+
+# 2. Refuse if tracked files have staged-but-uncommitted changes.
+if ! git diff --cached --quiet 2>/dev/null; then
+  cat >&2 <<EOF
+ERROR: working tree has staged but uncommitted changes. Inspect: git status
+Resolve before starting:
+  git commit -m "wip"
+  # or
+  git restore --staged .
+EOF
+  exit 1
+fi
+
+# 3. Refuse if untracked non-ignored files exist.
+_pf_untracked=$(git ls-files --others --exclude-standard 2>/dev/null)
+if [ -n "$_pf_untracked" ]; then
+  _pf_n=$(printf '%s\n' "$_pf_untracked" | wc -l | tr -d ' ')
+  _pf_more=""
+  [ "$_pf_n" -gt 5 ] && _pf_more="  ...and $(( _pf_n - 5 )) more"
+  cat >&2 <<EOF
+ERROR: working tree has $_pf_n untracked non-ignored file(s):
+$(printf '%s\n' "$_pf_untracked" | head -5 | sed 's/^/  /')
+$_pf_more
+Add them to .gitignore, commit them, or remove them. Inspect: git status
+EOF
+  exit 1
+fi
+
+# 4. Auto-clean: switch to default branch if HEAD is elsewhere (tree clean by here).
+_pf_current=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+if [ "$_pf_current" != "$_pf_default" ]; then
+  echo "[preflight] switching from '$_pf_current' to default branch '$_pf_default'..." >&2
+  if ! git checkout "$_pf_default" >>"$LOG" 2>&1; then
+    echo "ERROR: failed to checkout default branch '$_pf_default'. See $LOG." >&2
+    exit 1
+  fi
+fi
+
+# 5. Check ahead/behind vs origin.
+_pf_ahead=$(git rev-list --count "origin/${_pf_default}..${_pf_default}" 2>/dev/null || echo 0)
+_pf_behind=$(git rev-list --count "${_pf_default}..origin/${_pf_default}" 2>/dev/null || echo 0)
+
+if [ "$_pf_ahead" -gt 0 ] && [ "$_pf_behind" -gt 0 ]; then
+  cat >&2 <<EOF
+ERROR: local '$_pf_default' has diverged from origin/$_pf_default ($_pf_ahead ahead, $_pf_behind behind).
+Reconcile manually:
+  git log --oneline --left-right origin/$_pf_default...$_pf_default
+EOF
+  exit 1
+fi
+
+if [ "$_pf_ahead" -gt 0 ]; then
+  cat >&2 <<EOF
+ERROR: local '$_pf_default' is $_pf_ahead commit(s) ahead of origin/$_pf_default.
 This causes review tools to compute the wrong diff (incident 2026-04-30).
 
-Inspect the local commits first:
-  git log --oneline origin/${_preflight_default_branch}..${_preflight_default_branch}
+Inspect the local commits:
+  git log --oneline origin/$_pf_default..$_pf_default
 
-If the work is sound, push it:
-  git push origin ${_preflight_default_branch}
+If sound, push them:
+  git push origin $_pf_default
 
 Then re-run the babysitter.
 EOF
   exit 1
 fi
-unset _preflight_default_branch _preflight_ahead
+
+if [ "$_pf_behind" -gt 0 ]; then
+  echo "[preflight] '$_pf_default' is $_pf_behind commit(s) behind origin; fast-forwarding..." >&2
+  if ! git pull --ff-only origin "$_pf_default" >>"$LOG" 2>&1; then
+    echo "ERROR: failed to fast-forward '$_pf_default' from origin. See $LOG." >&2
+    exit 1
+  fi
+fi
+
+unset _pf_default _pf_current _pf_untracked _pf_n _pf_more _pf_ahead _pf_behind
 
 # ---------- outer loop ----------
 

@@ -60,7 +60,7 @@ Exemplar: `test-llm-routing.py:18-25`. Notes:
 
 **Retry policy.** When a codex transport failure is detected (telltales: `Transport send error:`, `tool call failed for \`codex_apps/`, or `error sending request for url (https://chatgpt.com/`), the wrapper retries codex up to 3 times with 0 / 60s / 300s delays. If all retries fail, it labels the PR `review-mcp-outage`, marks it draft, and halts the babysitter. The next babysitter run picks up the labelled PR and retries.
 
-**Pre-flight.** Before the outer loop starts, the wrapper fetches origin and refuses to start if the local default branch has unpushed commits. This prevents review tools from computing the wrong diff. If you see the pre-flight error, run `git log --oneline origin/<branch>..<branch>` to inspect the commits, then `git push origin <branch>` and re-run.
+**Pre-flight.** Before the outer loop starts, the wrapper ensures the working tree is clean and on the default branch. It auto-switches to the default branch and fast-forwards if the branch is behind origin (both are safe when the tree is otherwise clean). It refuses to start — with corrective instructions — if there are uncommitted modifications, untracked non-ignored files, or a diverged/ahead-of-origin default branch. Seeing `[preflight] switching from 'fix/...' to 'main'` is **normal** after every review cycle: `run_review_cycle` calls `gh pr checkout` and doesn't switch back, so the auto-switch is the expected recovery path on re-run.
 
 ## Related repos
 
