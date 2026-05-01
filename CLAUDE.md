@@ -51,6 +51,17 @@ Exemplar: `test-llm-routing.py:18-25`. Notes:
 - **Spark DGX (192.168.1.93) is the GPU host** — prefer it when the test needs
   CUDA/Ollama inference; treat it as shared.
 
+## babysit-with-review.sh — MCP resilience and pre-flight
+
+**PR labels.** The review cycle uses two distinct labels:
+
+- `review-incomplete` — a bail for a human-action reason (STUCK, no progress, max cycles exhausted). The wrapper will NOT retry; manual operator review is required before the PR can merge.
+- `review-mcp-outage` — the codex MCP backend was unreachable. No code-quality review took place. The wrapper retries automatically at the top of each outer iteration. Remove the label manually if you merge the PR without waiting.
+
+**Retry policy.** When a codex transport failure is detected (telltales: `Transport send error:`, `tool call failed for \`codex_apps/`, or `error sending request for url (https://chatgpt.com/`), the wrapper retries codex up to 3 times with 0 / 60s / 300s delays. If all retries fail, it labels the PR `review-mcp-outage`, marks it draft, and halts the babysitter. The next babysitter run picks up the labelled PR and retries.
+
+**Pre-flight.** Before the outer loop starts, the wrapper fetches origin and refuses to start if the local default branch has unpushed commits. This prevents review tools from computing the wrong diff. If you see the pre-flight error, run `git log --oneline origin/<branch>..<branch>` to inspect the commits, then `git push origin <branch>` and re-run.
+
 ## Related repos
 
 - `~/repos/home-lab-monitor/` — separate project. Hosts the fleet monitoring

@@ -17,6 +17,12 @@
 #   SLEEP_SEC          default 10   pause between outer iterations (seconds)
 #   STUCK_N            default 3    consecutive identical results = stuck
 #   MAX_REVIEW_CYCLES  default 3    max codex<->claude cycles per PR
+#
+# MCP-outage resilience: when codex cannot reach its backend, the wrapper
+# retries up to 3 times (0 / 60s / 300s back-off), labels the PR
+# `review-mcp-outage`, and halts. On the next babysitter run the pre-iter
+# scan retries the labelled PR automatically before running claude.
+# `review-incomplete` = human action required; `review-mcp-outage` = auto-retry.
 
 set -uo pipefail
 
@@ -34,6 +40,11 @@ Env vars:
   SLEEP_SEC          default 10  (seconds)
   STUCK_N            default 3
   MAX_REVIEW_CYCLES  default 3
+
+PR labels used by the review cycle:
+  review-incomplete   Human intervention required; wrapper will NOT retry.
+  review-mcp-outage   Codex MCP backend was unreachable; wrapper retries
+                      automatically at the top of each outer iteration.
 
 Logs land in ~/sisyphus-logs/<project>-<timestamp>-<pid>.log.
 
@@ -79,8 +90,9 @@ fi
 TMP_RESULT=$(mktemp)
 TMP_REVIEW=$(mktemp)
 TMP_REVIEW_RESULT=$(mktemp)
+TMP_CODEX_FULL=$(mktemp)
 touch "$LOG" "$STOP_FILE"
-trap 'rm -f "$STOP_FILE" "$TMP_RESULT" "$TMP_REVIEW" "$TMP_REVIEW_RESULT"' EXIT
+trap 'rm -f "$STOP_FILE" "$TMP_RESULT" "$TMP_REVIEW" "$TMP_REVIEW_RESULT" "$TMP_CODEX_FULL"' EXIT
 
 echo "Babysitting $PROJECT (max=$MAX_ITER, stuck=$STUCK_N, review_cycles=$MAX_REVIEW_CYCLES) → $LOG"
 echo "  graceful stop: rm $STOP_FILE"
@@ -107,6 +119,8 @@ Pick the next unit of work in this priority order — stop at the first level th
 1. Open PRs you can advance. Top priority: PRs in the project state above that are NOT draft and NOT labelled `review-incomplete` (STATE column shows empty). Address review comments or CI failures on any such PR (yours or a previous iteration's) before considering anything else.
 
    SKIP any PR whose STATE is `draft` or `BLOCKED` in the prs table (or `isDraft: true` / labels include `review-incomplete` in the JSON). These PRs were marked by a previous review cycle as needing human intervention — re-attempting them wastes iterations. Move on to item 2.
+
+   Also SKIP PRs labelled `review-mcp-outage` — these are managed by the wrapper itself, which will retry the codex review cycle automatically at the top of each iteration when the MCP backend recovers. Do not touch them.
 2. Open issues you can complete in one iteration. See open issues in the project state above. Pick the highest-priority one that fits the scope discipline below.
 3. Approved specs with no implementation. See specs in the project state above — look for rows where IMPL is `no` or `?`. Scaffold the next missing piece — project skeleton, an interface stub, the first integration test, etc.
 4. Proto definitions without consumers. Files under ./proto/ that no service implements. Generate stubs or wire a service skeleton that consumes them.
@@ -334,6 +348,85 @@ Reason: ${reason}"
     || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
 }
 
+# Mark a PR as stalled by a codex MCP transport failure.
+# The babysitter will retry the review cycle on its next run.
+# Args: <pr_num> <reason_string>
+# Best-effort: gh failures are logged but do not abort the caller.
+fail_review_cycle_mcp() {
+  local pr_num="$1"
+  local reason="$2"
+
+  echo "  [review] codex MCP outage for PR #$pr_num: $reason" | tee -a "$LOG" >&2
+
+  gh label create review-mcp-outage \
+    --color 0075CA \
+    --description "Babysit codex review stalled by MCP transport failure; wrapper will retry" \
+    --force >>"$LOG" 2>&1 || true
+
+  gh pr ready "$pr_num" --undo >>"$LOG" 2>&1 \
+    || echo "  [review] WARNING: gh pr ready --undo failed for PR #$pr_num" | tee -a "$LOG" >&2
+
+  gh pr edit "$pr_num" --add-label review-mcp-outage >>"$LOG" 2>&1 \
+    || echo "  [review] WARNING: gh pr edit --add-label failed for PR #$pr_num" | tee -a "$LOG" >&2
+
+  local body
+  body="**babysit-with-review: codex MCP transport failure — review pending**
+
+Reason: ${reason}
+
+The codex MCP backend was unreachable. No code-quality review took place. The babysitter will retry this review cycle automatically on its next run.
+
+Label \`review-mcp-outage\` has been added. Remove it manually if you merge this PR without waiting for an automated review."
+  printf '%s\n' "$body" \
+    | gh pr comment "$pr_num" --body-file - >>"$LOG" 2>&1 \
+    || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
+}
+
+# Run codex exec with retry on MCP transport failures.
+# Uses $TMP_REVIEW (must be zeroed by caller) for the output-last-message file.
+# Uses $TMP_CODEX_FULL for the combined codex output (used for telltale detection).
+#
+# Returns:
+#   0 — codex completed cleanly; $TMP_REVIEW is non-empty.
+#   1 — codex failed for a non-transport reason (prompt issue, crash, etc.).
+#   2 — codex MCP transport failure; all retries exhausted.
+codex_review_with_retry() {
+  local codex_prompt="$1"
+  local attempt
+  local delays=(0 60 300)
+  local mcp_re='Transport send error:|tool call error: tool call failed for `codex_apps/|error sending request for url \(https://chatgpt\.com/'
+
+  for attempt in 1 2 3; do
+    if [ "${delays[$((attempt - 1))]}" -gt 0 ]; then
+      echo "  [codex] waiting ${delays[$((attempt - 1))]}s before retry (attempt $attempt of 3)..." | tee -a "$LOG" >&2
+      sleep "${delays[$((attempt - 1))]}"
+    fi
+    : > "$TMP_REVIEW"
+    : > "$TMP_CODEX_FULL"
+
+    local rc=0
+    set +e
+    codex exec --output-last-message "$TMP_REVIEW" -s read-only "$codex_prompt" 2>&1 \
+      | tee -a "$LOG" "$TMP_CODEX_FULL" >&2
+    rc=${PIPESTATUS[0]}
+    set -e
+
+    if [ "$rc" -eq 0 ] && [ -s "$TMP_REVIEW" ]; then
+      return 0
+    fi
+
+    if grep -qE "$mcp_re" "$TMP_CODEX_FULL" 2>/dev/null; then
+      local review_state
+      review_state=$([ -s "$TMP_REVIEW" ] && echo "present" || echo "empty")
+      echo "  [codex] MCP transport failure on attempt $attempt of 3 (rc=$rc, review=$review_state)" | tee -a "$LOG" >&2
+      [ "$attempt" -lt 3 ] && continue
+      return 2
+    fi
+
+    return 1
+  done
+}
+
 # Run the Claude<->Codex review cycle for a PR number.
 run_review_cycle() {
   local pr_num="$1"
@@ -355,26 +448,22 @@ run_review_cycle() {
     # ---- codex pass ----
     local codex_prompt
     codex_prompt="${CODEX_REVIEW_PROMPT_TEMPLATE//__PR_NUMBER__/$pr_num}"
-    : > "$TMP_REVIEW"
 
     echo "  [codex] reviewing PR #$pr_num..." >&2
-    if ! codex exec \
-        --output-last-message "$TMP_REVIEW" \
-        -s read-only \
-        "$codex_prompt" 2>&1 \
-        | tee -a "$LOG" >&2 ; then
-      echo "  [codex] non-zero exit; bailing review cycle" | tee -a "$LOG" >&2
-      fail_review_cycle "$pr_num" "codex exec exited non-zero during cycle $cycle"
+    local codex_rc=0
+    codex_review_with_retry "$codex_prompt" || codex_rc=$?
+
+    if [ "$codex_rc" -eq 2 ]; then
+      fail_review_cycle_mcp "$pr_num" "codex MCP transport failure after 3 retries (cycle $cycle)"
+      return 2
+    elif [ "$codex_rc" -ne 0 ]; then
+      echo "  [codex] non-MCP failure; bailing review cycle" | tee -a "$LOG" >&2
+      fail_review_cycle "$pr_num" "codex exec failed (non-transport) during cycle $cycle"
       return 0
     fi
 
     local review
     review=$(cat "$TMP_REVIEW")
-    if [ -z "$review" ]; then
-      echo "  [codex] empty review output; bailing review cycle" | tee -a "$LOG" >&2
-      fail_review_cycle "$pr_num" "codex produced empty review output during cycle $cycle"
-      return 0
-    fi
 
     post_codex_review "$pr_num" "$cycle" "$MAX_REVIEW_CYCLES" "$TMP_REVIEW"
 
@@ -460,6 +549,32 @@ run_review_cycle() {
   echo "--- end claude review prompt template ---"
 } >> "$LOG"
 
+# ---------- pre-flight checks ----------
+
+# Refuse to start if local default branch is ahead of origin. This prevents
+# review tools from computing the wrong diff and falling back to the codex MCP
+# path (incident 2026-04-30: local main was 2 commits ahead of origin/main,
+# causing codex to see an empty local diff and reach out to the MCP backend).
+_preflight_default_branch=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo main)
+git fetch origin >>"$LOG" 2>&1 || echo "[preflight] WARN: git fetch origin failed; continuing" >&2
+_preflight_ahead=$(git rev-list --count "origin/${_preflight_default_branch}..${_preflight_default_branch}" 2>/dev/null || echo 0)
+if [ "${_preflight_ahead}" -gt 0 ]; then
+  cat >&2 <<EOF
+ERROR: local '${_preflight_default_branch}' is ${_preflight_ahead} commit(s) ahead of origin/${_preflight_default_branch}.
+This causes review tools to compute the wrong diff (incident 2026-04-30).
+
+Inspect the local commits first:
+  git log --oneline origin/${_preflight_default_branch}..${_preflight_default_branch}
+
+If the work is sound, push it:
+  git push origin ${_preflight_default_branch}
+
+Then re-run the babysitter.
+EOF
+  exit 1
+fi
+unset _preflight_default_branch _preflight_ahead
+
 # ---------- outer loop ----------
 
 declare -a HASHES=()
@@ -474,6 +589,24 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
     echo "Stop file removed; exiting before iter $iter." | tee -a "$LOG"
     break
   fi
+
+  # Retry any PR stalled by a previous codex MCP transport failure.
+  # The PR is un-drafted and re-reviewed before invoking claude for this iter.
+  _mcp_pr=$(gh pr list --state open --label review-mcp-outage --limit 1 --json number -q '.[0].number' 2>/dev/null || echo "")
+  if [ -n "$_mcp_pr" ]; then
+    echo "[outer] retrying review cycle for PR #$_mcp_pr (review-mcp-outage)" | tee -a "$LOG" >&2
+    gh pr edit "$_mcp_pr" --remove-label review-mcp-outage >>"$LOG" 2>&1 || true
+    gh pr ready "$_mcp_pr" >>"$LOG" 2>&1 || true
+    _rc=0
+    run_review_cycle "$_mcp_pr" || _rc=$?
+    if [ "$_rc" -eq 2 ]; then
+      echo "Halting: codex MCP outage persists for PR #$_mcp_pr. See $LOG" | tee -a "$LOG" >&2
+      break
+    fi
+    unset _mcp_pr _rc
+    continue
+  fi
+  unset _mcp_pr
 
   STATE=$(collect_state)
   PROMPT="${STATE}
@@ -503,7 +636,12 @@ ${BASE_PROMPT}"
       pr_num="${LAST_LINE#HANDOFF_REVIEW }"
       pr_num="${pr_num%% *}"
       if [[ "$pr_num" =~ ^[0-9]+$ ]]; then
-        run_review_cycle "$pr_num"
+        _rc=0
+        run_review_cycle "$pr_num" || _rc=$?
+        if [ "$_rc" -eq 2 ]; then
+          echo "Halting: codex MCP transport outage on PR #$pr_num; retries exhausted. See $LOG" | tee -a "$LOG" >&2
+          break
+        fi
       else
         echo "  [outer] HANDOFF_REVIEW with non-numeric PR '$pr_num'; ignoring" | tee -a "$LOG" >&2
       fi
