@@ -17,6 +17,12 @@
 #   SLEEP_SEC          default 10   pause between outer iterations (seconds)
 #   STUCK_N            default 3    consecutive identical results = stuck
 #   MAX_REVIEW_CYCLES  default 3    max codex<->claude cycles per PR
+#
+# MCP-outage resilience: when codex cannot reach its backend, the wrapper
+# retries up to 3 times (0 / 60s / 300s back-off), labels the PR
+# `review-mcp-outage`, and halts. On the next babysitter run the pre-iter
+# scan retries the labelled PR automatically before running claude.
+# `review-incomplete` = human action required; `review-mcp-outage` = auto-retry.
 
 set -uo pipefail
 
@@ -34,6 +40,11 @@ Env vars:
   SLEEP_SEC          default 10  (seconds)
   STUCK_N            default 3
   MAX_REVIEW_CYCLES  default 3
+
+PR labels used by the review cycle:
+  review-incomplete   Human intervention required; wrapper will NOT retry.
+  review-mcp-outage   Codex MCP backend was unreachable; wrapper retries
+                      automatically at the top of each outer iteration.
 
 Logs land in ~/sisyphus-logs/<project>-<timestamp>-<pid>.log.
 
@@ -108,6 +119,8 @@ Pick the next unit of work in this priority order — stop at the first level th
 1. Open PRs you can advance. Top priority: PRs in the project state above that are NOT draft and NOT labelled `review-incomplete` (STATE column shows empty). Address review comments or CI failures on any such PR (yours or a previous iteration's) before considering anything else.
 
    SKIP any PR whose STATE is `draft` or `BLOCKED` in the prs table (or `isDraft: true` / labels include `review-incomplete` in the JSON). These PRs were marked by a previous review cycle as needing human intervention — re-attempting them wastes iterations. Move on to item 2.
+
+   Also SKIP PRs labelled `review-mcp-outage` — these are managed by the wrapper itself, which will retry the codex review cycle automatically at the top of each iteration when the MCP backend recovers. Do not touch them.
 2. Open issues you can complete in one iteration. See open issues in the project state above. Pick the highest-priority one that fits the scope discipline below.
 3. Approved specs with no implementation. See specs in the project state above — look for rows where IMPL is `no` or `?`. Scaffold the next missing piece — project skeleton, an interface stub, the first integration test, etc.
 4. Proto definitions without consumers. Files under ./proto/ that no service implements. Generate stubs or wire a service skeleton that consumes them.
@@ -576,6 +589,24 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
     echo "Stop file removed; exiting before iter $iter." | tee -a "$LOG"
     break
   fi
+
+  # Retry any PR stalled by a previous codex MCP transport failure.
+  # The PR is un-drafted and re-reviewed before invoking claude for this iter.
+  _mcp_pr=$(gh pr list --state open --label review-mcp-outage --limit 1 --json number -q '.[0].number' 2>/dev/null || echo "")
+  if [ -n "$_mcp_pr" ]; then
+    echo "[outer] retrying review cycle for PR #$_mcp_pr (review-mcp-outage)" | tee -a "$LOG" >&2
+    gh pr edit "$_mcp_pr" --remove-label review-mcp-outage >>"$LOG" 2>&1 || true
+    gh pr ready "$_mcp_pr" >>"$LOG" 2>&1 || true
+    _rc=0
+    run_review_cycle "$_mcp_pr" || _rc=$?
+    if [ "$_rc" -eq 2 ]; then
+      echo "Halting: codex MCP outage persists for PR #$_mcp_pr. See $LOG" | tee -a "$LOG" >&2
+      break
+    fi
+    unset _mcp_pr _rc
+    continue
+  fi
+  unset _mcp_pr
 
   STATE=$(collect_state)
   PROMPT="${STATE}
