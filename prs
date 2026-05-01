@@ -10,6 +10,15 @@ Usage:
 import argparse, json, subprocess, sys
 
 
+def rollup_state(pr):
+    labels = {l.get("name", "") for l in (pr.get("labels") or [])}
+    if "review-incomplete" in labels:
+        return "BLOCKED"
+    if pr.get("isDraft"):
+        return "draft"
+    return ""
+
+
 def rollup_checks(checks):
     if not checks:
         return ""
@@ -32,7 +41,7 @@ def main():
     result = subprocess.run(
         [
             "gh", "pr", "list",
-            "--json", "number,title,headRefName,statusCheckRollup,reviewDecision,author,url",
+            "--json", "number,title,headRefName,isDraft,labels,statusCheckRollup,reviewDecision,author,url",
             "--limit", str(args.limit),
         ],
         capture_output=True,
@@ -53,6 +62,7 @@ def main():
         return
 
     for pr in prs:
+        pr["_state"] = rollup_state(pr)
         pr["_checks"] = rollup_checks(pr.get("statusCheckRollup") or [])
         pr["_review"] = (pr.get("reviewDecision") or "").lower().replace("_", " ")
         pr["_author"] = (pr.get("author") or {}).get("login", "?")
@@ -60,20 +70,22 @@ def main():
     w_num = max(len("#NUM"), len("#" + str(max(pr["number"] for pr in prs))) + 1)
     w_title = min(52, max(len("TITLE"), max(len(pr["title"]) for pr in prs)))
     w_branch = min(30, max(len("BRANCH"), max(len(pr.get("headRefName", "")) for pr in prs)))
+    w_state = max(len("STATE"), max(len(pr["_state"]) for pr in prs))
     w_checks = max(len("CHECKS"), max(len(pr["_checks"]) for pr in prs))
     w_review = max(len("REVIEW"), max(len(pr["_review"]) for pr in prs))
 
-    def row(num, title, branch, checks, review, author):
+    def row(num, title, branch, state, checks, review, author):
         return (
             f"{num:<{w_num}}  "
             f"{title:<{w_title}}  "
             f"{branch:<{w_branch}}  "
+            f"{state:<{w_state}}  "
             f"{checks:<{w_checks}}  "
             f"{review:<{w_review}}  "
             f"{author}"
         )
 
-    header = row("#", "TITLE", "BRANCH", "CHECKS", "REVIEW", "AUTHOR")
+    header = row("#", "TITLE", "BRANCH", "STATE", "CHECKS", "REVIEW", "AUTHOR")
     print(header)
     print("-" * len(header))
     for pr in prs:
@@ -82,6 +94,7 @@ def main():
                 f"#{pr['number']}",
                 pr["title"][:w_title],
                 pr.get("headRefName", "")[:w_branch],
+                pr["_state"],
                 pr["_checks"],
                 pr["_review"],
                 pr["_author"],
