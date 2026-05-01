@@ -73,23 +73,50 @@ def parse_cycles(path):
                     body_lines.append(line)
 
 
+RE_GIT_REMOTE = re.compile(r"[:/]([^/:]+/[^/]+?)(?:\.git)?$")
+
+
+def repo_from_cwd(cwd):
+    """Return 'owner/repo' by reading the git remote of a local cwd, or None."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", cwd, "remote", "get-url", "origin"],
+            capture_output=True, text=True, check=True,
+        )
+        url = result.stdout.strip()
+        m = RE_GIT_REMOTE.search(url)
+        if m:
+            return m.group(1)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    return None
+
+
 def resolve_repo(path, owner):
-    """Derive owner/repo from the Claude session-init JSON line or filename."""
+    """Derive owner/repo from git remote of the cwd recorded in the log, or filename."""
+    cwd = None
     with open(path, errors="replace") as f:
         for i, line in enumerate(f):
             if i > 300:
                 break
             m = RE_CWD.search(line)
             if m:
-                repo = Path(m.group(1)).name
-                return f"{owner}/{repo}"
+                cwd = m.group(1)
+                break
 
-    # Fallback: strip the -YYYYMMDD-HHMMSS-PID suffix from the filename stem.
+    if cwd:
+        repo_with_owner = repo_from_cwd(cwd)
+        if repo_with_owner:
+            return repo_with_owner
+        # cwd found but git remote lookup failed — fall back to basename
+        return f"{owner}/{Path(cwd).name}"
+
+    # No cwd at all: strip the -YYYYMMDD-HHMMSS-PID suffix from the filename stem.
     stem = Path(path).stem
     repo = re.sub(r"-\d{8}-\d{6}-\d+$", "", stem)
     print(
         f"  WARN: no cwd found in first 300 lines of {Path(path).name}; "
-        f"guessing repo '{repo}' from filename",
+        f"guessing repo '{owner}/{repo}' from filename",
         file=sys.stderr,
     )
     return f"{owner}/{repo}"
