@@ -28,6 +28,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 from pathlib import Path
+from typing import Optional
 
 if len(sys.argv) < 4:
     print(f"usage: {sys.argv[0]} PORT FLEET_DIR REPO_PATH", file=sys.stderr)
@@ -101,7 +102,7 @@ def _call_claude(append_system: str, conversation: str) -> str:
     return r.stdout.strip()
 
 
-def _parse_tool_call(text: str) -> dict | None:
+def _parse_tool_call(text: str) -> Optional[dict]:
     m = re.search(r"<tool>(.*?)</tool>", text, re.DOTALL)
     if m:
         try:
