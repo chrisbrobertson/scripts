@@ -20,12 +20,23 @@ step, no CI.
 
 | File | Purpose |
 | --- | --- |
+| `new-fleet.sh` | Provision a staff-team fleet (staff-swe/sre/pm) for a service; see `docs/STAFF-FLEET.md` |
+| `claude-code-proxy.py` | OpenAI-compatible HTTP proxy routing to `claude -p`; used by new-fleet.sh |
 | `babysit-with-review.sh` | Autonomous `claude -p` loop with stop-file lock and Claude↔Codex PR-review cycle; see header for env vars |
+| `backfill-codex-reviews.py` | Post historical Codex reviews to closed PRs |
 | `test-llm-routing.py` | Empirical test: model-alias forwarding + OAuth rejection by Anthropic |
 | `test-codex-review.sh` | Codex review helper |
 | `prs` | `gh pr list` with CI rollup and review state |
 | `issues` | `gh issue list` sorted by priority labels |
 | `specs` | List spec files (`-v0.1.md`) with frontmatter status and components |
+
+## Staff-fleet agents
+
+`new-fleet.sh` scaffolds three always-on AI agents (staff-swe, staff-sre, staff-pm) for a
+service, using `claude-code-proxy.py` to bridge Hermes Agent (needs OpenAI endpoint) with
+Claude Code CLI (OAuth, no API key). One fleet per service, each fully isolated.
+
+Full operator guide: **`docs/STAFF-FLEET.md`** — quick start, architecture, tuning, troubleshooting.
 
 ## Testing
 
