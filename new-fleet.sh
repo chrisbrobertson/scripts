@@ -149,8 +149,8 @@ write_soul_swe() {
 cat > "$FLEET_DIR/profiles/staff-swe/SOUL.md" << SOULEOF
 # Staff Software Engineer — ${FLEET_NAME}
 
-You are the Staff SWE for the **${FLEET_NAME}** service. Read service-context.md
-in your fleet directory at the start of each session to refresh your world model.
+You are the Staff SWE for the **${FLEET_NAME}** service. Read ${FLEET_DIR}/service-context.md at the start of each session to refresh your world model.
+The codebase is at ${REPO_PATH} — search and read files from there, never from ~/.
 
 ## Role
 
@@ -200,8 +200,8 @@ write_soul_sre() {
 cat > "$FLEET_DIR/profiles/staff-sre/SOUL.md" << SOULEOF
 # Staff Site Reliability Engineer — ${FLEET_NAME}
 
-You are the Staff SRE for the **${FLEET_NAME}** service. Read service-context.md
-in your fleet directory at the start of each session to refresh your world model.
+You are the Staff SRE for the **${FLEET_NAME}** service. Read ${FLEET_DIR}/service-context.md at the start of each session to refresh your world model.
+The codebase is at ${REPO_PATH} — search and read files from there, never from ~/.
 
 ## Role
 
@@ -249,8 +249,8 @@ write_soul_pm() {
 cat > "$FLEET_DIR/profiles/staff-pm/SOUL.md" << SOULEOF
 # Staff Product Manager — ${FLEET_NAME}
 
-You are the Staff PM for the **${FLEET_NAME}** service. Read service-context.md
-in your fleet directory at the start of each session to refresh your world model.
+You are the Staff PM for the **${FLEET_NAME}** service. Read ${FLEET_DIR}/service-context.md at the start of each session to refresh your world model.
+The codebase is at ${REPO_PATH} — search and read files from there, never from ~/.
 
 ## Role
 
@@ -337,7 +337,7 @@ display:
 mcp_servers:
   filesystem:
     command: npx
-    args: ["-y", "@modelcontextprotocol/server-filesystem", "${REPO_PATH}"]
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "${REPO_PATH}", "${FLEET_DIR}"]
 
 cron:
   - name: "${cron_name}"
@@ -381,10 +381,14 @@ for role in swe sre pm; do
 # Get your user ID from @userinfobot
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_ALLOWED_USERS=
+# Your Telegram user ID — required for cron delivery (same as TELEGRAM_ALLOWED_USERS if single user)
+TELEGRAM_HOME_CHANNEL=
+# GitHub token for headless gh CLI in cron jobs: run 'gh auth token' and paste here
+GH_TOKEN=
 ENVEOF
   fi
 done
-echo "  wrote .env templates (fill in TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_USERS)"
+echo "  wrote .env templates (fill in TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USERS, TELEGRAM_HOME_CHANNEL, GH_TOKEN)"
 
 # ── Hermes profiles ──────────────────────────────────────────────────────────
 
@@ -506,7 +510,11 @@ echo "   grep -r '\[REPO\]' ${FLEET_DIR}/profiles/"
 echo "   (e.g. owner/repo-name for 'gh' commands)"
 echo ""
 echo "3. Create three Telegram bots via @BotFather (one per agent)."
-echo "   Fill in each profile's .env:"
+echo "   Fill in each profile's .env — all four keys are required:"
+echo "     TELEGRAM_BOT_TOKEN  — from @BotFather (/newbot)"
+echo "     TELEGRAM_ALLOWED_USERS — your user ID from @userinfobot"
+echo "     TELEGRAM_HOME_CHANNEL  — same user ID; required for cron delivery"
+echo "     GH_TOKEN           — from 'gh auth token'; needed for headless gh in crons"
 echo "   \$EDITOR ${FLEET_DIR}/profiles/staff-swe/.env"
 echo "   \$EDITOR ${FLEET_DIR}/profiles/staff-sre/.env"
 echo "   \$EDITOR ${FLEET_DIR}/profiles/staff-pm/.env"
