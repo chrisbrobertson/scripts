@@ -2,21 +2,20 @@
 # new-fleet.sh — provision a staff-team fleet for one service/repo.
 #
 # Usage:
-#   ./new-fleet.sh <fleet-name> <repo-path> [--port PORT]
+#   ./new-fleet.sh <fleet-name> <repo-path>
 #
 # Creates:
 #   ~/staff-fleet/<fleet-name>/
 #     service-context.md          shared context — fill this in!
 #     profiles/staff-{swe,sre,pm}/
 #       SOUL.md                   role definition
-#       config.yaml               Hermes config
+#       config.yaml               Hermes config (openai-codex provider)
 #       .env                      Telegram token (you fill in)
 #     .hermes/                    HERMES_HOME for this fleet
 #     bin/
 #       <fleet-name>-{swe,sre,pm} wrapper scripts
-#   ~/Library/LaunchAgents/com.staff-fleet.<fleet-name>.proxy.plist
 #
-# Prerequisites: hermes, claude (Claude Code CLI), gh (GitHub CLI)
+# Prerequisites: hermes, gh (GitHub CLI)
 #
 # Run again on the same fleet-name to update config files without
 # destroying Hermes state (memory/sessions are preserved).
@@ -26,27 +25,21 @@ set -euo pipefail
 # ── args ────────────────────────────────────────────────────────────────────
 
 if [[ $# -lt 2 ]]; then
-  echo "usage: $0 <fleet-name> <repo-path> [--port PORT]" >&2
+  echo "usage: $0 <fleet-name> <repo-path>" >&2
   exit 1
 fi
 
 FLEET_NAME="$1"
 REPO_PATH="$(cd "$2" 2>/dev/null && pwd || echo "$2")"
-PORT=""
 
 shift 2
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --port) PORT="$2"; shift 2 ;;
-    *) echo "unknown flag: $1" >&2; exit 1 ;;
-  esac
-done
+if [[ $# -gt 0 ]]; then
+  echo "unknown argument: $1" >&2; exit 1
+fi
 
-SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FLEETS_ROOT="$HOME/staff-fleet"
 FLEET_DIR="$FLEETS_ROOT/$FLEET_NAME"
 HERMES_HOME="$FLEET_DIR/.hermes"
-PORT_REGISTRY="$FLEETS_ROOT/.port-registry"
 
 # ── prerequisites ────────────────────────────────────────────────────────────
 
@@ -58,67 +51,19 @@ check_prereq() {
   fi
 }
 
-check_prereq claude  "Install Claude Code: https://claude.ai/code"
 check_prereq gh      "Install GitHub CLI: brew install gh"
 check_prereq hermes  "Install Hermes: curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash"
-check_prereq python3 "python3 required for claude-code-proxy"
 
-if [[ ! -f "$SCRIPTS_DIR/claude-code-proxy.py" ]]; then
-  echo "error: claude-code-proxy.py not found in $SCRIPTS_DIR" >&2
+# Verify Hermes has codex credentials — agents need them to call the model.
+if ! hermes auth status openai-codex 2>/dev/null | grep -q "logged in"; then
+  echo "error: Hermes is not authenticated with openai-codex." >&2
+  echo "  Run: hermes auth" >&2
   exit 1
 fi
 
-# ── port allocation ──────────────────────────────────────────────────────────
-
 mkdir -p "$FLEETS_ROOT"
 
-allocate_port() {
-  # Check if fleet already has a port assigned
-  if [[ -f "$PORT_REGISTRY" ]]; then
-    existing=$(python3 -c "
-import json, sys
-r = json.load(open('$PORT_REGISTRY'))
-print(r.get('$FLEET_NAME', ''))
-" 2>/dev/null || echo "")
-    [[ -n "$existing" ]] && echo "$existing" && return
-  fi
-
-  # Find next available port starting at 9001
-  next=9001
-  if [[ -f "$PORT_REGISTRY" ]]; then
-    next=$(python3 -c "
-import json
-r = json.load(open('$PORT_REGISTRY'))
-ports = list(r.values())
-print(max(ports) + 1 if ports else 9001)
-" 2>/dev/null || echo "9001")
-  fi
-
-  # Register it
-  python3 -c "
-import json, os
-path = '$PORT_REGISTRY'
-r = json.load(open(path)) if os.path.exists(path) else {}
-r['$FLEET_NAME'] = $next
-json.dump(r, open(path, 'w'), indent=2)
-print($next)
-"
-}
-
-if [[ -z "$PORT" ]]; then
-  PORT=$(allocate_port)
-else
-  # Record user-specified port
-  python3 -c "
-import json, os
-path = '$PORT_REGISTRY'
-r = json.load(open(path)) if os.path.exists(path) else {}
-r['$FLEET_NAME'] = $PORT
-json.dump(r, open(path, 'w'), indent=2)
-"
-fi
-
-echo "fleet=$FLEET_NAME  repo=$REPO_PATH  port=$PORT"
+echo "fleet=$FLEET_NAME  repo=$REPO_PATH"
 
 # ── directory structure ──────────────────────────────────────────────────────
 
@@ -367,9 +312,9 @@ write_config() {
 timezone: America/Los_Angeles
 
 model:
-  provider: custom
-  base_url: http://127.0.0.1:${PORT}/v1
-  default: claude-code
+  provider: openai-codex
+  base_url: https://chatgpt.com/backend-api/codex
+  default: gpt-5.5
 
 terminal:
   cwd: ${REPO_PATH}
@@ -468,6 +413,15 @@ done
 
 echo "  synced SOUL.md + config.yaml into .hermes/profiles/"
 
+# ── auth.json symlinks ───────────────────────────────────────────────────────
+# Gateway processes run with HERMES_HOME set to the profile directory.
+# Symlink auth.json into each profile so codex credentials are always current.
+DEFAULT_AUTH="$HOME/.hermes/auth.json"
+for role in swe sre pm; do
+  ln -sf "$DEFAULT_AUTH" "$HERMES_HOME/profiles/staff-${role}/auth.json"
+done
+echo "  linked auth.json → ~/.hermes/auth.json in each profile"
+
 # ── bin wrappers ─────────────────────────────────────────────────────────────
 # Fleet-qualified wrappers go in both the fleet bin/ and ~/.local/bin so they
 # work from anywhere without PATH manipulation.  Hermes auto-creates generic
@@ -506,65 +460,17 @@ GENEOF
 done
 echo "  wrote bin wrappers: ${FLEET_NAME}-{swe,sre,pm} (fleet/bin/ and ~/.local/bin/)"
 
-# ── launchd plist for proxy ──────────────────────────────────────────────────
-
-PLIST_LABEL="com.staff-fleet.${FLEET_NAME}.proxy"
-PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
-
-cat > "$PLIST_PATH" << PLISTEOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>${PLIST_LABEL}</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/bin/python3</string>
-    <string>${SCRIPTS_DIR}/claude-code-proxy.py</string>
-    <string>${PORT}</string>
-    <string>${FLEET_DIR}</string>
-    <string>${REPO_PATH}</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>${FLEET_DIR}/proxy.log</string>
-  <key>StandardErrorPath</key>
-  <string>${FLEET_DIR}/proxy.log</string>
-  <key>ThrottleInterval</key>
-  <integer>10</integer>
-</dict>
-</plist>
-PLISTEOF
-
-echo "  wrote launchd plist: $PLIST_PATH"
-
 # ── start-gateways.sh helper ─────────────────────────────────────────────────
 
 cat > "$FLEET_DIR/start-gateways.sh" << GWEOF
 #!/usr/bin/env bash
-# start-gateways.sh — load proxy + install Telegram gateways for ${FLEET_NAME}.
+# start-gateways.sh — install and start Telegram gateways for ${FLEET_NAME}.
 # Run this AFTER filling in TELEGRAM_BOT_TOKEN in each profile's .env.
 set -euo pipefail
 
 FLEET_DIR="${FLEET_DIR}"
 HERMES_HOME="${HERMES_HOME}"
 export HERMES_HOME
-
-# Start the claude-code proxy
-launchctl load -w "$HOME/Library/LaunchAgents/com.staff-fleet.${FLEET_NAME}.proxy.plist"
-echo "proxy started on port ${PORT}"
-sleep 2
-
-# Verify proxy is healthy
-curl -sf "http://127.0.0.1:${PORT}/health" | python3 -m json.tool || {
-  echo "ERROR: proxy health check failed — check ${FLEET_DIR}/proxy.log"
-  exit 1
-}
 
 # Install and start Telegram gateways
 for role in swe sre pm; do
@@ -589,7 +495,6 @@ echo "  wrote start-gateways.sh"
 echo ""
 echo "════════════════════════════════════════════════════════════════"
 echo "Fleet '${FLEET_NAME}' provisioned at ${FLEET_DIR}"
-echo "Proxy port: ${PORT}"
 echo ""
 echo "NEXT STEPS:"
 echo ""
@@ -610,7 +515,7 @@ echo "4. Ensure ~/.local/bin is in PATH (add to ~/.zshrc if missing):"
 echo "   export PATH=\"\$PATH:\$HOME/.local/bin\""
 echo "   Fleet commands already installed: ${FLEET_NAME}-swe, ${FLEET_NAME}-sre, ${FLEET_NAME}-pm"
 echo ""
-echo "5. Start everything:"
+echo "5. Start gateways:"
 echo "   ${FLEET_DIR}/start-gateways.sh"
 echo ""
 echo "6. Sanity-test each agent on Telegram:"
