@@ -434,6 +434,14 @@ run_review_cycle() {
 
   echo "=== review handoff: PR #$pr_num @ $(date -u +%FT%TZ) ===" | tee -a "$LOG" >&2
 
+  # Graceful degradation: if codex isn't installed (e.g. headless mbp16 host
+  # where review is handled by an external PM agent), skip the Claude↔Codex
+  # review cycle and just return — the outer loop continues normally.
+  if ! command -v codex >/dev/null 2>&1; then
+    echo "  [review] codex CLI not found; skipping review cycle (PR #$pr_num remains open for external review)" | tee -a "$LOG" >&2
+    return 0
+  fi
+
   # Make sure we're on the PR branch.
   if ! gh pr checkout "$pr_num" >>"$LOG" 2>&1; then
     echo "  [review] gh pr checkout $pr_num failed; skipping review cycle" | tee -a "$LOG" >&2
