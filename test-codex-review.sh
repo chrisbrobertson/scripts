@@ -33,6 +33,7 @@ You are performing a code review on PR #__PR_NUMBER__ for this repository. The P
 
 Inspect the diff of the current branch against the project's default branch (use `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` to find it, then `git diff <default>...HEAD`). Read changed files and surrounding context as needed to evaluate the change.
 
+__HISTORY_BLOCK__
 Output your review using EXACTLY this format. Use all three headings in this order, even if a section has no findings:
 
 ## BLOCKING
@@ -99,6 +100,7 @@ fi
 echo "  [setup] now on: $(git rev-parse --abbrev-ref HEAD)"
 
 CODEX_PROMPT="${CODEX_REVIEW_PROMPT_TEMPLATE//__PR_NUMBER__/$PR_NUM}"
+CODEX_PROMPT="${CODEX_PROMPT//__HISTORY_BLOCK__/}"
 
 echo "--- codex review begin ---" >> "$LOG"
 echo "  [codex] running review (this may take several minutes)..."

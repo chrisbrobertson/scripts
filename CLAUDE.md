@@ -73,6 +73,16 @@ Exemplar: `test-llm-routing.py:18-25`. Notes:
 
 **Pre-flight.** Before the outer loop starts, the wrapper ensures the working tree is clean and on the default branch. It auto-switches to the default branch and fast-forwards if the branch is behind origin (both are safe when the tree is otherwise clean). It refuses to start — with corrective instructions — if there are uncommitted modifications, untracked non-ignored files, or a diverged/ahead-of-origin default branch. Seeing `[preflight] switching from 'fix/...' to 'main'` is **normal** after every review cycle: `run_review_cycle` calls `gh pr checkout` and doesn't switch back, so the auto-switch is the expected recovery path on re-run.
 
+## babysit-with-review.sh — convergence-aware review flow
+
+**Scope discipline.** The Claude review prompt tells Claude to make minimal targeted changes, commit each finding separately, run tests after every fix, and avoid touching code Codex did not flag. This reduces the "shifting goalposts" failure mode where a fix introduces new surface for Codex to flag.
+
+**Cycle history (cycle 2+).** Each Codex pass from cycle 2 onward receives the full text of all prior reviews plus a `git log` of commits Claude made since the review cycle started. Codex tags each finding `[NEW]` or `[RECURRENCE]` so Claude can see whether it is converging or spinning.
+
+**Prescriptive mode (cycle 3+).** From cycle 3 onward the wrapper switches to a stricter Codex prompt that requires a concrete `Suggested fix:` line under every BLOCKING bullet. If Codex cannot propose a concrete fix it must downgrade the finding to RECOMMENDED.
+
+**Default `MAX_REVIEW_CYCLES` is 6** (was 3). Prescriptive mode kicks in at cycle 3, so the cap needs room for it to help.
+
 ## Related repos
 
 - `~/repos/home-lab-monitor/` — separate project. Hosts the fleet monitoring

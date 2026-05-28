@@ -3,7 +3,7 @@
 #
 # Same outer loop as babysit.sh. When Claude ends an iteration with the
 # sentinel `HANDOFF_REVIEW <PR_NUMBER>` on its own line, this wrapper runs
-# up to MAX_REVIEW_CYCLES (default 3) of:
+# up to MAX_REVIEW_CYCLES (default 6) of:
 #   1. codex exec — produces a strict-markdown review with three sections:
 #      ## BLOCKING / ## RECOMMENDED / ## INFORMATION
 #   2. claude -p  — addresses BLOCKING (must), RECOMMENDED (should), and
@@ -16,7 +16,7 @@
 #   MAX_ITER           default 50   hard cap on outer iterations
 #   SLEEP_SEC          default 10   pause between outer iterations (seconds)
 #   STUCK_N            default 3    consecutive identical results = stuck
-#   MAX_REVIEW_CYCLES  default 3    max codex<->claude cycles per PR
+#   MAX_REVIEW_CYCLES  default 6    max codex<->claude cycles per PR
 #
 # MCP-outage resilience: when codex cannot reach its backend, the wrapper
 # retries up to 3 times (0 / 60s / 300s back-off), labels the PR
@@ -39,7 +39,7 @@ Env vars:
   MAX_ITER           default 50
   SLEEP_SEC          default 10  (seconds)
   STUCK_N            default 3
-  MAX_REVIEW_CYCLES  default 3
+  MAX_REVIEW_CYCLES  default 6
 
 PR labels used by the review cycle:
   review-incomplete   Human intervention required; wrapper will NOT retry.
@@ -50,7 +50,7 @@ Logs land in ~/sisyphus-logs/<project>-<timestamp>-<pid>.log.
 
 Examples:
   babysit-with-review.sh
-  MAX_REVIEW_CYCLES=5 babysit-with-review.sh
+  MAX_REVIEW_CYCLES=3 babysit-with-review.sh
 EOF
 }
 
@@ -63,7 +63,7 @@ esac
 MAX_ITER="${MAX_ITER:-50}"
 SLEEP_SEC="${SLEEP_SEC:-10}"
 STUCK_N="${STUCK_N:-3}"
-MAX_REVIEW_CYCLES="${MAX_REVIEW_CYCLES:-3}"
+MAX_REVIEW_CYCLES="${MAX_REVIEW_CYCLES:-6}"
 
 PROJECT=$(basename "$PWD")
 LOG_DIR="$HOME/sisyphus-logs"
@@ -107,16 +107,16 @@ The current project state (PRs, issues, specs) is provided above — use it dire
 Start by reading ./CLAUDE.md and the spec(s) relevant to whatever you decide to work on. Specs live under ./specs/ at the root and recursively under component directories; each has YAML frontmatter with a `status` field (draft|review|approved|deprecated) and a `components` field naming the directories it governs.
 
 Helper scripts (available for targeted mid-iteration queries):
-  ~/repos/scripts/prs              — enhanced `gh pr list` with CI check rollup and review state
-  ~/repos/scripts/issues           — enhanced `gh issue list` sorted by priority labels
-  ~/repos/scripts/specs            — list all specs with status/components (*/specs/**/*.md)
-  ~/repos/scripts/specs --status STATUS      — filter by status value (approved|draft|review|deprecated)
-  ~/repos/scripts/specs --check-impl         — also show whether component dirs contain source files
-  ~/repos/scripts/specs --json / ~/repos/scripts/prs --json / ~/repos/scripts/issues --json  — machine-readable output
+  ~/repo/scripts/prs              — enhanced `gh pr list` with CI check rollup and review state
+  ~/repo/scripts/issues           — enhanced `gh issue list` sorted by priority labels
+  ~/repo/scripts/specs            — list all specs with status/components (*/specs/**/*.md)
+  ~/repo/scripts/specs --status STATUS      — filter by status value (approved|draft|review|deprecated)
+  ~/repo/scripts/specs --check-impl         — also show whether component dirs contain source files
+  ~/repo/scripts/specs --json / ~/repo/scripts/prs --json / ~/repo/scripts/issues --json  — machine-readable output
 
 Pick the next unit of work in this priority order — stop at the first level that yields an actionable item:
 
-1. Open PRs you can advance. Top priority: PRs in the project state above that are NOT draft and NOT labelled `review-incomplete` (STATE column shows empty). Address review comments or CI failures on any such PR (yours or a previous iteration's) before considering anything else.
+1. Open PRs you can advance. Top priority: PRs in the project state above that are NOT draft and NOT labelled `review-incomplete` (STATE column shows empty). Address all review feedback — including CodeRabbit and other automated reviewer comments and threads — and CI failures on any such PR (yours or a previous iteration's) before considering anything else.
 
    SKIP any PR whose STATE is `draft` or `BLOCKED` in the prs table (or `isDraft: true` / labels include `review-incomplete` in the JSON). These PRs were marked by a previous review cycle as needing human intervention — re-attempting them wastes iterations. Move on to item 2.
 
@@ -157,6 +157,7 @@ You are performing a code review on PR #__PR_NUMBER__ for this repository. The P
 
 Inspect the diff of the current branch against the project's default branch (use `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` to find it, then `git diff <default>...HEAD`). Read changed files and surrounding context as needed to evaluate the change.
 
+__HISTORY_BLOCK__
 Output your review using EXACTLY this format. Use all three headings in this order, even if a section has no findings:
 
 ## BLOCKING
@@ -180,12 +181,49 @@ Format rules:
 - Do NOT make code changes. This is review only.
 PROMPT_EOF
 
-IFS= read -r -d '' CLAUDE_REVIEW_PROMPT_TEMPLATE <<'PROMPT_EOF' || true
-A code review on PR #__PR_NUMBER__ has produced the findings below.
+IFS= read -r -d '' CODEX_REVIEW_PRESCRIPTIVE_PROMPT_TEMPLATE <<'PROMPT_EOF' || true
+You are performing a code review on PR #__PR_NUMBER__ for this repository. The PR branch is currently checked out.
 
-You MUST action every BLOCKING finding before this PR can merge.
+Inspect the diff of the current branch against the project's default branch (use `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` to find it, then `git diff <default>...HEAD`). Read changed files and surrounding context as needed to evaluate the change.
+
+__HISTORY_BLOCK__
+Output your review using EXACTLY this format. Use all three headings in this order, even if a section has no findings:
+
+## BLOCKING
+- <one-line description> — <file:line> — <why it must be fixed before merge>
+  Suggested fix: <concrete code change — show the exact replacement or patch sketch, not a description of intent>
+
+## RECOMMENDED
+- <one-line description> — <file:line> — <why it should be addressed>
+
+## INFORMATION
+- <one-line description> — <file:line> — <context, suggestion, or fyi>
+
+Categorization rules:
+- BLOCKING = correctness bugs, security issues, broken tests, build failures, contract violations, broken invariants — anything that should not merge.
+- RECOMMENDED = quality improvements, missed edge cases, better patterns, doc gaps, error-handling gaps. Should be addressed but not strictly blocking.
+- INFORMATION = stylistic notes, alternative approaches, performance observations, fyi context. Optional.
+
+Format rules:
+- One bullet per finding. BLOCKING bullets require a second indented line: `  Suggested fix: <exact replacement>`. If you cannot produce a concrete fix, downgrade the finding to RECOMMENDED.
+- RECOMMENDED and INFORMATION are single-line bullets only.
+- If a section has no findings, write `- (none)` as the only bullet under that heading.
+- Do NOT output anything before, between, or after the three sections.
+- Do NOT make code changes. This is review only.
+PROMPT_EOF
+
+IFS= read -r -d '' CLAUDE_REVIEW_PROMPT_TEMPLATE <<'PROMPT_EOF' || true
+A code review on PR #__PR_NUMBER__ has produced the findings below, along with any existing feedback on the PR from automated tools (such as CodeRabbit) and human reviewers.
+
+You MUST action every BLOCKING finding before this PR can merge. Treat any actionable issues in the existing PR feedback (bugs, security problems, correctness failures) with the same BLOCKING priority regardless of source.
 You SHOULD action every RECOMMENDED finding (if you skip one, note the reason in the commit message).
 You may CONSIDER each INFORMATION finding — apply if clearly beneficial, otherwise ignore.
+
+Scope discipline — read before making any changes:
+- Make minimal, targeted changes. Do NOT refactor adjacent code, rename, or tidy unrelated style while in the file.
+- Each finding gets its own commit. Run the relevant tests after each fix; do not batch fixes.
+- Before outputting DONE_REVIEW, run the full test/lint suite once more and verify your edits introduced no new surface (new untested branches, new files, changed signatures) beyond what the finding required.
+- Resist "improving" code Codex did not flag — last cycle's clean code is next cycle's risk surface.
 
 For each finding you action:
 1. Make the change.
@@ -204,9 +242,13 @@ End your final message with EXACTLY ONE of these sentinels on its own line:
 
 Do not output STOP or HANDOFF_REVIEW — those belong to the outer loop.
 
---- review begin ---
+--- existing PR feedback begin ---
+__PR_FEEDBACK__
+--- existing PR feedback end ---
+
+--- codex review begin ---
 __REVIEW__
---- review end ---
+--- codex review end ---
 PROMPT_EOF
 
 # ---------- helpers ----------
@@ -215,13 +257,13 @@ collect_state() {
   echo "=== project state @ $(date -u +%FT%TZ) ==="
   echo ""
   echo "## open PRs"
-  ~/repos/scripts/prs 2>/dev/null || echo "(unavailable)"
+  ~/repo/scripts/prs 2>/dev/null || echo "(unavailable)"
   echo ""
   echo "## open issues"
-  ~/repos/scripts/issues 2>/dev/null || echo "(unavailable)"
+  ~/repo/scripts/issues 2>/dev/null || echo "(unavailable)"
   echo ""
   echo "## specs"
-  ~/repos/scripts/specs --check-impl 2>/dev/null || echo "(none found)"
+  ~/repo/scripts/specs --check-impl 2>/dev/null || echo "(none found)"
   echo ""
   echo "==="
 }
@@ -291,6 +333,51 @@ count_blocking() {
     }
     END { print n }
   '
+}
+
+# Fetch all existing PR feedback: formal review bodies, top-level comments, and
+# inline review comments. Filters out comments posted by the babysitter itself
+# (prefixed with "**Codex review —" or "**babysit-with-review:") to avoid
+# feeding its own output back as external feedback.
+# Args: <pr_num>
+collect_pr_feedback() {
+  local pr_num="$1"
+  local owner_repo
+  owner_repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)
+  [ -z "$owner_repo" ] && return 0
+
+  local out=""
+
+  # Formal review summaries (CodeRabbit posts its main summary here).
+  local reviews
+  reviews=$(gh pr view "$pr_num" --json reviews \
+    --jq '.reviews[]
+          | select(.body != "")
+          | select(.body | startswith("**Codex review") | not)
+          | select(.body | startswith("**babysit-with-review:") | not)
+          | "### Review by \(.author.login) [\(.state)]\n\(.body)\n"' \
+    2>/dev/null || true)
+  [ -n "$reviews" ] && out="${out}${reviews}"$'\n'
+
+  # Top-level issue comments.
+  local comments
+  comments=$(gh pr view "$pr_num" --json comments \
+    --jq '.comments[]
+          | select(.body | startswith("**Codex review") | not)
+          | select(.body | startswith("**babysit-with-review:") | not)
+          | "### Comment by \(.author.login)\n\(.body)\n"' \
+    2>/dev/null || true)
+  [ -n "$comments" ] && out="${out}${comments}"$'\n'
+
+  # Inline review comments (line-level diff annotations).
+  local inline
+  inline=$(gh api "repos/${owner_repo}/pulls/${pr_num}/comments" \
+    --jq '.[] | "### Inline comment by \(.user.login) on \(.path):\(.line // .original_line // "?")\n\(.body)\n"' \
+    2>/dev/null || true)
+  [ -n "$inline" ] && out="${out}${inline}"$'\n'
+
+  [ -z "$out" ] && out="(none)"
+  printf '%s' "$out"
 }
 
 # Post a codex review as a PR comment. Best-effort: failures logged, do not abort.
@@ -431,6 +518,8 @@ codex_review_with_retry() {
 run_review_cycle() {
   local pr_num="$1"
   local cycle=0
+  local review_start_sha=""
+  local -a REVIEW_HISTORY=()
 
   echo "=== review handoff: PR #$pr_num @ $(date -u +%FT%TZ) ===" | tee -a "$LOG" >&2
 
@@ -448,14 +537,57 @@ run_review_cycle() {
     fail_review_cycle "$pr_num" "gh pr checkout failed before review could run"
     return 0
   fi
+  # Capture PR branch tip before any Claude commits so the history git log
+  # only surfaces commits Claude makes during this review cycle.
+  review_start_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
 
   while [ "$cycle" -lt "$MAX_REVIEW_CYCLES" ]; do
     cycle=$((cycle + 1))
     echo "--- review cycle $cycle / $MAX_REVIEW_CYCLES (PR #$pr_num) @ $(date -u +%FT%TZ) ---" | tee -a "$LOG" >&2
 
     # ---- codex pass ----
+    # Build history block for cycle 2+: prior reviews + commits Claude made.
+    local history_block=""
+    if [ "$cycle" -ge 2 ] && [ "${#REVIEW_HISTORY[@]}" -gt 0 ]; then
+      local _hb=""
+      local _i
+      for _i in "${!REVIEW_HISTORY[@]}"; do
+        _hb="${_hb}### cycle $(( _i + 1 )) review
+${REVIEW_HISTORY[$_i]}
+"
+      done
+      local _commits
+      _commits=$(git log --oneline "${review_start_sha}..HEAD" 2>/dev/null || true)
+      _hb="${_hb}--- commits Claude made since review cycle started ---
+${_commits:-"(none)"}
+--- end commits ---
+
+For each BLOCKING and RECOMMENDED finding, prefix the bullet with [NEW] if the issue is introduced by code added during this review cycle (the commits above), or [RECURRENCE] if substantively the same issue appears in a prior-cycle review above.
+"
+      history_block="--- prior review cycles (for convergence tracking) ---
+${_hb}--- end prior review cycles ---
+"
+      unset _hb _i _commits
+    fi
+
+    # Select template: descriptive for cycles 1-2, prescriptive for cycle 3+.
+    local _tmpl
+    if [ "$cycle" -ge 3 ]; then
+      _tmpl="$CODEX_REVIEW_PRESCRIPTIVE_PROMPT_TEMPLATE"
+    else
+      _tmpl="$CODEX_REVIEW_PROMPT_TEMPLATE"
+    fi
     local codex_prompt
-    codex_prompt="${CODEX_REVIEW_PROMPT_TEMPLATE//__PR_NUMBER__/$pr_num}"
+    codex_prompt="${_tmpl//__PR_NUMBER__/$pr_num}"
+    codex_prompt="${codex_prompt//__HISTORY_BLOCK__/$history_block}"
+    unset _tmpl
+
+    local _has_history="no"
+    [ -n "$history_block" ] && _has_history="yes"
+    local _tmpl_name="descriptive"
+    [ "$cycle" -ge 3 ] && _tmpl_name="prescriptive"
+    echo "  [codex] template=${_tmpl_name} has_history=${_has_history} cycle=${cycle}/${MAX_REVIEW_CYCLES}" | tee -a "$LOG" >&2
+    unset _has_history _tmpl_name
 
     echo "  [codex] reviewing PR #$pr_num..." >&2
     local codex_rc=0
@@ -472,6 +604,7 @@ run_review_cycle() {
 
     local review
     review=$(cat "$TMP_REVIEW")
+    REVIEW_HISTORY+=("$review")
 
     post_codex_review "$pr_num" "$cycle" "$MAX_REVIEW_CYCLES" "$TMP_REVIEW"
 
@@ -498,9 +631,14 @@ run_review_cycle() {
     fi
 
     # ---- claude pass ----
+    local pr_feedback
+    pr_feedback=$(collect_pr_feedback "$pr_num" 2>>"$LOG")
+    [ -z "$pr_feedback" ] && pr_feedback="(none)"
+
     local claude_prompt
     claude_prompt="${CLAUDE_REVIEW_PROMPT_TEMPLATE//__PR_NUMBER__/$pr_num}"
     claude_prompt="${claude_prompt//__REVIEW__/$review}"
+    claude_prompt="${claude_prompt//__PR_FEEDBACK__/$pr_feedback}"
 
     local pre_sha post_sha
     pre_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
@@ -556,9 +694,12 @@ run_review_cycle() {
   echo "--- base prompt ---"
   printf '%s\n' "$BASE_PROMPT"
   echo "--- end base prompt ---"
-  echo "--- codex review prompt template ---"
+  echo "--- codex review prompt template (descriptive, cycles 1-2) ---"
   printf '%s\n' "$CODEX_REVIEW_PROMPT_TEMPLATE"
   echo "--- end codex review prompt template ---"
+  echo "--- codex review prompt template (prescriptive, cycles 3+) ---"
+  printf '%s\n' "$CODEX_REVIEW_PRESCRIPTIVE_PROMPT_TEMPLATE"
+  echo "--- end codex review prescriptive prompt template ---"
   echo "--- claude review prompt template ---"
   printf '%s\n' "$CLAUDE_REVIEW_PROMPT_TEMPLATE"
   echo "--- end claude review prompt template ---"
