@@ -216,20 +216,102 @@ Function is internal to script; no versioning. Breaking changes (sentinel format
 
 ## Prompt templates (proposed enhancements)
 
-### Codex detailed review template (cycle 3+)
-```markdown
-You are performing a code review on PR #__PR_NUMBER__ for this repository. The PR branch is currently checked out.
+Each cycle uses a complete, deterministic prompt with NO conditional logic or template variables. The bash orchestrator selects which prompt constant to use based on cycle number, then performs literal string replacement for runtime values (PR number, review text, history).
 
-This is review cycle __CYCLE__ of __MAX_CYCLES__. Previous cycles have not yet resolved all BLOCKING issues.
+**String replacement markers** (bash performs substitution before sending to CLI):
+- `${PR_NUM}` → actual PR number
+- `${CYCLE}` → current cycle number
+- `${MAX_CYCLES}` → configured max (default 6)
+- `${HISTORY}` → prior reviews + commits (cycles 2+)
+- `${PR_FEEDBACK}` → collected PR comments/reviews
+- `${CODEX_REVIEW}` → Codex output from current cycle
+
+### Codex prompt: Cycle 1
+```
+You are performing a code review on PR #${PR_NUM} for this repository. The PR branch is currently checked out.
+
+This is review cycle 1 of ${MAX_CYCLES}. This is the first review of this PR.
 
 Inspect the diff of the current branch against the project's default branch. Read changed files and surrounding context as needed to evaluate the change.
-
-__HISTORY_BLOCK__
 
 Output your review using EXACTLY this format:
 
 ## BLOCKING
 - <one-line description> — <file:line> — <why it must be fixed before merge>
+
+## RECOMMENDED
+- <one-line description> — <file:line> — <why it should be addressed>
+
+## INFORMATION
+- <one-line description> — <file:line> — <context, suggestion, or fyi>
+
+Categorization rules:
+- BLOCKING = correctness bugs, security issues, broken tests, build failures, contract violations, broken invariants — anything that should not merge.
+- RECOMMENDED = quality improvements, missed edge cases, better patterns, doc gaps, error-handling gaps. Should be addressed but not strictly blocking.
+- INFORMATION = stylistic notes, alternative approaches, performance observations, fyi context. Optional.
+
+Format rules:
+- BLOCKING, RECOMMENDED, and INFORMATION are single-line bullets only.
+- If a section has no findings, write `- (none)` as the only bullet under that heading.
+- Do NOT output anything before, between, or after the three sections.
+- Do NOT make code changes. This is review only.
+```
+
+### Codex prompt: Cycle 2
+```
+You are performing a code review on PR #${PR_NUM} for this repository. The PR branch is currently checked out.
+
+This is review cycle 2 of ${MAX_CYCLES}. The previous cycle did not fully resolve BLOCKING issues.
+
+Inspect the diff of the current branch against the project's default branch. Read changed files and surrounding context as needed to evaluate the change.
+
+--- cycle history begin ---
+${HISTORY}
+--- cycle history end ---
+
+Output your review using EXACTLY this format:
+
+## BLOCKING
+- [NEW|RECURRENCE] <one-line description> — <file:line> — <why it must be fixed before merge>
+
+## RECOMMENDED
+- <one-line description> — <file:line> — <why it should be addressed>
+
+## INFORMATION
+- <one-line description> — <file:line> — <context, suggestion, or fyi>
+
+Categorization rules:
+- BLOCKING = correctness bugs, security issues, broken tests, build failures, contract violations, broken invariants — anything that should not merge.
+- RECOMMENDED = quality improvements, missed edge cases, better patterns, doc gaps, error-handling gaps. Should be addressed but not strictly blocking.
+- INFORMATION = stylistic notes, alternative approaches, performance observations, fyi context. Optional.
+
+Convergence tracking:
+- Mark each BLOCKING finding with [NEW] if it was not flagged in previous cycles, or [RECURRENCE] if it was flagged before but remains unresolved.
+
+Format rules:
+- BLOCKING bullets start with [NEW|RECURRENCE] tag, followed by single-line description.
+- RECOMMENDED and INFORMATION are single-line bullets only (no tags).
+- If a section has no findings, write `- (none)` as the only bullet under that heading.
+- Do NOT output anything before, between, or after the three sections.
+- Do NOT make code changes. This is review only.
+```
+
+### Codex prompt: Cycles 3-6 (prescriptive + detailed)
+```
+You are performing a code review on PR #${PR_NUM} for this repository. The PR branch is currently checked out.
+
+This is review cycle ${CYCLE} of ${MAX_CYCLES}. Multiple previous cycles have not resolved BLOCKING issues. This cycle uses prescriptive mode with detailed explanations.
+
+Inspect the diff of the current branch against the project's default branch. Read changed files and surrounding context as needed to evaluate the change.
+
+--- cycle history begin ---
+${HISTORY}
+--- cycle history end ---
+
+Output your review using EXACTLY this format:
+
+## BLOCKING
+- [NEW|RECURRENCE] <one-line description> — <file:line> — <why it must be fixed before merge>
   Suggested fix: <concrete code change — show the exact replacement or patch sketch>
   Root cause: <why this gap exists — when/how introduced, what changed>
   Architectural context: <how this component fits into the system, what boundaries it enforces>
@@ -246,43 +328,35 @@ Categorization rules:
 - RECOMMENDED = quality improvements, missed edge cases, better patterns, doc gaps, error-handling gaps. Should be addressed but not strictly blocking.
 - INFORMATION = stylistic notes, alternative approaches, performance observations, fyi context. Optional.
 
+Prescriptive mode requirements:
+- Each BLOCKING finding MUST include all four parts: suggested fix, root cause, architectural context, impact.
+- If you cannot produce all four parts for a finding, downgrade it to RECOMMENDED.
+- Suggested fix must be concrete code showing the exact change needed.
+
+Convergence tracking:
+- Mark each BLOCKING finding with [NEW] if it was not flagged in previous cycles, or [RECURRENCE] if it was flagged before but remains unresolved.
+
 Format rules:
-- Each BLOCKING bullet requires four parts: description, suggested fix, root cause, architectural context, impact.
-- If you cannot produce all four parts for a BLOCKING finding, downgrade to RECOMMENDED.
+- BLOCKING bullets are multi-line with four required sub-bullets (suggested fix, root cause, architectural context, impact).
 - RECOMMENDED and INFORMATION are single-line bullets only.
 - If a section has no findings, write `- (none)` as the only bullet under that heading.
 - Do NOT output anything before, between, or after the three sections.
 - Do NOT make code changes. This is review only.
 ```
 
-### Claude plan-first review template (cycle 2-3)
-```markdown
-A code review on PR #__PR_NUMBER__ has produced the findings below, along with existing feedback from automated tools and human reviewers.
+### Claude prompt: Cycle 1
+```
+A code review on PR #${PR_NUM} has produced the findings below, along with existing feedback from automated tools and human reviewers.
 
-This is review cycle __CYCLE__ of __MAX_CYCLES__. The previous cycle(s) did not fully resolve BLOCKING issues.
+This is review cycle 1 of ${MAX_CYCLES}. This is the first review of this PR.
 
 You MUST action every BLOCKING finding before this PR can merge. Treat actionable issues in existing PR feedback with the same BLOCKING priority.
 
-**CRITICAL: Use plan mode before implementing.**
-
-Step 1: Enter plan mode to create an implementation plan:
-  - Analyze all BLOCKING findings and their dependencies
-  - Determine the correct order to address them (some fixes may depend on others)
-  - Identify any cross-finding interactions or shared root causes
-  - Document trade-offs and alternatives for non-obvious decisions
-  - Output the plan for review before proceeding
-
-Step 2: Execute the plan:
-  - Implement each step sequentially
-  - Run relevant tests after each fix
-  - Commit each fix separately with structured message format:
-    ```
-    fix(<scope>): <what changed>
-    
-    Why: <rationale explaining trade-offs, alternatives considered, constraints>
-    __IMPACT_BLOCK__
-    ```
-  - Push commits to PR branch when batch complete
+Implementation:
+- Address all BLOCKING findings with minimal, targeted changes.
+- Run relevant tests after each fix.
+- Commit each fix separately using standard format: fix(<scope>): <what changed>
+- Push commits to PR branch when complete.
 
 Scope discipline:
 - Make minimal, targeted changes. Do NOT refactor adjacent code unless required by a finding.
@@ -294,25 +368,19 @@ End your final message with EXACTLY ONE of these sentinels on its own line:
 - STUCK_REVIEW <one-line reason> (you cannot proceed)
 
 --- existing PR feedback begin ---
-__PR_FEEDBACK__
+${PR_FEEDBACK}
 --- existing PR feedback end ---
 
 --- codex review begin ---
-__REVIEW__
+${CODEX_REVIEW}
 --- codex review end ---
 ```
 
-**Template variable substitutions (cycle 3+):**
-- `__IMPACT_BLOCK__` is replaced with:
-  ```
-  Impact: <failure mode addressed> — <metrics or observability>
-  ```
+### Claude prompt: Cycles 2-3 (plan-first)
+```
+A code review on PR #${PR_NUM} has produced the findings below, along with existing feedback from automated tools and human reviewers.
 
-### Claude plan-first review template (cycle 4+)
-```markdown
-A code review on PR #__PR_NUMBER__ has produced the findings below, along with existing feedback from automated tools and human reviewers.
-
-This is review cycle __CYCLE__ of __MAX_CYCLES__. The previous cycle(s) did not fully resolve BLOCKING issues.
+This is review cycle ${CYCLE} of ${MAX_CYCLES}. The previous cycle(s) did not fully resolve BLOCKING issues.
 
 You MUST action every BLOCKING finding before this PR can merge. Treat actionable issues in existing PR feedback with the same BLOCKING priority.
 
@@ -328,21 +396,63 @@ Step 1: Enter plan mode to create an implementation plan:
 Step 2: Execute the plan:
   - Implement each step sequentially
   - Run relevant tests after each fix
-  - Commit each fix separately with structured message format:
-    ```
+  - Commit each fix separately with this format:
     fix(<scope>): <what changed>
-    
+
     Why: <rationale explaining trade-offs, alternatives considered, constraints>
-    Impact: <failure mode addressed> — <metrics or observability>
-    ```
-  - Push commits to PR branch when batch complete
+  - Push commits to PR branch when complete
+
+Scope discipline:
+- Make minimal, targeted changes. Do NOT refactor adjacent code unless required by a finding.
+- Each finding gets its own commit.
+- Before outputting DONE_REVIEW, run the full test suite and verify no new surface introduced.
+
+End your final message with EXACTLY ONE of these sentinels on its own line:
+- DONE_REVIEW (you have addressed everything you intend to address)
+- STUCK_REVIEW <one-line reason> (you cannot proceed)
+
+--- existing PR feedback begin ---
+${PR_FEEDBACK}
+--- existing PR feedback end ---
+
+--- codex review begin ---
+${CODEX_REVIEW}
+--- codex review end ---
+```
+
+### Claude prompt: Cycles 4-6 (plan-first + resolution justification)
+```
+A code review on PR #${PR_NUM} has produced the findings below, along with existing feedback from automated tools and human reviewers.
+
+This is review cycle ${CYCLE} of ${MAX_CYCLES}. Multiple previous cycles have not resolved BLOCKING issues.
+
+You MUST action every BLOCKING finding before this PR can merge. Treat actionable issues in existing PR feedback with the same BLOCKING priority.
+
+**CRITICAL: Use plan mode before implementing.**
+
+Step 1: Enter plan mode to create an implementation plan:
+  - Analyze all BLOCKING findings and their dependencies
+  - Determine the correct order to address them (some fixes may depend on others)
+  - Identify any cross-finding interactions or shared root causes
+  - Document trade-offs and alternatives for non-obvious decisions
+  - Output the plan for review before proceeding
+
+Step 2: Execute the plan:
+  - Implement each step sequentially
+  - Run relevant tests after each fix
+  - Commit each fix separately with this format:
+    fix(<scope>): <what changed>
+
+    Why: <rationale explaining trade-offs, alternatives considered, constraints>
+    Impact: <failure mode addressed — metrics or observability>
+  - Push commits to PR branch when complete
 
 Step 3: Post resolution justification as PR comment:
   For EACH BLOCKING finding in the Codex review, you must post a comment explaining:
-  - **If resolved:** "BLOCKING <one-line finding description> resolved in commit <SHA>. Why this resolves it: <specific explanation of how your change addresses the root cause identified by Codex and satisfies the architectural constraints>"
-  - **If invalid:** "BLOCKING <one-line finding description> is invalid. Reason: <explanation>. Supporting reference: <link to spec/docs/validated source proving the finding is incorrect>"
-  
-  Use `gh pr comment __PR_NUMBER__ --body "<text>"` to post the justification.
+  - If resolved: "BLOCKING <one-line finding description> resolved in commit <SHA>. Why this resolves it: <specific explanation of how your change addresses the root cause identified by Codex and satisfies the architectural constraints>"
+  - If invalid: "BLOCKING <one-line finding description> is invalid. Reason: <explanation>. Supporting reference: <link to spec/docs/validated source proving the finding is incorrect>"
+
+  Use `gh pr comment ${PR_NUM} --body "<text>"` to post the justification.
 
 Scope discipline:
 - Make minimal, targeted changes. Do NOT refactor adjacent code unless required by a finding.
@@ -355,14 +465,13 @@ End your final message with EXACTLY ONE of these sentinels on its own line:
 - STUCK_REVIEW <one-line reason> (you cannot proceed)
 
 --- existing PR feedback begin ---
-__PR_FEEDBACK__
+${PR_FEEDBACK}
 --- existing PR feedback end ---
 
 --- codex review begin ---
-__REVIEW__
+${CODEX_REVIEW}
 --- codex review end ---
 ```
-
 ## Telemetry contract
 
 **Current events:**
