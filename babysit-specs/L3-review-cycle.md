@@ -91,10 +91,12 @@ From implementation (babysit-with-review.sh lines 518-682):
 
 **Historical note:** Before 2026-05-28, non-transport Codex failures did not call `fail_review_cycle`. PRs remained OPEN/non-draft, allowing the outer loop to merge them without review. The current code calls `fail_review_cycle` for all non-transport failures.
 
-**Proposed enhancements (not yet implemented):**
+**Escalating cycle behavior (implemented 2026-06-29 via `01f089d`):**
 - **Plan-first on cycle 2+:** Claude uses plan mode to create implementation plan before addressing findings when cycle 2+ has BLOCKING issues
-- **Detailed Codex explanations on cycle 3+:** Codex provides deeper reasoning about why each gap exists, architectural context, and impact
-- **Solution rationale from Claude:** Claude documents why each fix was implemented the way it was (trade-offs, alternatives considered)
+- **Detailed Codex explanations on cycle 3–4+:** Codex provides deeper reasoning about why each gap exists, architectural context, and impact (prescriptive + detailed template)
+- **Solution rationale from Claude (cycle 2+):** Claude documents why each fix was implemented (trade-offs, alternatives considered) via Why: and Impact: blocks in commit messages
+- **Resolution justification on cycle 4+:** Claude posts a PR comment justifying each BLOCKING finding (resolved or invalid)
+- **Codex adjudication on cycle 5–6:** Codex adjudicates Claude's justifications; DISAGREED findings reappear as [RECURRENCE] in BLOCKING
 
 ## What we assume
 - [ASSUMPTION] Codex review quality improves with prescriptive mode (cycle 3+). Flips if: prescriptive mode increases false positive rate, requiring mode to be optional or removed.
@@ -102,8 +104,8 @@ From implementation (babysit-with-review.sh lines 518-682):
 - [ASSUMPTION] PR feedback filtering (exclude self-posted) is sufficient. Flips if: more sophisticated deduplication is needed (e.g., semantic similarity).
 - [ASSUMPTION] Six cycles is adequate convergence budget. Flips if: complex PRs need more cycles, requiring dynamic limit based on PR size.
 - [ASSUMPTION] Plan-first approach on cycle 2+ improves fix quality and reduces trial-and-error. Flips if: planning overhead exceeds benefit, or plan mode introduces latency that slows convergence.
-- [ASSUMPTION] Detailed Codex explanations on cycle 3+ help Claude understand root causes better. Flips if: explanation verbosity confuses Claude or increases false positive rate.
-- [ASSUMPTION] Solution rationale from Claude aids future review cycles and human understanding. Flips if: rationale in commit messages is sufficient, or Claude over-explains trivial fixes.
+- [ASSUMPTION] Detailed Codex explanations on cycle 3–4+ help Claude understand root causes better. Flips if: explanation verbosity confuses Claude or increases false positive rate.
+- [ASSUMPTION] Solution rationale in commit messages aids future review cycles and human understanding. Flips if: Claude over-explains trivial fixes and bloats commit history.
 
 ## Contract
 
@@ -122,11 +124,11 @@ run_review_cycle <PR_NUMBER>
 1. **Cycle order:** Codex pre-flight probe → (cycle loop) Codex review → Claude fixes → repeat
 2. **Convergence tracking:** Cycle N includes all prior reviews (1..N-1) and commits since cycle start
 3. **Prescriptive mode trigger:** Cycle 3+ always uses prescriptive prompt template with "Suggested fix:" requirement
-4. **Plan-first trigger (proposed):** Cycle 2+ with BLOCKING issues invokes Claude in plan mode before implementation
-5. **Detailed explanation trigger (proposed):** Cycle 3+ Codex reviews include deeper reasoning and architectural context for each finding
-6. **Solution rationale (proposed):** Claude documents implementation rationale for each fix (trade-offs, alternatives, constraints)
-7. **Explicit resolution justification (proposed):** Cycle 4+ requires Claude to explicitly justify how each BLOCKING finding was resolved or prove it is invalid with supporting references
-8. **Codex adjudication (proposed):** Cycle 5+ requires Codex to accept or provide reasoned disagreement for each of Claude's resolution justifications from the previous cycle
+4. **Plan-first trigger:** Cycle 2+ with BLOCKING issues invokes Claude in plan mode before implementation
+5. **Detailed explanation trigger:** Cycle 3–4+ Codex reviews include deeper reasoning and architectural context for each finding
+6. **Solution rationale:** Claude documents implementation rationale for each fix via Why: and Impact: blocks in commit messages (cycle 2+)
+7. **Explicit resolution justification:** Cycle 4+ requires Claude to explicitly justify how each BLOCKING finding was resolved or prove it is invalid with supporting references
+8. **Codex adjudication:** Cycle 5–6 requires Codex to accept or provide reasoned disagreement for each of Claude's resolution justifications from the previous cycle
 9. **BLOCKING counting:** Only bullets under `## BLOCKING` that are not `- (none)` count. Structural validation is a pre-condition: if the `## BLOCKING` section header is absent, the output is a Codex failure, not a zero-findings pass.
 10. **PR branch checkout:** Cycle starts by checking out PR branch via `gh pr checkout <PR_NUMBER>`
 11. **Label application:** `review-incomplete` for human-action bails, `review-mcp-outage` for Codex transport failures, `review-codex-outdated` for backend compatibility failures
@@ -150,7 +152,7 @@ Non-idempotent. Each cycle advances PR branch state (commits pushed). Re-running
 ### Versioning policy
 Function is internal to script; no versioning. Breaking changes (sentinel format, label names) require manual migration.
 
-### Enhanced cycle behavior (proposed)
+### Cycle behavior
 
 **Cycle 1 (baseline):**
 - Codex reviews PR with descriptive template (BLOCKING / RECOMMENDED / INFORMATION)
@@ -214,16 +216,8 @@ Function is internal to script; no versioning. Breaking changes (sentinel format
 
 ## Performance budget
 
-**Current implementation (baseline):**
-- **p50 cycle latency:** ~4 minutes (Codex review ~1min + Claude fixes ~3min)
-- **p95 cycle latency:** ~15 minutes (complex diffs, many findings)
-- **p99 cycle latency:** ~30 minutes (Codex retry delays + large changesets)
-- **Throughput envelope:** 1 cycle per (Codex time + Claude time + git operations) = ~15-60 seconds overhead per cycle
-- **Cost per cycle:** ~$1-3 (Codex + Claude inference combined)
-
-**Proposed enhanced implementation:**
 - **p50 cycle latency:**
-  - Cycle 1: ~4 minutes (unchanged)
+  - Cycle 1: ~4 minutes (Codex review ~1min + Claude fixes ~3min)
   - Cycle 2-3: ~5-6 minutes (+plan mode: 30-60s)
   - Cycle 3-4: ~6-7 minutes (+detailed explanations: 10-20% Codex time)
   - Cycle 4: ~7-8 minutes (+resolution justification: 15-30s for PR comment)
@@ -231,7 +225,7 @@ Function is internal to script; no versioning. Breaking changes (sentinel format
 - **p95 cycle latency:** ~22-25 minutes (plan mode + detailed explanations + justification + adjudication + complex diffs)
 - **p99 cycle latency:** ~45 minutes (retries + all enhancements + large changesets)
 - **Cost per cycle:**
-  - Cycle 1: ~$1-3 (unchanged)
+  - Cycle 1: ~$1-3
   - Cycle 2-3: ~$1.50-4 (+plan mode tokens)
   - Cycle 3-4: ~$2-5 (+detailed explanation tokens)
   - Cycle 4: ~$2.50-5.50 (+resolution justification tokens)
@@ -243,7 +237,7 @@ Function is internal to script; no versioning. Breaking changes (sentinel format
 - **PII handling:** None (operates on code diffs, commit messages, PR metadata)
 - **Rate limits:** Bounded by MAX_REVIEW_CYCLES; Codex/Claude rate limits handled by respective CLIs
 
-## Prompt templates (proposed enhancements)
+## Prompt templates
 
 Each cycle uses a complete, deterministic prompt with NO conditional logic or template variables. The bash orchestrator selects which prompt constant to use based on cycle number, then performs literal string replacement for runtime values (PR number, review text, history).
 
@@ -636,25 +630,15 @@ ${CODEX_REVIEW}
 ```
 ## Telemetry contract
 
-**Current events:**
+**Events emitted:**
 - `[review] marking PR #N incomplete: <reason>` (via fail_review_cycle)
 - `[review] codex MCP outage for PR #N: <reason>` (via fail_review_cycle_mcp)
 - `[codex] N blocking finding(s)` (per cycle)
 - `[review] zero blocking findings; PR #N cleared after M cycle(s)` (success)
 - `[review] PR #N queued for auto-merge` or `[review] PR #N merged` (merge success)
 - `[codex] template=<descriptive|prescriptive> has_history=<yes|no> cycle=M/N` (mode tracking)
-
-**Proposed additional events (for enhanced implementation):**
-- `[claude] entering plan mode for PR #N cycle M` (before plan creation)
-- `[claude] plan approved, executing N steps` (after plan creation, before implementation)
-- `[claude] plan step M/N: <step description>` (during plan execution)
-- `[codex] detailed explanations enabled (cycle 3+)` (mode tracking)
-- `[claude] commit with rationale: <commit SHA>` (after each commit with Why: block)
-- `[claude] posting resolution justifications for N BLOCKING findings (cycle 4+)` (before posting PR comment)
-- `[claude] resolution justifications posted to PR #N` (after gh pr comment succeeds)
-- `[codex] adjudication mode enabled (cycle 5+)` (mode tracking)
-- `[codex] adjudication: N accepted, M disagreed` (after parsing adjudication section)
-- `[claude] processing N disagreed findings from Codex adjudication` (cycle 5+ Claude processing)
+- `[claude] entering plan mode for PR #N cycle M` (cycle 2+ — before plan creation)
+- `[claude] resolution justifications posted to PR #N` (cycle 4+ — after gh pr comment succeeds)
 
 **Sinks:** Main log file (~/sisyphus-logs/<project>-<timestamp>-<pid>.log)
 
@@ -662,8 +646,8 @@ ${CODEX_REVIEW}
 - Quality KPI: (PRs merged with BLOCKING=0 / total PRs) = quality gate pass rate
 - Productivity KPI: Average cycles-per-PR (lower = better convergence)
 - Reliability KPI: (MCP outage failures / total cycles) = Codex availability
-- **Proposed:** Plan effectiveness KPI: (PRs converging in cycle 2 with plan / PRs converging in cycle 2 without plan)
-- **Proposed:** Explanation value KPI: (cycle 3+ fix accuracy / cycle 1-2 fix accuracy) — measures if detailed explanations improve fixes
+- Plan effectiveness KPI: (PRs converging in cycle 2 with plan / PRs converging in cycle 2 without plan)
+- Explanation value KPI: (cycle 3+ fix accuracy / cycle 1-2 fix accuracy) — measures if detailed explanations improve fixes
 
 **AEAB-eligible eval cases:** N/A (no eval framework yet)
 
@@ -671,7 +655,7 @@ ${CODEX_REVIEW}
 - Tech lead: Chris Robertson
 - API council / platform review: N/A (internal function)
 - Security: PR label race conditions accepted (lock file prevents concurrent runs; gh label ops idempotent). Auto-merge accepted for personal repos (CI must pass; reversible via revert). See SECURITY-REVIEW-PLAN.md §2–3.
-- QA: [OPEN: test convergence tracking, prescriptive mode, early exit conditions — owner: qa-lead]
+- QA: Test cases documented in QA-TEST-PLAN.md (TC-2.1–2.11); not yet executed. Deferred pending test harness for mock Claude/Codex output.
 
 ## Failure modes & blast radius
 - **Contract violation (malformed Codex review):** Structural validation (ARLO-FEAT-MCP-RESILIENCE) catches this before `count_blocking` runs; returns 1 → `fail_review_cycle`. Blast: PR labeled `review-incomplete`, no false-clean merge.
@@ -704,11 +688,11 @@ ${CODEX_REVIEW}
 - **Auto-merge assumption.** If flipped to approval-required: requires gh workflow approval API integration or manual merge step.
 - **`count_blocking` zero = clean pass assumption.** **Flipped 2026-05-10:** Codex v0.117.0 with gpt-5.5 produced non-review output that exited 0, which would have been counted as zero blocking findings → immediate merge. Fix: structural validation (all three section headers required) is now a pre-condition; absent header = Codex failure, not a clean pass.
 - **`fail_review_cycle` always succeeds assumption.** **Flipped 2026-05-10 (old code):** Old code did not call `fail_review_cycle` on non-transport Codex failures at all. Fix: always call `fail_review_cycle` for all non-transport failures; make it fail-closed.
-- **Plan-first at cycle 2 assumption (proposed).** If flipped to cycle 3+ only or disabled: requires A/B testing to measure plan mode impact on convergence rate.
-- **Detailed explanations at cycle 3 assumption (proposed).** If flipped to earlier cycles or all cycles: requires cost/benefit analysis (token usage vs. fix quality improvement).
-- **Solution rationale in commits assumption (proposed).** If flipped to separate doc or PR description: requires alternative mechanism for preserving decision context.
-- **Resolution justification at cycle 4 assumption (proposed).** If flipped to earlier/later or disabled: requires empirical testing of false convergence rate (Claude claiming DONE_REVIEW without actually resolving findings).
-- **Codex adjudication at cycle 5 assumption (proposed).** If flipped to cycle 4 (immediately after first justification) or disabled: must assess whether one cycle of justification is sufficient context for meaningful adjudication, or whether the extra cycle provides better signal.
+- **Plan-first at cycle 2 assumption.** If flipped to cycle 3+ only or disabled: requires A/B testing to measure plan mode impact on convergence rate.
+- **Detailed explanations at cycle 3 assumption.** If flipped to earlier cycles or all cycles: requires cost/benefit analysis (token usage vs. fix quality improvement).
+- **Solution rationale in commits assumption.** If flipped to separate doc or PR description: requires alternative mechanism for preserving decision context.
+- **Resolution justification at cycle 4 assumption.** If flipped to earlier/later or disabled: requires empirical testing of false convergence rate (Claude claiming DONE_REVIEW without actually resolving findings).
+- **Codex adjudication at cycle 5 assumption.** If flipped to cycle 4 (immediately after first justification) or disabled: must assess whether one cycle of justification is sufficient context for meaningful adjudication, or whether the extra cycle provides better signal.
 
 ## Composes with / replaces
 - **Replaces:** Manual code review loop (open PR → human reviews → implementer fixes → re-review)
@@ -721,7 +705,6 @@ ${CODEX_REVIEW}
 
 ## Acceptance tests
 
-**Current implementation (baseline):**
 0. **Given** Codex pre-flight probe matches `compat_re` (model too old), **when** `run_review_cycle` is called, **then** PR is labelled `review-codex-outdated` and babysitter exits 1 (no cycles run).
 0b. **Given** Codex pre-flight probe exits 0 but TMP_REVIEW lacks `## BLOCKING` header, **when** probe is validated, **then** babysitter exits 1 as if compat failure.
 0c. **Given** `fail_review_cycle`'s `gh pr ready --undo` returns non-zero, **when** function executes, **then** babysitter exits 1 (not logs WARNING and continues).
@@ -736,8 +719,6 @@ ${CODEX_REVIEW}
 9. **Given** Codex CLI not installed, **when** cycle starts, **then** logged message "codex CLI not found; skipping review cycle" and function returns 0 (graceful degradation).
 10. **Given** PR has existing CodeRabbit comments, **when** collect_pr_feedback runs, **then** comments are included in Claude prompt (not filtered out).
 11. **Given** PR has self-posted Codex review comment, **when** collect_pr_feedback runs, **then** comment is excluded (filtered by "**Codex review" prefix).
-
-**Proposed enhancement tests:**
 12. **Given** cycle 2 starts with BLOCKING issues, **when** Claude is invoked, **then** log shows "[claude] entering plan mode for PR #N cycle 2" before implementation begins.
 13. **Given** cycle 2+ plan mode completes, **when** Claude executes plan, **then** log shows "[claude] plan approved, executing N steps" and each step is logged.
 14. **Given** cycle 2+ with plan execution, **when** Claude commits a fix, **then** commit message includes "Why: <rationale>" explaining trade-offs and alternatives.
@@ -772,13 +753,10 @@ Future: Could record (PR_NUMBER, cycle_count, BLOCKING_history, outcome) for off
 
 ## Kill criteria
 
-**Current implementation:**
 - If prescriptive mode (cycle 3+) increases false positive rate by >20% vs. descriptive mode → revert to descriptive-only or make mode configurable
 - If review cycle convergence rate (BLOCKING=0 / total PRs) drops below 50% → halt feature, improve Codex prompt or switch review approach
 - If average cycles-per-PR exceeds 4 for >70% of PRs → halt feature, increase MAX_REVIEW_CYCLES or improve prompt quality
 - If Codex MCP outage rate exceeds 30% → remove Codex dependency, use alternative review (e.g., CodeRabbit API, Claude self-review)
-
-**Proposed enhancements:**
 - If plan-first mode (cycle 2+) does NOT reduce cycles-per-PR by >15% vs. baseline → disable plan mode, too much overhead for insufficient benefit
 - If plan mode latency exceeds 2 minutes on >50% of cycles → optimize plan prompt or make plan mode optional
 - If detailed explanations (cycle 3+) do NOT improve fix accuracy by >10% vs. cycle 1-2 → disable detailed mode, explanation verbosity not helping

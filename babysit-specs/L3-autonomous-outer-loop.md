@@ -126,7 +126,7 @@ Script is unversioned; updates are in-place edits. Breaking changes (env var ren
 - Tech lead: Chris Robertson
 - API council / platform review: N/A (internal tool, no public API)
 - Security: lock file race condition accepted for single-user scenario (TOCTOU window negligible; blast radius: both processes halt gracefully). See SECURITY-REVIEW-PLAN.md §1.
-- QA: [OPEN: test cases for pre-flight, stuck detection, sentinel parsing — owner: qa-lead]
+- QA: Test cases documented in QA-TEST-PLAN.md (TC-1.1–1.8); not yet executed. Deferred pending test harness for mock Claude output.
 
 ## Failure modes & blast radius
 - **Contract violation (malformed sentinel):** Sentinel not detected, loop continues to next iteration. Blast: wasted iteration, developer notices in log.

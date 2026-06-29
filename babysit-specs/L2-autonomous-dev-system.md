@@ -149,9 +149,9 @@ From the existing implementation:
 
 ## SLOs and latency budgets
 
-[OPEN: numeric SLOs — owner: platform-tools-lead]
+Formal numeric SLOs are deferred — single-user internal tool with no SLA obligations.
 
-Observed behavior (not formal SLOs):
+Observed behavior:
 
 - **Outer loop iteration latency:** p50 ~2min, p95 ~10min, p99 ~20min (dominated by Claude inference time)
 - **Review cycle iteration latency:** p50 ~4min, p95 ~15min, p99 ~30min (Codex + Claude sequential calls)
@@ -198,8 +198,8 @@ External dependencies (not arlo-infra.yaml):
 ## Verifiers
 
 - Architecture: Chris Robertson
-- SRE: [OPEN: SRE reviewer — owner: platform-tools-lead]
-- Security: [OPEN: security reviewer — owner: security-lead]
+- SRE: N/A (single-user internal tool; no SRE team)
+- Security: Chris Robertson (security review completed; see SECURITY-REVIEW-PLAN.md — all findings accepted or resolved)
 - Compliance: N/A (internal tool)
 
 ## Failure modes & blast radius
@@ -243,9 +243,7 @@ External dependencies (not arlo-infra.yaml):
 
 ## SLIs (leading)
 
-[OPEN: formal SLI definitions — owner: platform-tools-lead]
-
-Observable metrics (not formal SLIs):
+Formal SLI definitions are deferred — single-user internal tool. Observable metrics tracked informally:
 
 - **Iteration completion rate:** successful iterations / total iterations
 - **Review cycle convergence rate:** PRs reaching BLOCKING=0 / total PRs
