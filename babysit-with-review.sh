@@ -159,16 +159,29 @@ Pick the next unit of work in this priority order — stop at the first level th
 Scope discipline: pick something completable in this iteration — roughly 1–3 hours of work. Prefer landing one small thing fully (code + tests + docs + CHANGELOG entry) over starting several things. Follow every convention in CLAUDE.md.
 
 Per-iteration workflow:
+0. You are in a dedicated git worktree on a placeholder branch. As your FIRST action —
+   before reading files or writing code — rename this branch to reflect the work item you
+   are about to pick:
+     git branch -m <type>/<slug>-<issue-number>
+   Use `feat/` for new features, `fix/` for bug fixes, `docs/` for docs-only changes,
+   `chore/` for maintenance. Include the issue or PR number when working from a tracked
+   item (e.g., `feat/close-goals-124`, `fix/auth-header-87`). This branch name becomes the
+   PR branch name — choose descriptively; changing it after `git push` breaks the PR link.
 1. State which item you picked and why it is the most valuable next step right now.
 2. Implement it fully — code, tests, docs, and a CHANGELOG entry if the project uses one.
 3. Run the relevant test suite. If it fails, fix the underlying issue.
 4. Commit with a message that explains why the change was made.
-5. If the unit of work is shippable on its own, push the branch and open a PR via `gh pr create`.
+5. If the unit of work is shippable on its own, push the branch and open a PR via `gh pr create`. Do NOT merge it — see merge policy below.
+
+**Merge policy (non-negotiable):**
+- Only merge a PR after ALL blockers identified in the reviews have been handled.
+- YOU MUST NEVER MERGE A PR THAT HAS NOT BEEN REVIEWED. Never run `gh pr merge` yourself — opening or advancing a PR means leaving it open and ending your turn with `HANDOFF_REVIEW <PR>` so the wrapper's Codex review runs.
+- If you disagree with the review agent on a blocker and choose to override it, that decision process must be documented in detail, with supporting material, on the PR.
 
 End-of-iteration sentinels (mutually exclusive — output exactly one as the LAST line of your final message, with no surrounding quotes, code fences, or punctuation):
 
 - HANDOFF_REVIEW <PR_NUMBER>
-  Use this if you opened a new PR or pushed new commits to an existing PR during this iteration. The wrapper will run an automated code review (codex) and may invoke you again to address findings before resuming the outer loop. PR_NUMBER must be a bare integer (no leading `#`). Example: `HANDOFF_REVIEW 42`.
+  Use this if you opened a new PR or pushed new commits to an existing PR during this iteration. Leave the PR open — the wrapper runs the Codex review and performs the merge once it passes. PR_NUMBER must be a bare integer (no leading `#`). Example: `HANDOFF_REVIEW 42`.
 
 - STOP
   Use this ONLY if BOTH are true:
@@ -381,7 +394,12 @@ Implementation:
 - Address all BLOCKING findings with minimal, targeted changes.
 - Run relevant tests after each fix.
 - Commit each fix separately using standard format: fix(<scope>): <what changed>
-- Push commits to PR branch when complete.
+- Push commits to PR branch when complete. Do NOT merge the PR — the wrapper merges after re-review.
+
+**Merge policy (non-negotiable):**
+- Only merge a PR after ALL blockers identified in the reviews have been handled.
+- YOU MUST NEVER MERGE A PR THAT HAS NOT BEEN REVIEWED. Never run `gh pr merge` yourself — push your fixes and end with `DONE_REVIEW`; the wrapper runs the next Codex review cycle and performs the merge once it passes.
+- If you disagree with the review agent on a blocker and choose to override it, that decision process must be documented in detail, with supporting material, on the PR.
 
 Scope discipline:
 - Make minimal, targeted changes. Do NOT refactor adjacent code unless required by a finding.
@@ -425,7 +443,12 @@ Step 2: Execute the plan:
 
     Why: <rationale explaining trade-offs, alternatives considered, constraints>
     Impact: <failure mode addressed — metrics or observability>
-  - Push commits to PR branch when complete
+  - Push commits to PR branch when complete. Do NOT merge the PR — the wrapper merges after re-review.
+
+**Merge policy (non-negotiable):**
+- Only merge a PR after ALL blockers identified in the reviews have been handled.
+- YOU MUST NEVER MERGE A PR THAT HAS NOT BEEN REVIEWED. Never run `gh pr merge` yourself — push your fixes and end with `DONE_REVIEW`; the wrapper runs the next Codex review cycle and performs the merge once it passes.
+- If you disagree with the review agent on a blocker and choose to override it, that decision process must be documented in detail, with supporting material, on the PR.
 
 Scope discipline:
 - Make minimal, targeted changes. Do NOT refactor adjacent code unless required by a finding.
@@ -469,7 +492,12 @@ Step 2: Execute the plan:
 
     Why: <rationale explaining trade-offs, alternatives considered, constraints>
     Impact: <failure mode addressed — metrics or observability>
-  - Push commits to PR branch when complete
+  - Push commits to PR branch when complete. Do NOT merge the PR — the wrapper merges after re-review.
+
+**Merge policy (non-negotiable):**
+- Only merge a PR after ALL blockers identified in the reviews have been handled.
+- YOU MUST NEVER MERGE A PR THAT HAS NOT BEEN REVIEWED. Never run `gh pr merge` yourself — push your fixes and end with `DONE_REVIEW`; the wrapper runs the next Codex review cycle and performs the merge once it passes.
+- If you disagree with the review agent on a blocker and choose to override it, that decision process must be documented in detail, with supporting material, on the PR.
 
 Step 3: Post resolution justification as PR comment:
   For EACH BLOCKING finding in the Codex review, you must post a comment explaining:
@@ -527,7 +555,12 @@ Step 3: Execute the plan:
 
     Why: <rationale explaining trade-offs, alternatives considered, constraints>
     Impact: <failure mode addressed — metrics or observability>
-  - Push commits to PR branch when complete
+  - Push commits to PR branch when complete. Do NOT merge the PR — the wrapper merges after re-review.
+
+**Merge policy (non-negotiable):**
+- Only merge a PR after ALL blockers identified in the reviews have been handled.
+- YOU MUST NEVER MERGE A PR THAT HAS NOT BEEN REVIEWED. Never run `gh pr merge` yourself — push your fixes and end with `DONE_REVIEW`; the wrapper runs the next Codex review cycle and performs the merge once it passes.
+- If you disagree with the review agent on a blocker and choose to override it, that decision process must be documented in detail, with supporting material, on the PR.
 
 Step 4: Post resolution justification as PR comment:
   For EACH BLOCKING finding (including DISAGREED items you re-addressed), post a comment explaining:
@@ -579,11 +612,12 @@ collect_state() {
 run_claude() {
   local prompt="$1"
   local out_file="$2"
-  claude -p "$prompt" \
+  local run_dir="${3:-$PWD}"
+  (cd "$run_dir" && claude -p "$prompt" \
     --model opusplan \
     --dangerously-skip-permissions \
     --output-format stream-json \
-    --verbose 2>>"$LOG" \
+    --verbose 2>>"$LOG") \
     | tee -a "$LOG" \
     | python3 -c '
 import json, sys
@@ -1060,6 +1094,29 @@ ${_hb}--- end prior review cycles ---
 
     if [ "$n_blocking" -eq 0 ]; then
       echo "  [review] zero blocking findings; PR #$pr_num cleared after $cycle cycle(s)" | tee -a "$LOG" >&2
+
+      # Set codex-review=success commit status so branch protection allows the merge.
+      # This is the ONLY place this status is set green — the implementation agent never sets it.
+      local _owner_repo _head_sha
+      _owner_repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
+      _head_sha=$(gh pr view "$pr_num" --json headRefOid -q .headRefOid 2>/dev/null || echo "")
+      if [ -n "$_owner_repo" ] && [ -n "$_head_sha" ]; then
+        if gh api -X POST "repos/${_owner_repo}/statuses/${_head_sha}" \
+            -f state=success \
+            -f context=codex-review \
+            -f description="Codex review passed (cycle ${cycle} of ${MAX_REVIEW_CYCLES})" \
+            -f target_url="https://github.com/${_owner_repo}/pull/${pr_num}" \
+            >>"$LOG" 2>&1; then
+          echo "  [review] codex-review status set to success for ${_head_sha:0:8}" | tee -a "$LOG" >&2
+        else
+          echo "  [review] WARNING: failed to set codex-review status for PR #$pr_num; leaving PR open rather than merging without the status check" | tee -a "$LOG" >&2
+          return 0
+        fi
+      else
+        echo "  [review] WARNING: could not resolve repo or head SHA for PR #$pr_num; leaving PR open rather than merging without the status check" | tee -a "$LOG" >&2
+        return 0
+      fi
+
       if gh pr merge "$pr_num" --squash --auto >>"$LOG" 2>&1; then
         echo "  [review] PR #$pr_num queued for auto-merge (merges when CI passes)" | tee -a "$LOG" >&2
       elif gh pr merge "$pr_num" --squash >>"$LOG" 2>&1; then
@@ -1282,7 +1339,11 @@ if [ "$_pf_behind" -gt 0 ]; then
   fi
 fi
 
+DEFAULT_BRANCH="$_pf_default"
 unset _pf_default _pf_current _pf_untracked _pf_n _pf_more _pf_ahead _pf_behind
+
+# Prune stale worktree metadata from previous crashed runs.
+git worktree prune >>"$LOG" 2>&1 || true
 
 # ---------- outer loop ----------
 
@@ -1332,8 +1393,34 @@ ${BASE_PROMPT}"
     echo "--- end state ---"
   } >> "$LOG"
 
-  if ! run_claude "$PROMPT" "$TMP_RESULT"; then
+  # --- per-iteration worktree ---
+  _wt_branch="wip/${PROJECT}/iter-${iter}"
+  _wt_dir="/tmp/babysit-${PROJECT}-iter${iter}-$$"
+  if ! git worktree add -b "$_wt_branch" "$_wt_dir" HEAD >>"$LOG" 2>&1; then
+    echo "  [outer] WARNING: worktree creation failed for iter $iter; Claude will run in $PWD" | tee -a "$LOG" >&2
+    _wt_dir=""
+    _wt_branch=""
+  else
+    echo "  [outer] worktree: $_wt_dir (branch: $_wt_branch)" | tee -a "$LOG" >&2
+  fi
+
+  if ! run_claude "$PROMPT" "$TMP_RESULT" "$_wt_dir"; then
     echo "ERROR: implementation claude exited non-zero on iter $iter; quarantining unreviewed open PRs" | tee -a "$LOG" >&2
+    # Push any WIP commits before removing the worktree, so work is not silently lost.
+    if [ -n "$_wt_dir" ]; then
+      _wt_actual=$(git -C "$_wt_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+      _wt_ahead=$(git -C "$_wt_dir" rev-list "${DEFAULT_BRANCH}..HEAD" --count 2>/dev/null || echo 0)
+      if [ "${_wt_ahead:-0}" -gt 0 ] && [ -n "${_wt_actual:-}" ]; then
+        echo "  [outer] pushing ${_wt_ahead} WIP commit(s) from ${_wt_actual} after crash" | tee -a "$LOG" >&2
+        git -C "$_wt_dir" push -u origin "HEAD:${_wt_actual}" >>"$LOG" 2>&1 || \
+          echo "  [outer] WARNING: WIP push failed for ${_wt_actual}" | tee -a "$LOG" >&2
+      fi
+      git worktree remove --force "$_wt_dir" >>"$LOG" 2>&1 || true
+      rm -rf "$_wt_dir"
+      [ -n "$_wt_branch" ] && git branch -D "$_wt_branch" >>"$LOG" 2>&1 || true
+    fi
+    _wt_dir=""
+    _wt_branch=""
     # Sweep open, non-draft PRs authored by @me that carry no review-* label.
     # A crashed implementation pass may have left such a PR mergeable-and-unreviewed,
     # which is the same silent-merge hole this script is designed to prevent.
@@ -1352,6 +1439,27 @@ ${BASE_PROMPT}"
     break
   fi
   echo "---" >> "$LOG"
+
+  # Remove the worktree BEFORE sentinel handling: run_review_cycle calls
+  # gh pr checkout, which fails if the PR branch is still checked out in the
+  # worktree ("fatal: ... is already used by worktree at ...").
+  # Claude has already pushed the branch to origin, so removing the local
+  # worktree is safe.
+  if [ -n "$_wt_dir" ]; then
+    _wt_actual=$(git -C "$_wt_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "$_wt_branch")
+    echo "  [outer] iter $iter branch: $_wt_actual" | tee -a "$LOG" >&2
+    _wt_ahead=$(git -C "$_wt_dir" rev-list "${DEFAULT_BRANCH}..HEAD" --count 2>/dev/null || echo 0)
+    if [ "${_wt_ahead:-0}" -gt 0 ]; then
+      echo "  [outer] safety-push: ${_wt_ahead} unpushed commit(s) on ${_wt_actual}" | tee -a "$LOG" >&2
+      git -C "$_wt_dir" push -u origin "HEAD:${_wt_actual}" >>"$LOG" 2>&1 || \
+        echo "  [outer] WARNING: safety-push failed for ${_wt_actual}" | tee -a "$LOG" >&2
+    fi
+    git worktree remove --force "$_wt_dir" >>"$LOG" 2>&1 || true
+    rm -rf "$_wt_dir"
+    [ -n "$_wt_branch" ] && git branch -D "$_wt_branch" >>"$LOG" 2>&1 || true
+    _wt_dir=""
+    _wt_branch=""
+  fi
 
   RESULT=$(cat "$TMP_RESULT")
   TRIMMED=$(printf '%s' "$RESULT" | sed -e 's/[[:space:]]*$//')

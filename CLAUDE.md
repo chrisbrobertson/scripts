@@ -23,6 +23,7 @@ step, no CI.
 | `new-fleet.sh` | Provision a staff-team fleet (staff-swe/sre/pm) for a service; see `docs/STAFF-FLEET.md` |
 | `claude-code-proxy.py` | OpenAI-compatible HTTP proxy routing to `claude -p`; used by new-fleet.sh |
 | `babysit-with-review.sh` | Autonomous `claude -p` loop with stop-file lock and Claude↔Codex PR-review cycle; see header for env vars. Pass `--repo-base PATH` (or `REPO_BASE` env var) if helper scripts live outside `~/repos/scripts` — auto-detects `~/repos` then `~/repo`. |
+| `setup-branch-protection.sh` | Enable the `codex-review` required status check on a repo's default branch; run once per repo after deploying the updated wrapper |
 | `backfill-codex-reviews.py` | Post historical Codex reviews to closed PRs |
 | `run-retrospective-review.sh` | One-shot Codex review for PRs that merged without automated review; posts findings as PR comments and opens issues for each BLOCKING finding |
 | `find-bailed-merged-prs.sh` | Scan babysit logs for review-cycle bails, then query GitHub to find which bailed PRs were subsequently merged (unreviewed code audit) |
@@ -64,6 +65,14 @@ Exemplar: `test-llm-routing.py:18-25`. Notes:
   (see comment in `~/repos/home-lab-monitor/config.yml`).
 - **Spark DGX (192.168.1.93) is the GPU host** — prefer it when the test needs
   CUDA/Ollama inference; treat it as shared.
+
+## babysit-with-review.sh — review gate and self-merge prevention
+
+**Review gate.** The wrapper is the only path that may merge a PR. The implementation Claude prompt forbids `gh pr merge` directly and requires ending each iteration with `HANDOFF_REVIEW <PR>` to hand off to the Codex review cycle. Before merging a PR that passed Codex review, the wrapper POSTs a `codex-review=success` commit status via `gh api`. This is the only code path that sets this status.
+
+**Branch protection (operator step, per repo).** Run `setup-branch-protection.sh --repo OWNER/REPO` once per managed repo after deploying the wrapper. This requires the `codex-review` status check and blocks direct `git push origin main` — so even if implementation Claude attempts a direct push or `gh pr merge`, GitHub rejects it. Deploy order: ship the wrapper first (so it can set the status), then enable protection.
+
+**Per-iteration worktree.** Each outer-loop iteration creates a `git worktree` on a placeholder branch (`wip/<project>/iter-N`) and runs Claude inside it via `(cd "$wt_dir" && claude -p ...)`. Claude's first instruction is to rename the branch to reflect the work item (e.g. `feat/close-goals-124`), making the worktree branch the PR branch. The worktree is removed **before** `run_review_cycle` runs — `gh pr checkout` would error if the same branch were still checked out in the worktree. If Claude committed but didn't open a PR (no `HANDOFF_REVIEW`), any unpushed commits are pushed to origin as a safety net before the worktree is discarded.
 
 ## babysit-with-review.sh — MCP resilience and pre-flight
 
