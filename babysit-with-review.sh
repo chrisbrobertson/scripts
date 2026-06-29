@@ -27,9 +27,11 @@
 
 set -uo pipefail
 
+VERSION="1.0.0"
+
 usage() {
   cat <<'EOF'
-Usage: babysit-with-review.sh [-h|--help] [--repo-base PATH]
+Usage: babysit-with-review.sh [-h|--help] [--version] [--repo-base PATH]
 
 Run from inside a project root. Outer loop is identical to babysit.sh.
 When Claude ends an iteration with `HANDOFF_REVIEW <PR_NUMBER>` on its
@@ -68,6 +70,7 @@ REPO_BASE_OVERRIDE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
+    --version) echo "babysit-with-review.sh $VERSION"; exit 0 ;;
     --repo-base) REPO_BASE_OVERRIDE="${2:-}"; shift 2 ;;
     --repo-base=*) REPO_BASE_OVERRIDE="${1#*=}"; shift ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -123,7 +126,7 @@ TMP_CODEX_FULL=$(mktemp)
 touch "$LOG" "$STOP_FILE"
 trap 'rm -f "$STOP_FILE" "$TMP_RESULT" "$TMP_REVIEW" "$TMP_REVIEW_RESULT" "$TMP_CODEX_FULL"' EXIT
 
-echo "Babysitting $PROJECT (max=$MAX_ITER, stuck=$STUCK_N, review_cycles=$MAX_REVIEW_CYCLES) → $LOG"
+echo "Babysitting $PROJECT v${VERSION} (max=$MAX_ITER, stuck=$STUCK_N, review_cycles=$MAX_REVIEW_CYCLES) → $LOG"
 echo "  graceful stop: rm $STOP_FILE"
 
 # ---------- prompts ----------
@@ -1209,7 +1212,7 @@ ${_hb}--- end prior review cycles ---
 # ---------- log header ----------
 
 {
-  echo "=== babysit-with-review.sh @ $(date -u +%FT%TZ) ==="
+  echo "=== babysit-with-review.sh v${VERSION} @ $(date -u +%FT%TZ) ==="
   echo "project:           $PROJECT"
   echo "cwd:               $PWD"
   echo "max_iter:          $MAX_ITER"
