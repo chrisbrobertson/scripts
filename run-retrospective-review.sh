@@ -170,15 +170,24 @@ for pr_num in "${PR_ARGS[@]}"; do
     continue
   }
 
-  pr_state=$(printf '%s' "$pr_json" | jq -r '.state')
+  _parsed=$(printf '%s' "$pr_json" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+mc = d.get("mergeCommit") or {}
+print(d.get("state") or "")
+print(mc.get("oid") or "")
+print(d.get("mergedAt") or "unknown")
+' 2>/dev/null) || _parsed=""
+  pr_state=$(printf '%s\n' "$_parsed" | sed -n '1p')
+  merge_sha=$(printf '%s\n' "$_parsed" | sed -n '2p')
+  merged_at=$(printf '%s\n' "$_parsed" | sed -n '3p')
+  unset _parsed
+
   if [ "$pr_state" != "MERGED" ]; then
     echo "PR #$pr_num: not merged → skipped (state=$pr_state)"
     n_skipped=$((n_skipped + 1))
     continue
   fi
-
-  merge_sha=$(printf '%s' "$pr_json" | jq -r '.mergeCommit.oid // empty')
-  merged_at=$(printf '%s' "$pr_json" | jq -r '.mergedAt // "unknown"')
 
   if [ -z "$merge_sha" ]; then
     echo "PR #$pr_num: no mergeCommit SHA available → skipped" >&2
@@ -263,9 +272,9 @@ for pr_num in "${PR_ARGS[@]}"; do
 
     # Structural validation: require all three section headers.
     if [ "$codex_rc" -eq 0 ] && [ -s "$tmp_review" ]; then
-      if grep -q '^## BLOCKING$' "$tmp_review" 2>/dev/null \
-          && grep -q '^## RECOMMENDED$' "$tmp_review" 2>/dev/null \
-          && grep -q '^## INFORMATION$' "$tmp_review" 2>/dev/null; then
+      if grep -qE '^## BLOCKING[[:space:]]*$' "$tmp_review" 2>/dev/null \
+          && grep -qE '^## RECOMMENDED[[:space:]]*$' "$tmp_review" 2>/dev/null \
+          && grep -qE '^## INFORMATION[[:space:]]*$' "$tmp_review" 2>/dev/null; then
         review_ok=1
         break
       fi

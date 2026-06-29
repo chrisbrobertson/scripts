@@ -842,9 +842,9 @@ codex_review_with_retry() {
     # Structural validation: require all three section headers before treating as success.
     # This closes the exit-0-garbage hole (e.g. a deprecation warning in place of a review).
     if [ "$rc" -eq 0 ] && [ -s "$TMP_REVIEW" ]; then
-      if grep -q '^## BLOCKING$' "$TMP_REVIEW" 2>/dev/null \
-          && grep -q '^## RECOMMENDED$' "$TMP_REVIEW" 2>/dev/null \
-          && grep -q '^## INFORMATION$' "$TMP_REVIEW" 2>/dev/null; then
+      if grep -qE '^## BLOCKING[[:space:]]*$' "$TMP_REVIEW" 2>/dev/null \
+          && grep -qE '^## RECOMMENDED[[:space:]]*$' "$TMP_REVIEW" 2>/dev/null \
+          && grep -qE '^## INFORMATION[[:space:]]*$' "$TMP_REVIEW" 2>/dev/null; then
         return 0
       fi
       echo "  [codex] exit 0 but review missing required section headers (## BLOCKING / ## RECOMMENDED / ## INFORMATION); treating as failure" | tee -a "$LOG" >&2
