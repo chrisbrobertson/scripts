@@ -67,6 +67,7 @@ REVIEW_HISTORY=()             # array of prior Codex reviews
 review_start_sha              # git SHA at cycle start (for commit tracking)
 USE_PLAN_MODE=false           # true for cycle 2+ with BLOCKING issues
 USE_DETAILED_EXPLANATIONS=false  # true for cycle 3+
+REQUIRE_RESOLUTION_JUSTIFICATION=false  # true for cycle 4+
 ```
 
 ## Consumer
@@ -117,9 +118,10 @@ run_review_cycle <PR_NUMBER>
 4. **Plan-first trigger (proposed):** Cycle 2+ with BLOCKING issues invokes Claude in plan mode before implementation
 5. **Detailed explanation trigger (proposed):** Cycle 3+ Codex reviews include deeper reasoning and architectural context for each finding
 6. **Solution rationale (proposed):** Claude documents implementation rationale for each fix (trade-offs, alternatives, constraints)
-7. **BLOCKING counting:** Only bullets under `## BLOCKING` that are not `- (none)` count
-8. **PR branch checkout:** Cycle starts by checking out PR branch via `gh pr checkout <PR_NUMBER>`
-9. **Label application:** `review-incomplete` for human-action bails, `review-mcp-outage` for Codex transport failures
+7. **Explicit resolution justification (proposed):** Cycle 4+ requires Claude to explicitly justify how each BLOCKING finding was resolved or prove it is invalid with supporting references
+8. **BLOCKING counting:** Only bullets under `## BLOCKING` that are not `- (none)` count
+9. **PR branch checkout:** Cycle starts by checking out PR branch via `gh pr checkout <PR_NUMBER>`
+10. **Label application:** `review-incomplete` for human-action bails, `review-mcp-outage` for Codex transport failures
 
 ### Error model
 - **Codex MCP transport failure:** Retried by ARLO-FEAT-MCP-RESILIENCE (3× with backoff), if all fail → return 2
@@ -162,16 +164,26 @@ Function is internal to script; no versioning. Breaking changes (sentinel format
 - **Claude solution rationale:** Enhanced commit messages with deeper context:
   - Example: `fix(blocking): add null check in auth middleware\n\nWhy: Session can be null during logout flow (gap introduced in PR #456 refactor). Auth middleware is trust boundary, so validation belongs here. Considered:\n- Caller-side check: violates single responsibility\n- Optional session type: increases complexity across 12 callsites\n- Middleware null check: single point of enforcement (chosen)\n\nImpact: Prevents 500 errors on ~5% of logout attempts.`
 
+**Cycle 4+ with BLOCKING issues (explicit resolution justification):**
+- **All cycle 3+ behaviors continue** (Codex prescriptive + detailed, Claude plan-first, solution rationale)
+- **Claude must explicitly address each BLOCKING finding** at end of cycle with one of:
+  - **Resolution:** "BLOCKING <finding-description> resolved in commit <SHA>. Why this resolves it: <specific explanation of how the change addresses the root cause and satisfies the architectural constraints identified by Codex>"
+  - **Invalid finding:** "BLOCKING <finding-description> is invalid. Reason: <explanation>. Supporting reference: <link to spec, documentation, or validated source material proving the finding is incorrect>"
+- **Format:** Added as comment to PR after Claude completes fixes, before DONE_REVIEW sentinel
+- **Purpose:** Forces Claude to demonstrate understanding of each finding and its resolution; prevents false "done" claims
+
 **Benefits:**
 - **Plan-first (cycle 2+):** Reduces trial-and-error, ensures fixes are applied in correct order, catches cross-finding dependencies
 - **Detailed Codex explanations (cycle 3+):** Helps Claude understand *why* issues exist, not just *what* to fix; improves fix quality by surfacing architectural constraints
-- **Solution rationale:** Aids future reviewers (human or AI) in understanding decisions; creates better commit history
+- **Solution rationale (cycle 2+):** Aids future reviewers (human or AI) in understanding decisions; creates better commit history
+- **Explicit resolution justification (cycle 4+):** Forces Claude to prove understanding of each finding; prevents false convergence claims; creates audit trail of why findings were resolved or rejected
 
 **Costs:**
 - **Plan mode latency:** +30-60 seconds per cycle 2+ (plan creation time)
 - **Detailed explanations:** +10-20% Codex inference time (more tokens in/out)
 - **Rationale overhead:** +10-15% Claude time (composing explanations)
-- **Total impact:** Cycle 2+ takes ~5-7 minutes (vs. 4 minutes baseline); Cycle 3+ takes ~6-8 minutes
+- **Resolution justification overhead:** +15-30 seconds per cycle 4+ (posting PR comment via gh CLI)
+- **Total impact:** Cycle 2+ takes ~5-6 minutes (vs. 4 minutes baseline); Cycle 3+ takes ~6-7 minutes; Cycle 4+ takes ~7-8 minutes
 
 ## Performance budget
 
@@ -187,12 +199,14 @@ Function is internal to script; no versioning. Breaking changes (sentinel format
   - Cycle 1: ~4 minutes (unchanged)
   - Cycle 2+: ~5-6 minutes (+plan mode: 30-60s)
   - Cycle 3+: ~6-7 minutes (+detailed explanations: 10-20% Codex time)
-- **p95 cycle latency:** ~18-20 minutes (plan mode + detailed explanations + complex diffs)
-- **p99 cycle latency:** ~35 minutes (retries + plan mode + explanations)
+  - Cycle 4+: ~7-8 minutes (+resolution justification: 15-30s for PR comment)
+- **p95 cycle latency:** ~20-22 minutes (plan mode + detailed explanations + resolution justification + complex diffs)
+- **p99 cycle latency:** ~40 minutes (retries + plan mode + explanations + justification)
 - **Cost per cycle:**
   - Cycle 1: ~$1-3 (unchanged)
   - Cycle 2+: ~$1.50-4 (+plan mode tokens)
   - Cycle 3+: ~$2-5 (+detailed explanation tokens)
+  - Cycle 4+: ~$2.50-5.50 (+resolution justification tokens)
 
 ## Security model
 - **AuthN / AuthZ:** Inherits from gh CLI (`gh auth status`) and Codex CLI (Codex MCP auth)
@@ -241,7 +255,7 @@ Format rules:
 - Do NOT make code changes. This is review only.
 ```
 
-### Claude plan-first review template (cycle 2+)
+### Claude plan-first review template (cycle 2-3)
 ```markdown
 A code review on PR #__PR_NUMBER__ has produced the findings below, along with existing feedback from automated tools and human reviewers.
 
@@ -294,6 +308,61 @@ __REVIEW__
   Impact: <failure mode addressed> — <metrics or observability>
   ```
 
+### Claude plan-first review template (cycle 4+)
+```markdown
+A code review on PR #__PR_NUMBER__ has produced the findings below, along with existing feedback from automated tools and human reviewers.
+
+This is review cycle __CYCLE__ of __MAX_CYCLES__. The previous cycle(s) did not fully resolve BLOCKING issues.
+
+You MUST action every BLOCKING finding before this PR can merge. Treat actionable issues in existing PR feedback with the same BLOCKING priority.
+
+**CRITICAL: Use plan mode before implementing.**
+
+Step 1: Enter plan mode to create an implementation plan:
+  - Analyze all BLOCKING findings and their dependencies
+  - Determine the correct order to address them (some fixes may depend on others)
+  - Identify any cross-finding interactions or shared root causes
+  - Document trade-offs and alternatives for non-obvious decisions
+  - Output the plan for review before proceeding
+
+Step 2: Execute the plan:
+  - Implement each step sequentially
+  - Run relevant tests after each fix
+  - Commit each fix separately with structured message format:
+    ```
+    fix(<scope>): <what changed>
+    
+    Why: <rationale explaining trade-offs, alternatives considered, constraints>
+    Impact: <failure mode addressed> — <metrics or observability>
+    ```
+  - Push commits to PR branch when batch complete
+
+Step 3: Post resolution justification as PR comment:
+  For EACH BLOCKING finding in the Codex review, you must post a comment explaining:
+  - **If resolved:** "BLOCKING <one-line finding description> resolved in commit <SHA>. Why this resolves it: <specific explanation of how your change addresses the root cause identified by Codex and satisfies the architectural constraints>"
+  - **If invalid:** "BLOCKING <one-line finding description> is invalid. Reason: <explanation>. Supporting reference: <link to spec/docs/validated source proving the finding is incorrect>"
+  
+  Use `gh pr comment __PR_NUMBER__ --body "<text>"` to post the justification.
+
+Scope discipline:
+- Make minimal, targeted changes. Do NOT refactor adjacent code unless required by a finding.
+- Each finding gets its own commit.
+- Before Step 3, run the full test suite and verify no new surface introduced.
+- Step 3 is MANDATORY before DONE_REVIEW.
+
+End your final message with EXACTLY ONE of these sentinels on its own line:
+- DONE_REVIEW (you have addressed everything you intend to address AND posted resolution justifications)
+- STUCK_REVIEW <one-line reason> (you cannot proceed)
+
+--- existing PR feedback begin ---
+__PR_FEEDBACK__
+--- existing PR feedback end ---
+
+--- codex review begin ---
+__REVIEW__
+--- codex review end ---
+```
+
 ## Telemetry contract
 
 **Current events:**
@@ -310,6 +379,8 @@ __REVIEW__
 - `[claude] plan step M/N: <step description>` (during plan execution)
 - `[codex] detailed explanations enabled (cycle 3+)` (mode tracking)
 - `[claude] commit with rationale: <commit SHA>` (after each commit with Why: block)
+- `[claude] posting resolution justifications for N BLOCKING findings (cycle 4+)` (before posting PR comment)
+- `[claude] resolution justifications posted to PR #N` (after gh pr comment succeeds)
 
 **Sinks:** Main log file (~/sisyphus-logs/<project>-<timestamp>-<pid>.log)
 
@@ -358,6 +429,7 @@ __REVIEW__
 - **Plan-first at cycle 2 assumption (proposed).** If flipped to cycle 3+ only or disabled: requires A/B testing to measure plan mode impact on convergence rate.
 - **Detailed explanations at cycle 3 assumption (proposed).** If flipped to earlier cycles or all cycles: requires cost/benefit analysis (token usage vs. fix quality improvement).
 - **Solution rationale in commits assumption (proposed).** If flipped to separate doc or PR description: requires alternative mechanism for preserving decision context.
+- **Resolution justification at cycle 4 assumption (proposed).** If flipped to earlier/later or disabled: requires empirical testing of false convergence rate (Claude claiming DONE_REVIEW without actually resolving findings).
 
 ## Composes with / replaces
 - **Replaces:** Manual code review loop (open PR → human reviews → implementer fixes → re-review)
@@ -392,6 +464,9 @@ __REVIEW__
 17. **Given** cycle 3+ with detailed explanations, **when** Claude commits a fix, **then** commit message includes "Impact: <failure mode addressed>" in addition to "Why:" rationale.
 18. **Given** cycle 2+ plan identifies fix dependencies, **when** plan is executed, **then** fixes are applied in the order specified by plan (not Codex review order).
 19. **Given** cycle 3+ with prescriptive mode and detailed explanations, **when** Codex cannot provide all required fields for a finding, **then** finding is downgraded to RECOMMENDED (per template rules).
+20. **Given** cycle 4 completes with BLOCKING findings addressed, **when** Claude finishes Step 3, **then** PR has comment with resolution justification for each BLOCKING finding (format: "BLOCKING <desc> resolved in commit <SHA>. Why this resolves it: <explanation>").
+21. **Given** cycle 4+ with invalid BLOCKING finding, **when** Claude justifies findings, **then** PR comment includes "BLOCKING <desc> is invalid. Reason: <explanation>. Supporting reference: <link>" with valid external reference.
+22. **Given** cycle 4+ completes, **when** DONE_REVIEW sentinel is output, **then** all BLOCKING findings from Codex review have corresponding resolution justifications posted to PR (verified via `gh pr view`).
 
 ## Telemetry events tied to L1 KPIs
 - **Cycles per PR** → Productivity KPI (lower = better prompt quality, faster convergence)
@@ -417,4 +492,5 @@ Future: Could record (PR_NUMBER, cycle_count, BLOCKING_history, outcome) for off
 - If plan mode latency exceeds 2 minutes on >50% of cycles → optimize plan prompt or make plan mode optional
 - If detailed explanations (cycle 3+) do NOT improve fix accuracy by >10% vs. cycle 1-2 → disable detailed mode, explanation verbosity not helping
 - If solution rationale bloats commit messages by >3× average length with no measurable review benefit → shorten rationale template or move to PR description
-- If cycle 2-3 with enhancements takes >10 minutes on >70% of PRs → reduce enhancement scope or make enhancements opt-in per PR
+- If resolution justifications (cycle 4+) do NOT reduce false convergence rate (PRs re-opened due to unresolved BLOCKING) by >20% → remove Step 3, justification overhead not worth benefit
+- If cycle 4+ with all enhancements takes >12 minutes on >70% of PRs → reduce enhancement scope or make enhancements opt-in per PR
