@@ -670,7 +670,7 @@ ${CODEX_REVIEW}
 ## Verifiers
 - Tech lead: Chris Robertson
 - API council / platform review: N/A (internal function)
-- Security: [OPEN: review PR label race conditions, merge auto-approve — owner: security-lead]
+- Security: PR label race conditions accepted (lock file prevents concurrent runs; gh label ops idempotent). Auto-merge accepted for personal repos (CI must pass; reversible via revert). See SECURITY-REVIEW-PLAN.md §2–3.
 - QA: [OPEN: test convergence tracking, prescriptive mode, early exit conditions — owner: qa-lead]
 
 ## Failure modes & blast radius

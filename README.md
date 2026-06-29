@@ -24,6 +24,12 @@ and answer on-demand questions via CLI or DM.
 See **[docs/STAFF-FLEET.md](docs/STAFF-FLEET.md)** for the full guide:
 quick start, architecture deep-dive, tuning, troubleshooting, and file layout.
 
+## Logs
+
+`babysit-with-review.sh` writes iteration and review logs to `~/sisyphus-logs/`.
+Log files contain code diffs, commit messages, and Codex review output — treat
+them as sensitive. No automatic cleanup; remove manually when no longer needed.
+
 ## Other scripts
 
 See [CLAUDE.md](CLAUDE.md) for conventions, testing patterns, and

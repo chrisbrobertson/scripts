@@ -139,7 +139,7 @@ Function is internal to script; no versioning. Breaking changes (retry count, de
 ## Verifiers
 - Tech lead: Chris Robertson
 - API council / platform review: N/A (internal function)
-- Security: [OPEN: review telltale regex for injection risk — owner: security-lead]
+- Security: telltale regex injection risk accepted — patterns are fixed strings, not user-injectable; maintenance comment added to source. See SECURITY-REVIEW-PLAN.md §4.
 - QA: [OPEN: test retry count, backoff delays, telltale detection — owner: qa-lead]
 
 ## Failure modes & blast radius

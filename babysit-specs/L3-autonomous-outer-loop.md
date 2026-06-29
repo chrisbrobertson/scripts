@@ -125,7 +125,7 @@ Script is unversioned; updates are in-place edits. Breaking changes (env var ren
 ## Verifiers
 - Tech lead: Chris Robertson
 - API council / platform review: N/A (internal tool, no public API)
-- Security: [OPEN: security review for lock file race conditions — owner: security-lead]
+- Security: lock file race condition accepted for single-user scenario (TOCTOU window negligible; blast radius: both processes halt gracefully). See SECURITY-REVIEW-PLAN.md §1.
 - QA: [OPEN: test cases for pre-flight, stuck detection, sentinel parsing — owner: qa-lead]
 
 ## Failure modes & blast radius

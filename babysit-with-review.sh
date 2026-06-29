@@ -816,6 +816,8 @@ codex_review_with_retry() {
   local attempt
   local delays=(0 60 300)
   local compat_re='requires a newer version of Codex'
+  # Telltale patterns for MCP transport failures. Update if Codex changes its error format.
+  # Monitored via the MCP outage rate KPI (see L3-mcp-resilience.md kill criteria: >30% → find alternative reviewer).
   local mcp_re='Transport send error:|tool call error: tool call failed for `codex_apps/|error sending request for url \(https://chatgpt\.com/'
 
   for attempt in 1 2 3; do
