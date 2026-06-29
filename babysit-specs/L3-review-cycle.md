@@ -68,6 +68,8 @@ review_start_sha              # git SHA at cycle start (for commit tracking)
 USE_PLAN_MODE=false           # true for cycle 2+ with BLOCKING issues
 USE_DETAILED_EXPLANATIONS=false  # true for cycle 3+
 REQUIRE_RESOLUTION_JUSTIFICATION=false  # true for cycle 4+
+REQUIRE_ADJUDICATION=false              # true for cycle 5+
+JUSTIFICATIONS=""                       # Claude's resolution justifications from previous cycle (cycle 5+)
 ```
 
 ## Consumer
@@ -119,7 +121,8 @@ run_review_cycle <PR_NUMBER>
 5. **Detailed explanation trigger (proposed):** Cycle 3+ Codex reviews include deeper reasoning and architectural context for each finding
 6. **Solution rationale (proposed):** Claude documents implementation rationale for each fix (trade-offs, alternatives, constraints)
 7. **Explicit resolution justification (proposed):** Cycle 4+ requires Claude to explicitly justify how each BLOCKING finding was resolved or prove it is invalid with supporting references
-8. **BLOCKING counting:** Only bullets under `## BLOCKING` that are not `- (none)` count
+8. **Codex adjudication (proposed):** Cycle 5+ requires Codex to accept or provide reasoned disagreement for each of Claude's resolution justifications from the previous cycle
+9. **BLOCKING counting:** Only bullets under `## BLOCKING` that are not `- (none)` count
 9. **PR branch checkout:** Cycle starts by checking out PR branch via `gh pr checkout <PR_NUMBER>`
 10. **Label application:** `review-incomplete` for human-action bails, `review-mcp-outage` for Codex transport failures
 
@@ -164,7 +167,7 @@ Function is internal to script; no versioning. Breaking changes (sentinel format
 - **Claude solution rationale:** Enhanced commit messages with deeper context:
   - Example: `fix(blocking): add null check in auth middleware\n\nWhy: Session can be null during logout flow (gap introduced in PR #456 refactor). Auth middleware is trust boundary, so validation belongs here. Considered:\n- Caller-side check: violates single responsibility\n- Optional session type: increases complexity across 12 callsites\n- Middleware null check: single point of enforcement (chosen)\n\nImpact: Prevents 500 errors on ~5% of logout attempts.`
 
-**Cycle 4+ with BLOCKING issues (explicit resolution justification):**
+**Cycle 4 with BLOCKING issues (explicit resolution justification):**
 - **All cycle 3+ behaviors continue** (Codex prescriptive + detailed, Claude plan-first, solution rationale)
 - **Claude must explicitly address each BLOCKING finding** at end of cycle with one of:
   - **Resolution:** "BLOCKING <finding-description> resolved in commit <SHA>. Why this resolves it: <specific explanation of how the change addresses the root cause and satisfies the architectural constraints identified by Codex>"
@@ -172,18 +175,35 @@ Function is internal to script; no versioning. Breaking changes (sentinel format
 - **Format:** Added as comment to PR after Claude completes fixes, before DONE_REVIEW sentinel
 - **Purpose:** Forces Claude to demonstrate understanding of each finding and its resolution; prevents false "done" claims
 
+**Cycle 5+ with BLOCKING issues (Codex adjudication + Claude re-processing):**
+- **Codex receives Claude's resolution justifications** (from the cycle 4+ PR comment) and must respond to each:
+  - **If Claude claimed "resolved":** Codex re-examines the code at the referenced commit. Either accepts ("ACCEPTED: <one-line confirmation>") or disagrees ("DISAGREED: <reasoned explanation of why the fix does not actually address the root cause or architectural constraint>")
+  - **If Claude claimed "invalid":** Codex evaluates the reasoning and supporting reference. Either accepts ("ACCEPTED: finding withdrawn") or disagrees ("DISAGREED: <counter-argument explaining why the finding is valid, with code-level evidence>")
+- **Codex adjudication is a new section** in the Codex review output (after BLOCKING/RECOMMENDED/INFORMATION):
+  ```
+  ## ADJUDICATION
+  - BLOCKING <finding-description>: ACCEPTED — <confirmation>
+  - BLOCKING <finding-description>: DISAGREED — <reasoned counter-argument with code evidence>
+  ```
+- **Claude processes Codex's adjudication:** For any DISAGREED items, Claude must either:
+  - Implement a different fix that addresses Codex's counter-argument, OR
+  - Escalate via STUCK_REVIEW with the specific finding and disagreement reason
+- **Purpose:** Creates a structured debate between Claude and Codex that resolves ambiguous findings through evidence rather than repetition
+
 **Benefits:**
 - **Plan-first (cycle 2+):** Reduces trial-and-error, ensures fixes are applied in correct order, catches cross-finding dependencies
 - **Detailed Codex explanations (cycle 3+):** Helps Claude understand *why* issues exist, not just *what* to fix; improves fix quality by surfacing architectural constraints
 - **Solution rationale (cycle 2+):** Aids future reviewers (human or AI) in understanding decisions; creates better commit history
 - **Explicit resolution justification (cycle 4+):** Forces Claude to prove understanding of each finding; prevents false convergence claims; creates audit trail of why findings were resolved or rejected
+- **Codex adjudication (cycle 5+):** Resolves ambiguous or disputed findings through structured debate; prevents infinite loops where Claude and Codex disagree without progress; creates clear accept/disagree record
 
 **Costs:**
 - **Plan mode latency:** +30-60 seconds per cycle 2+ (plan creation time)
 - **Detailed explanations:** +10-20% Codex inference time (more tokens in/out)
 - **Rationale overhead:** +10-15% Claude time (composing explanations)
 - **Resolution justification overhead:** +15-30 seconds per cycle 4+ (posting PR comment via gh CLI)
-- **Total impact:** Cycle 2+ takes ~5-6 minutes (vs. 4 minutes baseline); Cycle 3+ takes ~6-7 minutes; Cycle 4+ takes ~7-8 minutes
+- **Adjudication overhead:** +20-40% Codex time for cycle 5+ (reading justifications + reasoning about acceptance/disagreement)
+- **Total impact:** Cycle 2+ takes ~5-6 minutes (vs. 4 minutes baseline); Cycle 3+ takes ~6-7 minutes; Cycle 4 takes ~7-8 minutes; Cycle 5+ takes ~8-10 minutes
 
 ## Performance budget
 
@@ -197,16 +217,18 @@ Function is internal to script; no versioning. Breaking changes (sentinel format
 **Proposed enhanced implementation:**
 - **p50 cycle latency:**
   - Cycle 1: ~4 minutes (unchanged)
-  - Cycle 2+: ~5-6 minutes (+plan mode: 30-60s)
-  - Cycle 3+: ~6-7 minutes (+detailed explanations: 10-20% Codex time)
-  - Cycle 4+: ~7-8 minutes (+resolution justification: 15-30s for PR comment)
-- **p95 cycle latency:** ~20-22 minutes (plan mode + detailed explanations + resolution justification + complex diffs)
-- **p99 cycle latency:** ~40 minutes (retries + plan mode + explanations + justification)
+  - Cycle 2-3: ~5-6 minutes (+plan mode: 30-60s)
+  - Cycle 3-4: ~6-7 minutes (+detailed explanations: 10-20% Codex time)
+  - Cycle 4: ~7-8 minutes (+resolution justification: 15-30s for PR comment)
+  - Cycle 5-6: ~8-10 minutes (+adjudication: 20-40% Codex time for reasoning about justifications)
+- **p95 cycle latency:** ~22-25 minutes (plan mode + detailed explanations + justification + adjudication + complex diffs)
+- **p99 cycle latency:** ~45 minutes (retries + all enhancements + large changesets)
 - **Cost per cycle:**
   - Cycle 1: ~$1-3 (unchanged)
-  - Cycle 2+: ~$1.50-4 (+plan mode tokens)
-  - Cycle 3+: ~$2-5 (+detailed explanation tokens)
-  - Cycle 4+: ~$2.50-5.50 (+resolution justification tokens)
+  - Cycle 2-3: ~$1.50-4 (+plan mode tokens)
+  - Cycle 3-4: ~$2-5 (+detailed explanation tokens)
+  - Cycle 4: ~$2.50-5.50 (+resolution justification tokens)
+  - Cycle 5-6: ~$3-7 (+adjudication tokens — Codex reasoning about justifications + Claude processing disagreements)
 
 ## Security model
 - **AuthN / AuthZ:** Inherits from gh CLI (`gh auth status`) and Codex CLI (Codex MCP auth)
@@ -225,6 +247,7 @@ Each cycle uses a complete, deterministic prompt with NO conditional logic or te
 - `${HISTORY}` → prior reviews + commits (cycles 2+)
 - `${PR_FEEDBACK}` → collected PR comments/reviews
 - `${CODEX_REVIEW}` → Codex output from current cycle
+- `${JUSTIFICATIONS}` → Claude's resolution justifications from previous cycle (cycles 5+)
 
 ### Codex prompt: Cycle 1
 ```
@@ -296,7 +319,7 @@ Format rules:
 - Do NOT make code changes. This is review only.
 ```
 
-### Codex prompt: Cycles 3-6 (prescriptive + detailed)
+### Codex prompt: Cycles 3-4 (prescriptive + detailed)
 ```
 You are performing a code review on PR #${PR_NUM} for this repository. The PR branch is currently checked out.
 
@@ -341,6 +364,77 @@ Format rules:
 - RECOMMENDED and INFORMATION are single-line bullets only.
 - If a section has no findings, write `- (none)` as the only bullet under that heading.
 - Do NOT output anything before, between, or after the three sections.
+- Do NOT make code changes. This is review only.
+```
+
+### Codex prompt: Cycles 5-6 (prescriptive + detailed + adjudication)
+```
+You are performing a code review on PR #${PR_NUM} for this repository. The PR branch is currently checked out.
+
+This is review cycle ${CYCLE} of ${MAX_CYCLES}. Multiple previous cycles have not resolved BLOCKING issues. Claude posted resolution justifications for the previous cycle's findings. You must adjudicate those justifications AND review the current code state.
+
+Inspect the diff of the current branch against the project's default branch. Read changed files and surrounding context as needed to evaluate the change.
+
+--- cycle history begin ---
+${HISTORY}
+--- cycle history end ---
+
+--- Claude's resolution justifications (from previous cycle) begin ---
+${JUSTIFICATIONS}
+--- Claude's resolution justifications end ---
+
+You have two responsibilities this cycle:
+
+RESPONSIBILITY 1: Adjudicate Claude's resolution justifications.
+For each justification Claude posted, you must respond:
+- If Claude claimed a finding is "resolved": examine the referenced commit and the current code. Either the fix genuinely addresses the root cause and architectural constraints, or it does not.
+- If Claude claimed a finding is "invalid": evaluate the reasoning and the cited supporting reference. Either the reference proves the finding incorrect, or it does not.
+
+RESPONSIBILITY 2: Review the current code state for any remaining or new issues (same as previous cycles).
+
+Output your review using EXACTLY this format:
+
+## ADJUDICATION
+- BLOCKING <one-line finding from previous cycle>: ACCEPTED — <one-line confirmation that the fix/invalidity argument is sound>
+- BLOCKING <one-line finding from previous cycle>: DISAGREED — <reasoned explanation with code-level evidence of why the fix does not resolve the issue or why the finding remains valid>
+
+## BLOCKING
+- [NEW|RECURRENCE] <one-line description> — <file:line> — <why it must be fixed before merge>
+  Suggested fix: <concrete code change — show the exact replacement or patch sketch>
+  Root cause: <why this gap exists — when/how introduced, what changed>
+  Architectural context: <how this component fits into the system, what boundaries it enforces>
+  Impact: <what breaks if not fixed — user-facing symptoms, error rates, affected flows>
+
+## RECOMMENDED
+- <one-line description> — <file:line> — <why it should be addressed>
+
+## INFORMATION
+- <one-line description> — <file:line> — <context, suggestion, or fyi>
+
+Categorization rules:
+- BLOCKING = correctness bugs, security issues, broken tests, build failures, contract violations, broken invariants — anything that should not merge.
+- RECOMMENDED = quality improvements, missed edge cases, better patterns, doc gaps, error-handling gaps. Should be addressed but not strictly blocking.
+- INFORMATION = stylistic notes, alternative approaches, performance observations, fyi context. Optional.
+
+Adjudication rules:
+- You MUST adjudicate every justification Claude posted. No justification may be silently ignored.
+- ACCEPTED means you agree the finding is resolved or invalid — it will not recur in future reviews.
+- DISAGREED means the finding remains unresolved — it MUST appear in your BLOCKING section as [RECURRENCE] with an updated suggested fix that addresses your counter-argument.
+- Your disagreement must include specific code-level evidence (file:line references, logic traces, or behavioral analysis). Generic disagreements ("this doesn't look right") are not acceptable.
+
+Prescriptive mode requirements:
+- Each BLOCKING finding MUST include all four parts: suggested fix, root cause, architectural context, impact.
+- If you cannot produce all four parts for a finding, downgrade it to RECOMMENDED.
+- Suggested fix must be concrete code showing the exact change needed.
+
+Convergence tracking:
+- Mark each BLOCKING finding with [NEW] if it was not flagged in previous cycles, or [RECURRENCE] if it was flagged before but remains unresolved.
+
+Format rules:
+- ADJUDICATION section comes first, before BLOCKING/RECOMMENDED/INFORMATION.
+- BLOCKING bullets are multi-line with four required sub-bullets (suggested fix, root cause, architectural context, impact).
+- RECOMMENDED and INFORMATION are single-line bullets only.
+- If a section has no findings, write `- (none)` as the only bullet under that heading.
 - Do NOT make code changes. This is review only.
 ```
 
@@ -420,11 +514,11 @@ ${CODEX_REVIEW}
 --- codex review end ---
 ```
 
-### Claude prompt: Cycles 4-6 (plan-first + resolution justification)
+### Claude prompt: Cycle 4 (plan-first + resolution justification)
 ```
 A code review on PR #${PR_NUM} has produced the findings below, along with existing feedback from automated tools and human reviewers.
 
-This is review cycle ${CYCLE} of ${MAX_CYCLES}. Multiple previous cycles have not resolved BLOCKING issues.
+This is review cycle 4 of ${MAX_CYCLES}. Multiple previous cycles have not resolved BLOCKING issues.
 
 You MUST action every BLOCKING finding before this PR can merge. Treat actionable issues in existing PR feedback with the same BLOCKING priority.
 
@@ -472,6 +566,66 @@ ${PR_FEEDBACK}
 ${CODEX_REVIEW}
 --- codex review end ---
 ```
+
+### Claude prompt: Cycles 5-6 (plan-first + resolution justification + process adjudication)
+```
+A code review on PR #${PR_NUM} has produced the findings below, along with existing feedback from automated tools and human reviewers.
+
+This is review cycle ${CYCLE} of ${MAX_CYCLES}. Multiple previous cycles have not resolved BLOCKING issues. Codex has adjudicated your previous resolution justifications.
+
+You MUST action every BLOCKING finding before this PR can merge. Treat actionable issues in existing PR feedback with the same BLOCKING priority.
+
+**CRITICAL: Process the ADJUDICATION section first, then use plan mode for remaining work.**
+
+Step 1: Process Codex adjudication results:
+  - For each ACCEPTED item: the finding is resolved. No further action needed.
+  - For each DISAGREED item: Codex has provided a reasoned counter-argument with code evidence. You must either:
+    (a) Implement a different fix that specifically addresses Codex's counter-argument, OR
+    (b) If you believe Codex's counter-argument is itself incorrect, report via STUCK_REVIEW with the specific finding, Codex's argument, and why you disagree (this escalates to human review).
+
+Step 2: Enter plan mode to create an implementation plan for all remaining BLOCKING findings:
+  - Include all DISAGREED items that you will re-address (from Step 1a)
+  - Include all new BLOCKING findings from the current review
+  - Determine the correct order to address them
+  - Document trade-offs and alternatives for non-obvious decisions
+  - Output the plan for review before proceeding
+
+Step 3: Execute the plan:
+  - Implement each step sequentially
+  - Run relevant tests after each fix
+  - Commit each fix separately with this format:
+    fix(<scope>): <what changed>
+
+    Why: <rationale explaining trade-offs, alternatives considered, constraints>
+    Impact: <failure mode addressed — metrics or observability>
+  - Push commits to PR branch when complete
+
+Step 4: Post resolution justification as PR comment:
+  For EACH BLOCKING finding (including DISAGREED items you re-addressed), post a comment explaining:
+  - If resolved: "BLOCKING <one-line finding description> resolved in commit <SHA>. Why this resolves it: <specific explanation of how your change addresses the root cause identified by Codex and satisfies the architectural constraints>"
+  - If invalid: "BLOCKING <one-line finding description> is invalid. Reason: <explanation>. Supporting reference: <link to spec/docs/validated source proving the finding is incorrect>"
+  - If re-addressed after disagreement: "BLOCKING <one-line finding description> re-addressed after Codex disagreement. Previous fix was insufficient because: <acknowledge Codex's point>. New fix in commit <SHA>: <explanation of how new approach resolves Codex's concern>"
+
+  Use `gh pr comment ${PR_NUM} --body "<text>"` to post the justification.
+
+Scope discipline:
+- Make minimal, targeted changes. Do NOT refactor adjacent code unless required by a finding.
+- Each finding gets its own commit.
+- Before Step 4, run the full test suite and verify no new surface introduced.
+- Step 4 is MANDATORY before DONE_REVIEW.
+
+End your final message with EXACTLY ONE of these sentinels on its own line:
+- DONE_REVIEW (you have addressed everything you intend to address AND posted resolution justifications)
+- STUCK_REVIEW <one-line reason> (you cannot proceed — use this if Codex's disagreement is itself incorrect and needs human review)
+
+--- existing PR feedback begin ---
+${PR_FEEDBACK}
+--- existing PR feedback end ---
+
+--- codex review begin ---
+${CODEX_REVIEW}
+--- codex review end ---
+```
 ## Telemetry contract
 
 **Current events:**
@@ -490,6 +644,9 @@ ${CODEX_REVIEW}
 - `[claude] commit with rationale: <commit SHA>` (after each commit with Why: block)
 - `[claude] posting resolution justifications for N BLOCKING findings (cycle 4+)` (before posting PR comment)
 - `[claude] resolution justifications posted to PR #N` (after gh pr comment succeeds)
+- `[codex] adjudication mode enabled (cycle 5+)` (mode tracking)
+- `[codex] adjudication: N accepted, M disagreed` (after parsing adjudication section)
+- `[claude] processing N disagreed findings from Codex adjudication` (cycle 5+ Claude processing)
 
 **Sinks:** Main log file (~/sisyphus-logs/<project>-<timestamp>-<pid>.log)
 
@@ -539,6 +696,7 @@ ${CODEX_REVIEW}
 - **Detailed explanations at cycle 3 assumption (proposed).** If flipped to earlier cycles or all cycles: requires cost/benefit analysis (token usage vs. fix quality improvement).
 - **Solution rationale in commits assumption (proposed).** If flipped to separate doc or PR description: requires alternative mechanism for preserving decision context.
 - **Resolution justification at cycle 4 assumption (proposed).** If flipped to earlier/later or disabled: requires empirical testing of false convergence rate (Claude claiming DONE_REVIEW without actually resolving findings).
+- **Codex adjudication at cycle 5 assumption (proposed).** If flipped to cycle 4 (immediately after first justification) or disabled: must assess whether one cycle of justification is sufficient context for meaningful adjudication, or whether the extra cycle provides better signal.
 
 ## Composes with / replaces
 - **Replaces:** Manual code review loop (open PR → human reviews → implementer fixes → re-review)
@@ -576,6 +734,12 @@ ${CODEX_REVIEW}
 20. **Given** cycle 4 completes with BLOCKING findings addressed, **when** Claude finishes Step 3, **then** PR has comment with resolution justification for each BLOCKING finding (format: "BLOCKING <desc> resolved in commit <SHA>. Why this resolves it: <explanation>").
 21. **Given** cycle 4+ with invalid BLOCKING finding, **when** Claude justifies findings, **then** PR comment includes "BLOCKING <desc> is invalid. Reason: <explanation>. Supporting reference: <link>" with valid external reference.
 22. **Given** cycle 4+ completes, **when** DONE_REVIEW sentinel is output, **then** all BLOCKING findings from Codex review have corresponding resolution justifications posted to PR (verified via `gh pr view`).
+23. **Given** cycle 5 starts, **when** Codex prompt is assembled, **then** prompt includes Claude's resolution justifications from cycle 4 in a dedicated `--- Claude's resolution justifications ---` section.
+24. **Given** cycle 5+ Codex review with adjudication, **when** Claude claimed "resolved" and fix is correct, **then** Codex outputs "ACCEPTED" for that finding in the ADJUDICATION section.
+25. **Given** cycle 5+ Codex review with adjudication, **when** Claude claimed "resolved" but fix is insufficient, **then** Codex outputs "DISAGREED" with code-level evidence AND the finding reappears as [RECURRENCE] in BLOCKING.
+26. **Given** cycle 5+ Codex review with adjudication, **when** Claude claimed "invalid" with valid reference, **then** Codex outputs "ACCEPTED: finding withdrawn."
+27. **Given** cycle 5+ Claude receives DISAGREED adjudication, **when** Claude processes it, **then** Claude either implements a different fix addressing Codex's counter-argument OR reports STUCK_REVIEW escalating to human.
+28. **Given** cycle 5+ Claude re-addresses a DISAGREED finding, **when** Claude posts resolution justification, **then** justification includes "re-addressed after Codex disagreement" acknowledging the previous insufficiency.
 
 ## Telemetry events tied to L1 KPIs
 - **Cycles per PR** → Productivity KPI (lower = better prompt quality, faster convergence)
@@ -602,4 +766,6 @@ Future: Could record (PR_NUMBER, cycle_count, BLOCKING_history, outcome) for off
 - If detailed explanations (cycle 3+) do NOT improve fix accuracy by >10% vs. cycle 1-2 → disable detailed mode, explanation verbosity not helping
 - If solution rationale bloats commit messages by >3× average length with no measurable review benefit → shorten rationale template or move to PR description
 - If resolution justifications (cycle 4+) do NOT reduce false convergence rate (PRs re-opened due to unresolved BLOCKING) by >20% → remove Step 3, justification overhead not worth benefit
-- If cycle 4+ with all enhancements takes >12 minutes on >70% of PRs → reduce enhancement scope or make enhancements opt-in per PR
+- If Codex adjudication (cycle 5+) DISAGREED rate exceeds 80% → Codex may be too strict or Claude's fixes systematically inadequate; investigate root cause before continuing
+- If adjudication creates ping-pong (same finding DISAGREED across 2+ consecutive cycles) → force STUCK_REVIEW escalation to human on second disagreement
+- If cycle 5-6 with all enhancements takes >15 minutes on >70% of PRs → reduce enhancement scope or make enhancements opt-in per PR
