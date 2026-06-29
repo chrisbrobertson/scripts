@@ -61,6 +61,7 @@ Impact: <failure mode addressed — metrics or observability>
 # PR labels applied by cycle
 review-incomplete              # human action required (stuck, max cycles, etc.)
 review-mcp-outage             # Codex MCP transport failure (auto-retry)
+review-codex-outdated         # Codex CLI too old for configured model; run `codex update`, then remove label
 
 # Cycle state (not exposed, internal to run_review_cycle)
 REVIEW_HISTORY=()             # array of prior Codex reviews
@@ -83,6 +84,12 @@ From implementation (babysit-with-review.sh lines 518-682):
 - PR feedback collection: reviews, comments, inline comments (filtered to exclude self-posted)
 - Merge behavior: when BLOCKING=0, attempts `gh pr merge --squash --auto`, falls back to immediate merge
 - Graceful Codex degradation: if codex CLI not found, skip review cycle (logged)
+- **Codex pre-flight probe:** before the cycle loop, `run_review_cycle` runs a one-shot probe with the configured model (trivial prompt requesting the three-section format). If the probe returns non-zero, fails structural validation, or matches `compat_re`, the function calls `fail_review_cycle_codex_outdated`, then `exit 1` (halts the babysitter). This catches version incompatibility before any PR review cycle is attempted.
+- **Structural validation:** `codex_review_with_retry` (ARLO-FEAT-MCP-RESILIENCE) returns 0 only when TMP_REVIEW contains all three section headers. A Codex output that exits 0 but lacks any header is treated as a non-transport failure (return 1), preventing a false "zero blocking findings" pass-through.
+- **`fail_review_cycle` is fail-closed for labelling/draft commands:** `gh pr ready --undo` and `gh pr edit --add-label` failures abort the babysitter (`exit 1`) rather than logging a WARNING and continuing. A PR that wasn't quarantined must not re-enter the outer loop. `gh pr comment` (posting the bail reason) remains best-effort.
+- **`fail_review_cycle_codex_outdated`:** new function that labels PR `review-codex-outdated`, marks draft, posts a comment instructing the operator to run `codex update`, then calls `exit 1`.
+
+**Historical note:** Before 2026-05-28, non-transport Codex failures did not call `fail_review_cycle`. PRs remained OPEN/non-draft, allowing the outer loop to merge them without review. The current code calls `fail_review_cycle` for all non-transport failures.
 
 **Proposed enhancements (not yet implemented):**
 - **Plan-first on cycle 2+:** Claude uses plan mode to create implementation plan before addressing findings when cycle 2+ has BLOCKING issues
@@ -109,9 +116,10 @@ run_review_cycle <PR_NUMBER>
 ### Response shape (exit codes)
 - **0:** Cycle completed (BLOCKING=0 and merged, or graceful bail with label)
 - **2:** Codex MCP transport failure after retries (caller should halt babysitter)
+- **exit 1 (babysitter-level):** Codex backend compatibility failure, or `fail_review_cycle` gh commands failed. The function does not return; it calls `exit 1` directly to halt the entire babysitter process.
 
 ### Invariants
-1. **Cycle order:** Codex review → Claude fixes → repeat
+1. **Cycle order:** Codex pre-flight probe → (cycle loop) Codex review → Claude fixes → repeat
 2. **Convergence tracking:** Cycle N includes all prior reviews (1..N-1) and commits since cycle start
 3. **Prescriptive mode trigger:** Cycle 3+ always uses prescriptive prompt template with "Suggested fix:" requirement
 4. **Plan-first trigger (proposed):** Cycle 2+ with BLOCKING issues invokes Claude in plan mode before implementation
@@ -119,18 +127,22 @@ run_review_cycle <PR_NUMBER>
 6. **Solution rationale (proposed):** Claude documents implementation rationale for each fix (trade-offs, alternatives, constraints)
 7. **Explicit resolution justification (proposed):** Cycle 4+ requires Claude to explicitly justify how each BLOCKING finding was resolved or prove it is invalid with supporting references
 8. **Codex adjudication (proposed):** Cycle 5+ requires Codex to accept or provide reasoned disagreement for each of Claude's resolution justifications from the previous cycle
-9. **BLOCKING counting:** Only bullets under `## BLOCKING` that are not `- (none)` count
+9. **BLOCKING counting:** Only bullets under `## BLOCKING` that are not `- (none)` count. Structural validation is a pre-condition: if the `## BLOCKING` section header is absent, the output is a Codex failure, not a zero-findings pass.
 10. **PR branch checkout:** Cycle starts by checking out PR branch via `gh pr checkout <PR_NUMBER>`
-11. **Label application:** `review-incomplete` for human-action bails, `review-mcp-outage` for Codex transport failures
+11. **Label application:** `review-incomplete` for human-action bails, `review-mcp-outage` for Codex transport failures, `review-codex-outdated` for backend compatibility failures
+12. **Fail-closed labelling:** `fail_review_cycle` gh label/draft commands abort the babysitter on failure; only the follow-up `gh pr comment` is best-effort
 
 ### Error model
+- **Codex pre-flight probe failure (compat_re match or structural validation fail):** Label PR `review-codex-outdated`, post upgrade instructions comment, `exit 1` (halts babysitter)
 - **Codex MCP transport failure:** Retried by ARLO-FEAT-MCP-RESILIENCE (3× with backoff), if all fail → return 2
-- **Codex non-transport failure:** Label PR `review-incomplete`, return 0
-- **Claude non-zero exit:** Label PR `review-incomplete`, return 0
-- **gh pr checkout failure:** Label PR `review-incomplete`, return 0
-- **HEAD unchanged after Claude DONE_REVIEW:** Label PR `review-incomplete` (defensive against "done but no commits"), return 0
-- **MAX_REVIEW_CYCLES exhausted:** Label PR `review-incomplete`, return 0
-- **STUCK_REVIEW sentinel:** Label PR `review-incomplete`, return 0
+- **Codex backend compatibility failure (return 3 from ARLO-FEAT-MCP-RESILIENCE):** Label PR `review-codex-outdated`, `exit 1` (halts babysitter)
+- **Codex non-transport failure (return 1):** Label PR `review-incomplete` (fail-closed), return 0
+- **Claude non-zero exit:** Label PR `review-incomplete` (fail-closed), return 0
+- **gh pr checkout failure:** Label PR `review-incomplete` (fail-closed), return 0
+- **HEAD unchanged after Claude DONE_REVIEW:** Label PR `review-incomplete` (fail-closed), return 0
+- **MAX_REVIEW_CYCLES exhausted:** Label PR `review-incomplete` (fail-closed), return 0
+- **STUCK_REVIEW sentinel:** Label PR `review-incomplete` (fail-closed), return 0
+- **`fail_review_cycle` gh label/draft command failure:** `exit 1` (babysitter halts; PR must be manually quarantined)
 
 ### Idempotency
 Non-idempotent. Each cycle advances PR branch state (commits pushed). Re-running on same PR resumes from current state, not cycle 1.
@@ -662,11 +674,13 @@ ${CODEX_REVIEW}
 - QA: [OPEN: test convergence tracking, prescriptive mode, early exit conditions — owner: qa-lead]
 
 ## Failure modes & blast radius
-- **Contract violation (malformed Codex review):** BLOCKING count fails, cycle bails with label. Blast: PR needs manual review.
-- **Perf regression (Codex/Claude latency spike):** Cycle slows, may hit MAX_REVIEW_CYCLES before converging. Blast: PR labeled incomplete, developer reviews manually.
-- **Telemetry loss (gh pr comment failure):** Codex review not posted to PR, Claude still receives it. Blast: PR lacks public review history.
+- **Contract violation (malformed Codex review):** Structural validation (ARLO-FEAT-MCP-RESILIENCE) catches this before `count_blocking` runs; returns 1 → `fail_review_cycle`. Blast: PR labeled `review-incomplete`, no false-clean merge.
+- **Codex backend compatibility failure:** All review cycles in the run fail. Old behaviour (pre-fix): no `fail_review_cycle` call, PR stayed OPEN, outer loop merged unreviewed. New behaviour: `review-codex-outdated` label, babysitter exits 1 after first affected PR.
+- **`fail_review_cycle` gh command failure (gh auth expired, network down):** Old behaviour: WARNING logged, continued. New behaviour: babysitter exits 1; unlabelled PR must be manually quarantined before restart.
+- **Perf regression (Codex/Claude latency spike):** Cycle slows, may hit MAX_REVIEW_CYCLES before converging. Blast: PR labeled `review-incomplete`, developer reviews manually.
+- **Telemetry loss (gh pr comment failure for bail reason):** Bail reason comment not posted; label and draft state are still applied (fail-closed). Blast: PR is safely quarantined; operator sees the label but no comment context.
 - **False positive (BLOCKING for valid code):** Developer wastes time investigating. Mitigated by prescriptive mode requiring concrete fix.
-- **False negative (BLOCKING missed):** Bug merges. Mitigated by human review still required post-merge before production.
+- **False negative (BLOCKING missed):** Bug merges. Mitigated by retrospective review (ARLO-FEAT-RETROSPECTIVE-REVIEW) for known unreviewed PRs.
 
 # Bounds
 
@@ -688,6 +702,8 @@ ${CODEX_REVIEW}
 - **Sequential cycle assumption.** If flipped to parallel: requires parallel Codex invocation, which may conflict with Codex CLI limitations.
 - **Prescriptive mode at cycle 3 assumption.** If flipped to earlier/later: requires tuning based on empirical convergence data.
 - **Auto-merge assumption.** If flipped to approval-required: requires gh workflow approval API integration or manual merge step.
+- **`count_blocking` zero = clean pass assumption.** **Flipped 2026-05-10:** Codex v0.117.0 with gpt-5.5 produced non-review output that exited 0, which would have been counted as zero blocking findings → immediate merge. Fix: structural validation (all three section headers required) is now a pre-condition; absent header = Codex failure, not a clean pass.
+- **`fail_review_cycle` always succeeds assumption.** **Flipped 2026-05-10 (old code):** Old code did not call `fail_review_cycle` on non-transport Codex failures at all. Fix: always call `fail_review_cycle` for all non-transport failures; make it fail-closed.
 - **Plan-first at cycle 2 assumption (proposed).** If flipped to cycle 3+ only or disabled: requires A/B testing to measure plan mode impact on convergence rate.
 - **Detailed explanations at cycle 3 assumption (proposed).** If flipped to earlier cycles or all cycles: requires cost/benefit analysis (token usage vs. fix quality improvement).
 - **Solution rationale in commits assumption (proposed).** If flipped to separate doc or PR description: requires alternative mechanism for preserving decision context.
@@ -706,6 +722,9 @@ ${CODEX_REVIEW}
 ## Acceptance tests
 
 **Current implementation (baseline):**
+0. **Given** Codex pre-flight probe matches `compat_re` (model too old), **when** `run_review_cycle` is called, **then** PR is labelled `review-codex-outdated` and babysitter exits 1 (no cycles run).
+0b. **Given** Codex pre-flight probe exits 0 but TMP_REVIEW lacks `## BLOCKING` header, **when** probe is validated, **then** babysitter exits 1 as if compat failure.
+0c. **Given** `fail_review_cycle`'s `gh pr ready --undo` returns non-zero, **when** function executes, **then** babysitter exits 1 (not logs WARNING and continues).
 1. **Given** PR #123 with BLOCKING issues, **when** review cycle runs, **then** Codex produces markdown review with `## BLOCKING` section, Claude addresses findings, cycle repeats.
 2. **Given** Codex returns 0 BLOCKING findings, **when** cycle completes, **then** PR is merged via `gh pr merge --squash [--auto]` and function returns 0.
 3. **Given** cycle 3 starts, **when** Codex prompt is assembled, **then** prescriptive template is used (requires "Suggested fix:" for BLOCKING).
