@@ -1,7 +1,7 @@
 ---
 spec_type: feature
 id: ARLO-FEAT-RETROSPECTIVE-REVIEW
-status: draft
+status: review
 owners: [Chris Robertson]
 depends_on: [ARLO-FEAT-REVIEW-CYCLE, ARLO-FEAT-MCP-RESILIENCE]
 parent_l1: ARLO-PROD-BABYSIT-WITH-REVIEW
@@ -44,7 +44,7 @@ find-bailed-merged-prs.sh --repo OWNER/REPO \
 
 # Flags
 --repo OWNER/REPO   GitHub repo (required unless piped from find-bailed-merged-prs.sh)
---dry-run           Print what would be posted/created; do not call gh
+--dry-run           Check PR state/idempotency; print what would happen; skip Codex, worktrees, comments, and issue creation
 --no-issues         Post reviews but do not create follow-up issues
 --label LABEL       Additional label to add to created issues (repeatable)
 
@@ -133,8 +133,11 @@ PR #136: already reviewed → skipped (idempotent)
 6. **Non-fatal per-PR errors:** A failure on one PR (worktree error, Codex failure, gh
    comment failure) logs to stderr and continues to the next PR. Exit 0 if at least one
    PR was successfully reviewed.
-7. **Dry-run completeness:** `--dry-run` produces the same stdout as a live run but makes
-   no gh API calls and creates no worktrees.
+7. **Dry-run preview:** `--dry-run` checks PR state and idempotency (via `gh pr view` and
+   the comments API), then prints `[dry-run] would review at SHA <sha>` instead of running
+   Codex. No Codex execution, no worktree creation, no comment posting, no issue creation.
+   PRs that are already reviewed or not merged are still reported as skipped (no change from
+   live mode).
 
 ### Idempotency
 Idempotent per PR. Re-running on the same PR set produces the same output (skipped) for
@@ -234,8 +237,10 @@ Events emitted to stderr:
    is skipped with `not merged → skipped (state=OPEN)`.
 6. **Given** Codex output matches `compat_re`, **when** script runs, **then** PR is
    logged to stderr as skipped; no comment, no issue.
-7. **Given** `--dry-run` flag, **when** script runs, **then** output shows "would post"
-   and "would create N issue(s)" with no gh API calls made.
+7. **Given** `--dry-run` flag, **when** script runs, **then** each eligible PR outputs
+   `[dry-run] would review at SHA <sha> (merged <date>)` and no Codex run, worktree,
+   comment, or issue is created. PRs that are not merged or already reviewed are still
+   reported as skipped.
 8. **Given** `--no-issues` flag and 3 blocking findings, **when** script runs, **then**
    review comment is posted but no issues are created.
 9. **Given** the worktree EXIT trap triggers (script killed mid-run), **when** inspection
