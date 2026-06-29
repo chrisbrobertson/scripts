@@ -13,6 +13,7 @@ Personal helper scripts for Claude Code workflows and the home-lab fleet.
 | `prs` | `gh pr list` with CI rollup and review state |
 | `issues` | `gh issue list` sorted by priority labels |
 | `specs` | List spec files with frontmatter status |
+| `babysit-specs/` | TIF specs for `babysit-with-review.sh` (L1–L3, QA, security plans) |
 | `docs/STAFF-FLEET.md` | Full operator guide for the staff-fleet system |
 
 ## Staff-fleet agents

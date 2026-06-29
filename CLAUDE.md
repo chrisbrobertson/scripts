@@ -28,7 +28,8 @@ step, no CI.
 | `test-codex-review.sh` | Codex review helper |
 | `prs` | `gh pr list` with CI rollup and review state |
 | `issues` | `gh issue list` sorted by priority labels |
-| `specs` | List spec files (`-v0.1.md`) with frontmatter status and components |
+| `specs` | List spec files with frontmatter status and components; searches any `specs/` or `*-specs/` directory |
+| `babysit-specs/` | TIF specs for `babysit-with-review.sh` (L1–L3 + QA + security plans); see `babysit-specs/README.md` |
 
 ## Staff-fleet agents
 

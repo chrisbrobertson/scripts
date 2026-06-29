@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """List spec files with frontmatter metadata.
 
+Searches the current directory tree for any directory named 'specs' or
+ending in '-specs' (e.g. babysit-specs/), then lists all .md files found
+there that carry YAML frontmatter.
+
 Usage:
   specs                       list all specs with status and components
   specs --status approved     filter by status value
@@ -116,10 +120,14 @@ def has_impl(root, components):
     return False if found_dir else None
 
 
+def _is_specs_dir(name):
+    return name == "specs" or name.endswith("-specs")
+
+
 def find_specs(root):
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
-        if os.path.basename(dirpath) == "specs":
+        if _is_specs_dir(os.path.basename(dirpath)):
             for fn in sorted(filenames):
                 if fn.endswith(".md"):
                     yield Path(dirpath) / fn
