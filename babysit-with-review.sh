@@ -163,12 +163,17 @@ Per-iteration workflow:
 2. Implement it fully — code, tests, docs, and a CHANGELOG entry if the project uses one.
 3. Run the relevant test suite. If it fails, fix the underlying issue.
 4. Commit with a message that explains why the change was made.
-5. If the unit of work is shippable on its own, push the branch and open a PR via `gh pr create`.
+5. If the unit of work is shippable on its own, push the branch and open a PR via `gh pr create`. Do NOT merge it — see merge policy below.
+
+**Merge policy (non-negotiable):**
+- Only merge a PR after ALL blockers identified in the reviews have been handled.
+- YOU MUST NEVER MERGE A PR THAT HAS NOT BEEN REVIEWED. Never run `gh pr merge` yourself — opening or advancing a PR means leaving it open and ending your turn with `HANDOFF_REVIEW <PR>` so the wrapper's Codex review runs.
+- If you disagree with the review agent on a blocker and choose to override it, that decision process must be documented in detail, with supporting material, on the PR.
 
 End-of-iteration sentinels (mutually exclusive — output exactly one as the LAST line of your final message, with no surrounding quotes, code fences, or punctuation):
 
 - HANDOFF_REVIEW <PR_NUMBER>
-  Use this if you opened a new PR or pushed new commits to an existing PR during this iteration. The wrapper will run an automated code review (codex) and may invoke you again to address findings before resuming the outer loop. PR_NUMBER must be a bare integer (no leading `#`). Example: `HANDOFF_REVIEW 42`.
+  Use this if you opened a new PR or pushed new commits to an existing PR during this iteration. Leave the PR open — the wrapper runs the Codex review and performs the merge once it passes. PR_NUMBER must be a bare integer (no leading `#`). Example: `HANDOFF_REVIEW 42`.
 
 - STOP
   Use this ONLY if BOTH are true:
@@ -381,7 +386,12 @@ Implementation:
 - Address all BLOCKING findings with minimal, targeted changes.
 - Run relevant tests after each fix.
 - Commit each fix separately using standard format: fix(<scope>): <what changed>
-- Push commits to PR branch when complete.
+- Push commits to PR branch when complete. Do NOT merge the PR — the wrapper merges after re-review.
+
+**Merge policy (non-negotiable):**
+- Only merge a PR after ALL blockers identified in the reviews have been handled.
+- YOU MUST NEVER MERGE A PR THAT HAS NOT BEEN REVIEWED. Never run `gh pr merge` yourself — push your fixes and end with `DONE_REVIEW`; the wrapper runs the next Codex review cycle and performs the merge once it passes.
+- If you disagree with the review agent on a blocker and choose to override it, that decision process must be documented in detail, with supporting material, on the PR.
 
 Scope discipline:
 - Make minimal, targeted changes. Do NOT refactor adjacent code unless required by a finding.
@@ -425,7 +435,12 @@ Step 2: Execute the plan:
 
     Why: <rationale explaining trade-offs, alternatives considered, constraints>
     Impact: <failure mode addressed — metrics or observability>
-  - Push commits to PR branch when complete
+  - Push commits to PR branch when complete. Do NOT merge the PR — the wrapper merges after re-review.
+
+**Merge policy (non-negotiable):**
+- Only merge a PR after ALL blockers identified in the reviews have been handled.
+- YOU MUST NEVER MERGE A PR THAT HAS NOT BEEN REVIEWED. Never run `gh pr merge` yourself — push your fixes and end with `DONE_REVIEW`; the wrapper runs the next Codex review cycle and performs the merge once it passes.
+- If you disagree with the review agent on a blocker and choose to override it, that decision process must be documented in detail, with supporting material, on the PR.
 
 Scope discipline:
 - Make minimal, targeted changes. Do NOT refactor adjacent code unless required by a finding.
@@ -469,7 +484,12 @@ Step 2: Execute the plan:
 
     Why: <rationale explaining trade-offs, alternatives considered, constraints>
     Impact: <failure mode addressed — metrics or observability>
-  - Push commits to PR branch when complete
+  - Push commits to PR branch when complete. Do NOT merge the PR — the wrapper merges after re-review.
+
+**Merge policy (non-negotiable):**
+- Only merge a PR after ALL blockers identified in the reviews have been handled.
+- YOU MUST NEVER MERGE A PR THAT HAS NOT BEEN REVIEWED. Never run `gh pr merge` yourself — push your fixes and end with `DONE_REVIEW`; the wrapper runs the next Codex review cycle and performs the merge once it passes.
+- If you disagree with the review agent on a blocker and choose to override it, that decision process must be documented in detail, with supporting material, on the PR.
 
 Step 3: Post resolution justification as PR comment:
   For EACH BLOCKING finding in the Codex review, you must post a comment explaining:
@@ -527,7 +547,12 @@ Step 3: Execute the plan:
 
     Why: <rationale explaining trade-offs, alternatives considered, constraints>
     Impact: <failure mode addressed — metrics or observability>
-  - Push commits to PR branch when complete
+  - Push commits to PR branch when complete. Do NOT merge the PR — the wrapper merges after re-review.
+
+**Merge policy (non-negotiable):**
+- Only merge a PR after ALL blockers identified in the reviews have been handled.
+- YOU MUST NEVER MERGE A PR THAT HAS NOT BEEN REVIEWED. Never run `gh pr merge` yourself — push your fixes and end with `DONE_REVIEW`; the wrapper runs the next Codex review cycle and performs the merge once it passes.
+- If you disagree with the review agent on a blocker and choose to override it, that decision process must be documented in detail, with supporting material, on the PR.
 
 Step 4: Post resolution justification as PR comment:
   For EACH BLOCKING finding (including DISAGREED items you re-addressed), post a comment explaining:
@@ -1060,6 +1085,29 @@ ${_hb}--- end prior review cycles ---
 
     if [ "$n_blocking" -eq 0 ]; then
       echo "  [review] zero blocking findings; PR #$pr_num cleared after $cycle cycle(s)" | tee -a "$LOG" >&2
+
+      # Set codex-review=success commit status so branch protection allows the merge.
+      # This is the ONLY place this status is set green — the implementation agent never sets it.
+      local _owner_repo _head_sha
+      _owner_repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
+      _head_sha=$(gh pr view "$pr_num" --json headRefOid -q .headRefOid 2>/dev/null || echo "")
+      if [ -n "$_owner_repo" ] && [ -n "$_head_sha" ]; then
+        if gh api -X POST "repos/${_owner_repo}/statuses/${_head_sha}" \
+            -f state=success \
+            -f context=codex-review \
+            -f description="Codex review passed (cycle ${cycle} of ${MAX_REVIEW_CYCLES})" \
+            -f target_url="https://github.com/${_owner_repo}/pull/${pr_num}" \
+            >>"$LOG" 2>&1; then
+          echo "  [review] codex-review status set to success for ${_head_sha:0:8}" | tee -a "$LOG" >&2
+        else
+          echo "  [review] WARNING: failed to set codex-review status for PR #$pr_num; leaving PR open rather than merging without the status check" | tee -a "$LOG" >&2
+          return 0
+        fi
+      else
+        echo "  [review] WARNING: could not resolve repo or head SHA for PR #$pr_num; leaving PR open rather than merging without the status check" | tee -a "$LOG" >&2
+        return 0
+      fi
+
       if gh pr merge "$pr_num" --squash --auto >>"$LOG" 2>&1; then
         echo "  [review] PR #$pr_num queued for auto-merge (merges when CI passes)" | tee -a "$LOG" >&2
       elif gh pr merge "$pr_num" --squash >>"$LOG" 2>&1; then
