@@ -23,6 +23,7 @@
 # `review-mcp-outage`, and halts. On the next babysitter run the pre-iter
 # scan retries the labelled PR automatically before running claude.
 # `review-incomplete` = human action required; `review-mcp-outage` = auto-retry.
+# `review-codex-outdated` = Codex CLI too old for model; upgrade CLI then remove label.
 
 set -uo pipefail
 
@@ -42,9 +43,11 @@ Env vars:
   MAX_REVIEW_CYCLES  default 6
 
 PR labels used by the review cycle:
-  review-incomplete   Human intervention required; wrapper will NOT retry.
-  review-mcp-outage   Codex MCP backend was unreachable; wrapper retries
-                      automatically at the top of each outer iteration.
+  review-incomplete      Human intervention required; wrapper will NOT retry.
+  review-mcp-outage      Codex MCP backend was unreachable; wrapper retries
+                         automatically at the top of each outer iteration.
+  review-codex-outdated  Codex CLI is too old for the configured model; run
+                         \`codex update\`, remove this label, then restart.
 
 Logs land in ~/sisyphus-logs/<project>-<timestamp>-<pid>.log.
 
@@ -676,26 +679,31 @@ $(cat "$review_file")
 
 # Mark a PR as needing manual review when a review cycle bails for any reason.
 # Args: <pr_num> <reason_string>
-# Best-effort: gh failures are logged but do not abort the caller.
+# Safety commands (ready --undo, edit --add-label) are fail-closed: gh failure → exit 1.
+# Notification commands (label create, pr comment) are best-effort.
 fail_review_cycle() {
   local pr_num="$1"
   local reason="$2"
 
   echo "  [review] marking PR #$pr_num incomplete: $reason" | tee -a "$LOG" >&2
 
-  # Ensure the label exists (idempotent via --force).
+  # Ensure the label exists (idempotent via --force). Best-effort.
   gh label create review-incomplete \
     --color B60205 \
     --description "Babysit review cycle did not complete cleanly" \
     --force >>"$LOG" 2>&1 || true
 
-  # Convert to draft so the PR cannot be merged without operator action.
-  gh pr ready "$pr_num" --undo >>"$LOG" 2>&1 \
-    || echo "  [review] WARNING: gh pr ready --undo failed for PR #$pr_num" | tee -a "$LOG" >&2
+  # Fail-closed: if we can't draft the PR, halt — it must not remain mergeable.
+  if ! gh pr ready "$pr_num" --undo >>"$LOG" 2>&1; then
+    echo "ERROR: gh pr ready --undo failed for PR #$pr_num — PR may still be mergeable; manually quarantine before restarting" | tee -a "$LOG" >&2
+    exit 1
+  fi
 
-  # Add the label.
-  gh pr edit "$pr_num" --add-label review-incomplete >>"$LOG" 2>&1 \
-    || echo "  [review] WARNING: gh pr edit --add-label failed for PR #$pr_num" | tee -a "$LOG" >&2
+  # Fail-closed: if we can't label the PR, halt — it must not remain unlabelled.
+  if ! gh pr edit "$pr_num" --add-label review-incomplete >>"$LOG" 2>&1; then
+    echo "ERROR: gh pr edit --add-label failed for PR #$pr_num — PR may be unlabelled; manually add 'review-incomplete' before restarting" | tee -a "$LOG" >&2
+    exit 1
+  fi
 
   # Post the bail reason. (Codex review content is already on the PR via post_codex_review.)
   local body
@@ -710,7 +718,8 @@ Reason: ${reason}"
 # Mark a PR as stalled by a codex MCP transport failure.
 # The babysitter will retry the review cycle on its next run.
 # Args: <pr_num> <reason_string>
-# Best-effort: gh failures are logged but do not abort the caller.
+# Safety commands (ready --undo, edit --add-label) are fail-closed: gh failure → exit 1.
+# Notification commands (label create, pr comment) are best-effort.
 fail_review_cycle_mcp() {
   local pr_num="$1"
   local reason="$2"
@@ -722,11 +731,17 @@ fail_review_cycle_mcp() {
     --description "Babysit codex review stalled by MCP transport failure; wrapper will retry" \
     --force >>"$LOG" 2>&1 || true
 
-  gh pr ready "$pr_num" --undo >>"$LOG" 2>&1 \
-    || echo "  [review] WARNING: gh pr ready --undo failed for PR #$pr_num" | tee -a "$LOG" >&2
+  # Fail-closed: if we can't draft the PR, halt — it must not remain mergeable.
+  if ! gh pr ready "$pr_num" --undo >>"$LOG" 2>&1; then
+    echo "ERROR: gh pr ready --undo failed for PR #$pr_num — PR may still be mergeable; manually quarantine before restarting" | tee -a "$LOG" >&2
+    exit 1
+  fi
 
-  gh pr edit "$pr_num" --add-label review-mcp-outage >>"$LOG" 2>&1 \
-    || echo "  [review] WARNING: gh pr edit --add-label failed for PR #$pr_num" | tee -a "$LOG" >&2
+  # Fail-closed: if we can't label the PR, halt — it must not remain unlabelled.
+  if ! gh pr edit "$pr_num" --add-label review-mcp-outage >>"$LOG" 2>&1; then
+    echo "ERROR: gh pr edit --add-label failed for PR #$pr_num — PR may be unlabelled; manually add 'review-mcp-outage' before restarting" | tee -a "$LOG" >&2
+    exit 1
+  fi
 
   local body
   body="**babysit-with-review: codex MCP transport failure — review pending**
@@ -741,18 +756,66 @@ Label \`review-mcp-outage\` has been added. Remove it manually if you merge this
     || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
 }
 
+# Mark a PR as stalled by a Codex backend compatibility failure.
+# The Codex CLI must be upgraded before the review cycle can proceed.
+# Args: <pr_num> <reason_string>
+# Safety commands (ready --undo, edit --add-label) are fail-closed: gh failure → exit 1.
+# Notification commands (label create, pr comment) are best-effort.
+fail_review_cycle_codex_outdated() {
+  local pr_num="$1"
+  local reason="$2"
+
+  echo "  [review] Codex version incompatibility for PR #$pr_num: $reason" | tee -a "$LOG" >&2
+
+  gh label create review-codex-outdated \
+    --color e4e669 \
+    --description "Babysit codex review stalled by CLI version incompatibility; upgrade Codex then remove label" \
+    --force >>"$LOG" 2>&1 || true
+
+  # Fail-closed: if we can't draft the PR, halt — it must not remain mergeable.
+  if ! gh pr ready "$pr_num" --undo >>"$LOG" 2>&1; then
+    echo "ERROR: gh pr ready --undo failed for PR #$pr_num — PR may still be mergeable; manually quarantine before restarting" | tee -a "$LOG" >&2
+    exit 1
+  fi
+
+  # Fail-closed: if we can't label the PR, halt — it must not remain unlabelled.
+  if ! gh pr edit "$pr_num" --add-label review-codex-outdated >>"$LOG" 2>&1; then
+    echo "ERROR: gh pr edit --add-label failed for PR #$pr_num — PR may be unlabelled; manually add 'review-codex-outdated' before restarting" | tee -a "$LOG" >&2
+    exit 1
+  fi
+
+  local body
+  body="**babysit-with-review: Codex version incompatibility — review blocked**
+
+Reason: ${reason}
+
+The Codex CLI is too old for the configured model. No code-quality review took place.
+
+To resume: upgrade the Codex CLI (\`codex update\`), then remove the \`review-codex-outdated\` label and restart the babysitter."
+  printf '%s\n' "$body" \
+    | gh pr comment "$pr_num" --body-file - >>"$LOG" 2>&1 \
+    || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
+}
+
 # Run codex exec with retry on MCP transport failures.
 # Uses $TMP_REVIEW (must be zeroed by caller) for the output-last-message file.
 # Uses $TMP_CODEX_FULL for the combined codex output (used for telltale detection).
 #
+# Invariant: a non-zero return never leaves a PR mergeable-and-unreviewed.
+# The caller is responsible for calling fail_review_cycle* on any non-zero return.
+#
 # Returns:
-#   0 — codex completed cleanly; $TMP_REVIEW is non-empty.
-#   1 — codex failed for a non-transport reason (prompt issue, crash, etc.).
+#   0 — codex completed cleanly; $TMP_REVIEW is non-empty and structurally valid
+#         (all three section headers present: ## BLOCKING / ## RECOMMENDED / ## INFORMATION).
+#   1 — codex failed for a non-transport reason (prompt issue, crash, structurally
+#         invalid output, etc.).
 #   2 — codex MCP transport failure; all retries exhausted.
+#   3 — backend compatibility failure; Codex CLI too old for configured model (no retry).
 codex_review_with_retry() {
   local codex_prompt="$1"
   local attempt
   local delays=(0 60 300)
+  local compat_re='requires a newer version of Codex'
   local mcp_re='Transport send error:|tool call error: tool call failed for `codex_apps/|error sending request for url \(https://chatgpt\.com/'
 
   for attempt in 1 2 3; do
@@ -770,8 +833,22 @@ codex_review_with_retry() {
     rc=${PIPESTATUS[0]}
     set -e
 
+    # Compat check first (before mcp_re): version mismatch → return 3, no retry.
+    if grep -qE "$compat_re" "$TMP_CODEX_FULL" 2>/dev/null; then
+      echo "  [codex] FATAL: backend compatibility failure on attempt $attempt (rc=$rc); Codex CLI is too old for the configured model" | tee -a "$LOG" >&2
+      return 3
+    fi
+
+    # Structural validation: require all three section headers before treating as success.
+    # This closes the exit-0-garbage hole (e.g. a deprecation warning in place of a review).
     if [ "$rc" -eq 0 ] && [ -s "$TMP_REVIEW" ]; then
-      return 0
+      if grep -q '^## BLOCKING$' "$TMP_REVIEW" 2>/dev/null \
+          && grep -q '^## RECOMMENDED$' "$TMP_REVIEW" 2>/dev/null \
+          && grep -q '^## INFORMATION$' "$TMP_REVIEW" 2>/dev/null; then
+        return 0
+      fi
+      echo "  [codex] exit 0 but review missing required section headers (## BLOCKING / ## RECOMMENDED / ## INFORMATION); treating as failure" | tee -a "$LOG" >&2
+      # fall through to return 1
     fi
 
     if grep -qE "$mcp_re" "$TMP_CODEX_FULL" 2>/dev/null; then
@@ -803,6 +880,31 @@ run_review_cycle() {
     echo "  [review] codex CLI not found; skipping review cycle (PR #$pr_num remains open for external review)" | tee -a "$LOG" >&2
     return 0
   fi
+
+  # Pre-flight compat probe: verify Codex CLI is compatible with the configured
+  # model before checking out the PR branch. A version mismatch means every
+  # review in this run will fail; detect it here and halt rather than burning cycles.
+  local compat_re='requires a newer version of Codex'
+  local _probe_full
+  _probe_full=$(mktemp)
+  local _probe_rc=0
+  set +e
+  codex exec -s read-only "Say 'ok'." 2>&1 | tee -a "$LOG" "$_probe_full" >/dev/null
+  _probe_rc=${PIPESTATUS[0]}
+  set -e
+  if grep -qE "$compat_re" "$_probe_full" 2>/dev/null; then
+    echo "  [review] FATAL: Codex version incompatibility detected in pre-flight probe (PR #$pr_num); upgrade CLI before retrying" | tee -a "$LOG" >&2
+    rm -f "$_probe_full"
+    fail_review_cycle_codex_outdated "$pr_num" "Codex pre-flight probe: CLI too old for configured model"
+    return 3
+  fi
+  rm -f "$_probe_full"
+  if [ "$_probe_rc" -ne 0 ]; then
+    echo "  [review] FATAL: Codex pre-flight probe returned rc=$_probe_rc; bailing review cycle for PR #$pr_num" | tee -a "$LOG" >&2
+    fail_review_cycle "$pr_num" "Codex pre-flight probe failed (rc=$_probe_rc) before checkout"
+    return 0
+  fi
+  unset _probe_full _probe_rc
 
   # Make sure we're on the PR branch.
   if ! gh pr checkout "$pr_num" >>"$LOG" 2>&1; then
@@ -881,7 +983,10 @@ ${_hb}--- end prior review cycles ---
     local codex_rc=0
     codex_review_with_retry "$codex_prompt" || codex_rc=$?
 
-    if [ "$codex_rc" -eq 2 ]; then
+    if [ "$codex_rc" -eq 3 ]; then
+      fail_review_cycle_codex_outdated "$pr_num" "Codex CLI version incompatibility during review (cycle $cycle)"
+      return 3
+    elif [ "$codex_rc" -eq 2 ]; then
       fail_review_cycle_mcp "$pr_num" "codex MCP transport failure after 3 retries (cycle $cycle)"
       return 2
     elif [ "$codex_rc" -ne 0 ]; then
@@ -913,6 +1018,13 @@ ${_hb}--- end prior review cycles ---
     local n_blocking
     n_blocking=$(printf '%s\n' "$review" | count_blocking)
     echo "  [codex] $n_blocking blocking finding(s)" | tee -a "$LOG" >&2
+
+    # Guard: if count_blocking returned non-integer, bail — never merge on a parse error.
+    if ! [[ "$n_blocking" =~ ^[0-9]+$ ]]; then
+      echo "  [review] FATAL: count_blocking produced non-integer ('$n_blocking'); bailing to prevent spurious merge" | tee -a "$LOG" >&2
+      fail_review_cycle "$pr_num" "count_blocking produced non-integer output (parse error in cycle $cycle)"
+      return 0
+    fi
 
     if [ "$n_blocking" -eq 0 ]; then
       echo "  [review] zero blocking findings; PR #$pr_num cleared after $cycle cycle(s)" | tee -a "$LOG" >&2
@@ -1164,8 +1276,12 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
     gh pr ready "$_mcp_pr" >>"$LOG" 2>&1 || true
     _rc=0
     run_review_cycle "$_mcp_pr" || _rc=$?
-    if [ "$_rc" -eq 2 ]; then
-      echo "Halting: codex MCP outage persists for PR #$_mcp_pr. See $LOG" | tee -a "$LOG" >&2
+    if [ "$_rc" -ne 0 ]; then
+      case "$_rc" in
+        2) echo "Halting: codex MCP outage persists for PR #$_mcp_pr; retries exhausted. See $LOG" | tee -a "$LOG" >&2 ;;
+        3) echo "Halting: Codex version incompatibility for PR #$_mcp_pr; upgrade CLI before restarting. See $LOG" | tee -a "$LOG" >&2 ;;
+        *) echo "Halting: review cycle returned unexpected rc=$_rc for PR #$_mcp_pr. See $LOG" | tee -a "$LOG" >&2 ;;
+      esac
       break
     fi
     unset _mcp_pr _rc
@@ -1185,7 +1301,22 @@ ${BASE_PROMPT}"
   } >> "$LOG"
 
   if ! run_claude "$PROMPT" "$TMP_RESULT"; then
-    echo "claude exited non-zero on iter $iter; see $LOG" >&2
+    echo "ERROR: implementation claude exited non-zero on iter $iter; quarantining unreviewed open PRs" | tee -a "$LOG" >&2
+    # Sweep open, non-draft PRs authored by @me that carry no review-* label.
+    # A crashed implementation pass may have left such a PR mergeable-and-unreviewed,
+    # which is the same silent-merge hole this script is designed to prevent.
+    _quarantine_prs=$(gh pr list \
+      --state open --draft=false --author "@me" \
+      --json number,labels \
+      --jq '[.[] | select(.labels | map(.name) | map(startswith("review-")) | any | not) | .number] | .[]' \
+      2>/dev/null || echo "")
+    if [ -n "$_quarantine_prs" ]; then
+      while IFS= read -r _qpr; do
+        echo "  [outer] quarantining unreviewed open PR #$_qpr (implementation crash on iter $iter)" | tee -a "$LOG" >&2
+        fail_review_cycle "$_qpr" "implementation claude crashed before review handoff (iter $iter)"
+      done <<< "$_quarantine_prs"
+    fi
+    unset _quarantine_prs _qpr
     break
   fi
   echo "---" >> "$LOG"
@@ -1203,8 +1334,12 @@ ${BASE_PROMPT}"
       if [[ "$pr_num" =~ ^[0-9]+$ ]]; then
         _rc=0
         run_review_cycle "$pr_num" || _rc=$?
-        if [ "$_rc" -eq 2 ]; then
-          echo "Halting: codex MCP transport outage on PR #$pr_num; retries exhausted. See $LOG" | tee -a "$LOG" >&2
+        if [ "$_rc" -ne 0 ]; then
+          case "$_rc" in
+            2) echo "Halting: codex MCP transport outage on PR #$pr_num; retries exhausted. See $LOG" | tee -a "$LOG" >&2 ;;
+            3) echo "Halting: Codex version incompatibility on PR #$pr_num; upgrade CLI before restarting. See $LOG" | tee -a "$LOG" >&2 ;;
+            *) echo "Halting: review cycle returned unexpected rc=$_rc for PR #$pr_num. See $LOG" | tee -a "$LOG" >&2 ;;
+          esac
           break
         fi
       else
