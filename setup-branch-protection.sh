@@ -79,9 +79,17 @@ echo ""
 # enforce_admins=true: protection applies to admins too — critical so that
 #   the authenticated account (which owns the token the babysitter uses) cannot
 #   bypass it.
-# required_pull_request_reviews=null: we use the Codex status check as the
-#   review gate; a separate PR approval requirement is not needed here.
-# restrictions=null: no push restrictions beyond the status check.
+# required_pull_request_reviews: require at least 0 human approvals but, more
+#   importantly, BLOCK DIRECT PUSHES — all changes must arrive via a PR. This
+#   prevents `git push origin main` by the implementation agent entirely.
+#   dismiss_stale_reviews=false: don't invalidate the codex-review status on
+#   new commits (the status is per-SHA; a force-push would need a new status).
+#   require_code_owner_reviews=false: no CODEOWNERS file needed.
+#   required_approving_review_count=0: we use the codex-review status check as
+#   the gate, not human approval. The PR requirement alone (count=0) blocks
+#   direct pushes while letting gh pr merge --squash proceed normally.
+# restrictions=null: any authenticated user can push branches and open PRs;
+#   only direct pushes to the protected branch are blocked.
 
 PAYLOAD=$(cat <<PAYLOAD_EOF
 {
@@ -90,7 +98,11 @@ PAYLOAD=$(cat <<PAYLOAD_EOF
     "contexts": ["${CHECK_CONTEXT}"]
   },
   "enforce_admins": true,
-  "required_pull_request_reviews": null,
+  "required_pull_request_reviews": {
+    "dismiss_stale_reviews": false,
+    "require_code_owner_reviews": false,
+    "required_approving_review_count": 0
+  },
   "restrictions": null
 }
 PAYLOAD_EOF
