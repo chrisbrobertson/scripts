@@ -48,15 +48,15 @@ run_review_cycle <PR_NUMBER>
 DONE_REVIEW                    # addressed findings, ready for next Codex pass
 STUCK_REVIEW <reason>          # cannot proceed, bail review cycle
 
-# Claude plan mode (cycle 2+)
-claude --plan-mode             # invoked before implementation on cycle 2+
+# Claude plan mode (cycle 2+, prompt-instructed)
+# Prompts instruct Claude to enter plan mode before implementing
 # Plan output includes: steps, order, rationale, dependencies
 
 # Claude commit message format (cycle 2+)
 fix(<scope>): <what changed>
 
 Why: <rationale explaining trade-offs, alternatives, constraints>
-[Impact: <metric or failure mode addressed>]  # cycle 3+ only
+Impact: <failure mode addressed — metrics or observability>
 
 # PR labels applied by cycle
 review-incomplete              # human action required (stuck, max cycles, etc.)
@@ -65,11 +65,8 @@ review-mcp-outage             # Codex MCP transport failure (auto-retry)
 # Cycle state (not exposed, internal to run_review_cycle)
 REVIEW_HISTORY=()             # array of prior Codex reviews
 review_start_sha              # git SHA at cycle start (for commit tracking)
-USE_PLAN_MODE=false           # true for cycle 2+ with BLOCKING issues
-USE_DETAILED_EXPLANATIONS=false  # true for cycle 3+
-REQUIRE_RESOLUTION_JUSTIFICATION=false  # true for cycle 4+
-REQUIRE_ADJUDICATION=false              # true for cycle 5+
-JUSTIFICATIONS=""                       # Claude's resolution justifications from previous cycle (cycle 5+)
+JUSTIFICATIONS=""             # Claude's resolution justifications from previous cycle (cycle 5+)
+# Template selected by cycle number: 8 prompts (4 Codex + 4 Claude), see prompt constants section
 ```
 
 ## Consumer
@@ -123,8 +120,8 @@ run_review_cycle <PR_NUMBER>
 7. **Explicit resolution justification (proposed):** Cycle 4+ requires Claude to explicitly justify how each BLOCKING finding was resolved or prove it is invalid with supporting references
 8. **Codex adjudication (proposed):** Cycle 5+ requires Codex to accept or provide reasoned disagreement for each of Claude's resolution justifications from the previous cycle
 9. **BLOCKING counting:** Only bullets under `## BLOCKING` that are not `- (none)` count
-9. **PR branch checkout:** Cycle starts by checking out PR branch via `gh pr checkout <PR_NUMBER>`
-10. **Label application:** `review-incomplete` for human-action bails, `review-mcp-outage` for Codex transport failures
+10. **PR branch checkout:** Cycle starts by checking out PR branch via `gh pr checkout <PR_NUMBER>`
+11. **Label application:** `review-incomplete` for human-action bails, `review-mcp-outage` for Codex transport failures
 
 ### Error model
 - **Codex MCP transport failure:** Retried by ARLO-FEAT-MCP-RESILIENCE (3× with backoff), if all fail → return 2
@@ -148,24 +145,22 @@ Function is internal to script; no versioning. Breaking changes (sentinel format
 - Claude addresses findings directly (no plan mode)
 - Commits include standard messages ("fix(blocking): handle nil session")
 
-**Cycle 2+ with BLOCKING issues (plan-first):**
+**Cycle 2+ with BLOCKING issues (plan-first with rationale and impact):**
 - Codex reviews PR with descriptive template + convergence history
-- **Claude enters plan mode:** Creates implementation plan using `claude --plan-mode` before making changes
+- **Claude enters plan mode:** Creates implementation plan (prompt-instructed) before making changes
   - Plan includes: what to fix, in what order, why each fix is needed, dependencies between fixes
   - Plan is logged and reviewed before execution begins
 - **Claude executes plan:** Implements each plan step sequentially, committing after each
-- **Solution rationale:** Each commit message includes "Why: <rationale>" explaining trade-offs and alternatives
-  - Example: `fix(blocking): add null check in auth middleware\n\nWhy: Session can be null during logout flow. Considered moving check to caller, but middleware is the right boundary for this validation (single responsibility).`
+- **Solution rationale and impact:** Each commit message includes "Why:" (trade-offs/alternatives) and "Impact:" (failure mode addressed)
+  - Example: `fix(blocking): add null check in auth middleware\n\nWhy: Session can be null during logout flow. Considered moving check to caller, but middleware is the right boundary for this validation (single responsibility).\nImpact: Prevents 500 errors on ~5% of logout attempts.`
 
-**Cycle 3+ with BLOCKING issues (prescriptive + detailed explanations):**
+**Cycle 3+ with BLOCKING issues (prescriptive Codex with detailed explanations):**
 - **Codex reviews with prescriptive template:** Requires "Suggested fix:" with concrete code for each BLOCKING finding
 - **Codex adds detailed explanations:** For each finding, includes:
   - **Root cause:** Why this gap exists (e.g., "Missing null check introduced in PR #456 when logout flow was refactored")
   - **Architectural context:** How this fits into the larger system (e.g., "Auth middleware is the trust boundary between public routes and protected resources")
   - **Impact:** What breaks if not fixed (e.g., "500 error on logout when session has already expired; affects ~5% of logout attempts per telemetry")
-- **Claude plan-first:** Same as cycle 2+ (plan mode before execution)
-- **Claude solution rationale:** Enhanced commit messages with deeper context:
-  - Example: `fix(blocking): add null check in auth middleware\n\nWhy: Session can be null during logout flow (gap introduced in PR #456 refactor). Auth middleware is trust boundary, so validation belongs here. Considered:\n- Caller-side check: violates single responsibility\n- Optional session type: increases complexity across 12 callsites\n- Middleware null check: single point of enforcement (chosen)\n\nImpact: Prevents 500 errors on ~5% of logout attempts.`
+- **Claude continues plan-first with rationale and impact:** Same commit format as cycle 2+ (Why + Impact), but now informed by Codex's detailed explanations
 
 **Cycle 4 with BLOCKING issues (explicit resolution justification):**
 - **All cycle 3+ behaviors continue** (Codex prescriptive + detailed, Claude plan-first, solution rationale)
@@ -494,6 +489,7 @@ Step 2: Execute the plan:
     fix(<scope>): <what changed>
 
     Why: <rationale explaining trade-offs, alternatives considered, constraints>
+    Impact: <failure mode addressed — metrics or observability>
   - Push commits to PR branch when complete
 
 Scope discipline:
@@ -740,6 +736,9 @@ ${CODEX_REVIEW}
 26. **Given** cycle 5+ Codex review with adjudication, **when** Claude claimed "invalid" with valid reference, **then** Codex outputs "ACCEPTED: finding withdrawn."
 27. **Given** cycle 5+ Claude receives DISAGREED adjudication, **when** Claude processes it, **then** Claude either implements a different fix addressing Codex's counter-argument OR reports STUCK_REVIEW escalating to human.
 28. **Given** cycle 5+ Claude re-addresses a DISAGREED finding, **when** Claude posts resolution justification, **then** justification includes "re-addressed after Codex disagreement" acknowledging the previous insufficiency.
+29. **Given** cycle 5+ Codex review with adjudication, **when** Claude claimed "invalid" but Codex disagrees, **then** Codex outputs "DISAGREED" with counter-argument explaining why the finding is valid AND the finding reappears as [RECURRENCE] in BLOCKING.
+30. **Given** cycle 5+ with ACCEPTED findings, **when** next cycle (6) runs, **then** those ACCEPTED findings do NOT reappear in BLOCKING section (verified via absence in Codex review).
+31. **Given** same BLOCKING finding DISAGREED on 2+ consecutive cycles (5 and 6), **when** cycle 6 Claude processes the second DISAGREED, **then** Claude reports STUCK_REVIEW escalating ping-pong to human review (per kill criterion).
 
 ## Telemetry events tied to L1 KPIs
 - **Cycles per PR** → Productivity KPI (lower = better prompt quality, faster convergence)
