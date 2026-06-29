@@ -39,9 +39,11 @@ TMP_CODEX_FULL=""       # function zeros on each attempt, logs full output
 1  # non-transport failure (prompt issue, crash, invalid output structure, etc.)
 2  # MCP transport failure - all 3 retries exhausted
 3  # backend compatibility failure - Codex CLI too old for configured model; no retry
+4  # workspace credit exhaustion - Codex workspace out of credits; no retry
 
-# Telltale constants (checked in order: compat_re first, then mcp_re)
+# Telltale constants (checked in order: compat_re, then credits_re, then mcp_re)
 compat_re='requires a newer version of Codex'
+credits_re='Your workspace is out of credits'
 mcp_re='Transport send error:|tool call error: tool call failed for `codex_apps/|error sending request for url \(https://chatgpt\.com/'
 ```
 
@@ -51,19 +53,20 @@ Review cycle feature (ARLO-FEAT-REVIEW-CYCLE) invoking codex_review_with_retry()
 # Substance
 
 ## What we know
-From implementation (babysit-with-review.sh lines 480-515):
+From implementation (babysit-with-review.sh):
 - Fixed retry policy: 3 attempts with delays [0, 60, 300] seconds
-- Telltale detection: two separate regex constants (`compat_re`, `mcp_re`); `compat_re` is checked first on every attempt
+- Telltale detection: three separate constants (`compat_re`, `credits_re`, `mcp_re`); checked in that order on every attempt
 - Success criteria: exit code 0 AND non-empty TMP_REVIEW file AND all three section headers present (`## BLOCKING`, `## RECOMMENDED`, `## INFORMATION`)
-- Failure classification: backend compatibility (compat_re match) → return 3; MCP transport (mcp_re match, all 3 retries) → return 2; all other non-zero / structurally-invalid → return 1
+- Failure classification: backend compatibility (compat_re match) → return 3; credit exhaustion (credits_re match) → return 4; MCP transport (mcp_re match, all 3 retries) → return 2; all other non-zero / structurally-invalid → return 1
 - Logging: All codex output teed to both LOG and TMP_CODEX_FULL for telltale scanning
 - Early success: If attempt N succeeds, no further attempts made
 - Backend compat failure (return 3): detected on attempt 1, no retry; caller must halt the babysitter
+- Credit exhaustion (return 4): detected on any attempt, no retry; caller must halt the babysitter and label PR `review-codex-no-credits`
 
 ## What we assume
 - [ASSUMPTION] MCP transport failures are transient (retry helps). Flips if: failures are persistent (e.g., Codex account suspended), requiring non-retry error path.
 - [ASSUMPTION] Three retries with 0/60s/300s delays is optimal. Flips if: empirical data shows different delay schedule is better (e.g., 0/30s/120s).
-- [ASSUMPTION] `compat_re` and `mcp_re` together cover all known failure classes. **Flipped 2026-05-10:** `gpt-5.5` with Codex v0.117.0 produced HTTP 400 outside all prior `mcp_re` patterns. Fix: separate `compat_re` for version/model errors; unknown non-zero exits without a telltale match continue to return 1.
+- [ASSUMPTION] `compat_re`, `credits_re`, and `mcp_re` together cover all known failure classes. **Flipped 2026-05-10:** `gpt-5.5` with Codex v0.117.0 produced HTTP 400 outside all prior `mcp_re` patterns. Fix: separate `compat_re` for version/model errors. **Flipped 2026-06-28:** Codex v0.142.4 with `gpt-5.5` returned `ERROR: Your workspace is out of credits.` (rc=1) with no `compat_re` or `mcp_re` match, falling through to `review-incomplete`. Fix: separate `credits_re` for workspace exhaustion; unknown non-zero exits without a telltale match continue to return 1.
 - [ASSUMPTION] Non-empty TMP_REVIEW with all three section headers indicates success. Flips if: Codex can produce structurally-valid but semantically-invalid output (e.g., hallucinated section headers), requiring semantic validation.
 - [ASSUMPTION] Backend compatibility failures are detectable via `compat_re`. Flips if: OpenAI changes the error message format, requiring regex update.
 
@@ -81,19 +84,21 @@ codex_review_with_retry "<codex_prompt>"
 0   # Codex completed successfully; TMP_REVIEW populated with review markdown
 1   # Codex failed (non-transport); TMP_REVIEW may be empty or partial
 2   # MCP transport failure; all retries exhausted; TMP_REVIEW empty
+3   # Backend compat failure; Codex CLI too old for configured model; TMP_REVIEW empty
+4   # Workspace credit exhaustion; Codex has no credits; TMP_REVIEW empty
 
 # Side effects
-# - TMP_REVIEW: populated on success (0), empty or partial on failure (1, 2)
+# - TMP_REVIEW: populated on success (0), empty or partial on failure (1-4)
 # - TMP_CODEX_FULL: last attempt's full output (for telltale scanning)
 # - LOG: retry messages logged ("waiting Ns before retry (attempt M of 3)")
 ```
 
 ### Invariants
-1. **Retry count:** Exactly 3 attempts for MCP transport failures; 1 attempt for backend compat failures (no retry)
+1. **Retry count:** Exactly 3 attempts for MCP transport failures; 1 attempt for backend compat or credit exhaustion failures (no retry)
 2. **Delay schedule:** Attempt 1 = 0s, attempt 2 = 60s, attempt 3 = 300s (fixed, not configurable; only applies to MCP transport path)
 3. **Early exit:** If attempt N succeeds (rc=0, TMP_REVIEW non-empty, all three section headers present), return 0 immediately
-4. **Telltale precedence:** `compat_re` is checked before `mcp_re` on every attempt; a compat match returns 3 immediately without retry
-5. **Return code semantics:** Return 3 = backend compat (compat_re match); return 2 = MCP transport (mcp_re match, all 3 retries exhausted); return 1 = any other failure including structurally-invalid output
+4. **Telltale precedence:** `compat_re` checked first, then `credits_re`, then `mcp_re`; compat match returns 3, credits match returns 4, both without retry
+5. **Return code semantics:** Return 3 = backend compat (compat_re match); return 4 = credit exhaustion (credits_re match); return 2 = MCP transport (mcp_re match, all 3 retries exhausted); return 1 = any other failure including structurally-invalid output
 6. **TMP file zeroing:** Each attempt zeros TMP_REVIEW and TMP_CODEX_FULL before invoking codex
 
 ### Error model
@@ -101,6 +106,7 @@ codex_review_with_retry "<codex_prompt>"
 - **Codex exit code 0, TMP_REVIEW non-empty, section header(s) missing:** Structurally invalid output, return 1 (no retry)
 - **Codex exit code 0, TMP_REVIEW empty:** Treat as failure, check telltales
 - **Any exit code, `compat_re` match:** Backend compatibility failure, return 3 immediately (no retry)
+- **Any exit code, `credits_re` match:** Workspace credit exhaustion, return 4 immediately (no retry)
 - **Codex exit code non-zero, `mcp_re` match:** MCP transport failure, retry (or return 2 if last attempt)
 - **Codex exit code non-zero, no telltale match:** Non-transport failure, return 1 (no retry)
 - **All 3 attempts fail with `mcp_re` match:** Return 2
@@ -147,7 +153,10 @@ Function is internal to script; no versioning. Breaking changes (retry count, de
 - **`mcp_re` mismatch (false positive):** Non-transport error matched as MCP, retried unnecessarily. Blast: wasted time and API cost (up to 3× Codex inference).
 - **`compat_re` mismatch (false negative):** Version incompatibility not detected, falls through to return 1. Blast: PR labeled `review-incomplete` instead of `review-codex-outdated`; operator gets no upgrade signal; babysitter continues burning cycles on subsequent PRs.
 - **`compat_re` mismatch (false positive):** Non-compat error matched, babysitter halts unnecessarily. Blast: all queued PRs stalled until operator investigates.
+- **`credits_re` mismatch (false negative):** Credit exhaustion not detected, falls through to return 1. Blast: PR labeled `review-incomplete` instead of `review-codex-no-credits`; operator gets no actionable signal; babysitter burns subsequent PRs with the same error. Root cause of the 2026-06-28 incident (PRs #160–#166 mislabelled).
+- **`credits_re` mismatch (false positive):** A code review mentioning "Your workspace is out of credits" (verbatim) triggers halt. Blast: babysitter halts unnecessarily. Pattern is anchored to the exact Codex error message to minimise this risk.
 - **Backend compat failure (return 3):** Codex CLI too old for configured model. Blast: all review cycles in the run fail. Caller must halt babysitter and label PR `review-codex-outdated`.
+- **Credit exhaustion (return 4):** Codex workspace has no credits. Blast: all review cycles in the run fail. Caller must halt babysitter and label PR `review-codex-no-credits`.
 - **Structurally-invalid output (return 1):** Codex exits 0 with non-review content (error message, deprecation warning). Blast: PR labeled `review-incomplete`; no false-clean merge.
 - **Perf regression (Codex latency spike):** Retry delays compound latency. Blast: review cycle slows, may exhaust MAX_REVIEW_CYCLES.
 - **Telemetry loss (log write failure):** Retry messages not logged. Blast: debugging harder if issue occurs.
@@ -157,7 +166,7 @@ Function is internal to script; no versioning. Breaking changes (retry count, de
 ## Out of scope
 - **Out-of-feature behaviors:**
   - Codex prompt assembly (handled by review cycle caller)
-  - PR labeling (`review-mcp-outage`, `review-codex-outdated` applied by caller, not this function)
+  - PR labeling (`review-mcp-outage`, `review-codex-outdated`, `review-codex-no-credits` applied by caller, not this function)
   - Dynamic retry policy (no adaptive backoff, no jitter)
   - **Codex pre-flight version probe** — owned by ARLO-FEAT-REVIEW-CYCLE; this function detects compat failures at invocation time but does not pre-probe before the review cycle starts
 - **Capacity limits:**
@@ -193,6 +202,8 @@ Function is internal to script; no versioning. Breaking changes (retry count, de
 8. **Given** attempt 3 fails with `mcp_re` match, **when** function returns, **then** log message "MCP transport failure on attempt 3 of 3 (rc=N, review=empty)" appears.
 9. **Given** Codex output contains `requires a newer version of Codex` (`compat_re` match), **when** function is called, **then** return 3 immediately on attempt 1 (no retry, no 60s wait).
 10. **Given** TMP_CODEX_FULL contains both `compat_re` and `mcp_re` matches (hypothetical), **when** function checks, **then** `compat_re` fires first and returns 3 (compat takes priority).
+13. **Given** Codex output contains `Your workspace is out of credits` (`credits_re` match), **when** function is called, **then** return 4 immediately (no retry).
+14. **Given** TMP_CODEX_FULL contains both `credits_re` and `mcp_re` matches (hypothetical), **when** function checks, **then** `credits_re` fires first and returns 4 (credits checked before mcp_re).
 11. **Given** Codex exits 0, TMP_REVIEW is non-empty but missing `## RECOMMENDED` header, **when** function checks, **then** return 1 (structural validation failure, no retry).
 12. **Given** Codex exits 0, TMP_REVIEW contains all three section headers, **when** function checks, **then** return 0 (positive structural validation passes).
 

@@ -24,10 +24,11 @@
 # scan retries the labelled PR automatically before running claude.
 # `review-incomplete` = human action required; `review-mcp-outage` = auto-retry.
 # `review-codex-outdated` = Codex CLI too old for model; upgrade CLI then remove label.
+# `review-codex-no-credits` = Codex workspace out of credits; add credits then remove label.
 
 set -uo pipefail
 
-VERSION="1.0.0"
+VERSION="1.0.1"
 
 usage() {
   cat <<'EOF'
@@ -57,6 +58,8 @@ PR labels used by the review cycle:
                          automatically at the top of each outer iteration.
   review-codex-outdated  Codex CLI is too old for the configured model; run
                          \`codex update\`, remove this label, then restart.
+  review-codex-no-credits  Codex workspace has no credits; add credits, remove
+                           this label, then restart.
 
 Logs land in ~/sisyphus-logs/<project>-<timestamp>-<pid>.log.
 
@@ -152,7 +155,7 @@ Pick the next unit of work in this priority order — stop at the first level th
 
    SKIP any PR whose STATE is `draft` or `BLOCKED` in the prs table (or `isDraft: true` / labels include `review-incomplete` in the JSON). These PRs were marked by a previous review cycle as needing human intervention — re-attempting them wastes iterations. Move on to item 2.
 
-   Also SKIP PRs labelled `review-mcp-outage` — these are managed by the wrapper itself, which will retry the codex review cycle automatically at the top of each iteration when the MCP backend recovers. Do not touch them.
+   Also SKIP PRs labelled `review-mcp-outage` or `review-codex-no-credits` — these are managed by the wrapper itself and require operator action before the review cycle can proceed. Do not touch them.
 2. Open issues you can complete in one iteration. See open issues in the project state above. Pick the highest-priority one that fits the scope discipline below.
 3. Approved specs with no implementation. See specs in the project state above — look for rows where IMPL is `no` or `?`. Scaffold the next missing piece — project skeleton, an interface stub, the first integration test, etc.
 4. Proto definitions without consumers. Files under ./proto/ that no service implements. Generate stubs or wire a service skeleton that consumes them.
@@ -864,6 +867,47 @@ To resume: upgrade the Codex CLI (\`codex update\`), then remove the \`review-co
     || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
 }
 
+# Mark a PR as stalled by Codex workspace credit exhaustion.
+# Operator must add credits to the Codex workspace, remove the label, and restart.
+# Args: <pr_num> <reason_string>
+# Safety commands (ready --undo, edit --add-label) are fail-closed: gh failure → exit 1.
+# Notification commands (label create, pr comment) are best-effort.
+fail_review_cycle_codex_no_credits() {
+  local pr_num="$1"
+  local reason="$2"
+
+  echo "  [review] Codex workspace out of credits for PR #$pr_num: $reason" | tee -a "$LOG" >&2
+
+  gh label create review-codex-no-credits \
+    --color d93f0b \
+    --description "Babysit codex review stalled: workspace out of credits; add credits then remove label" \
+    --force >>"$LOG" 2>&1 || true
+
+  # Fail-closed: if we can't draft the PR, halt — it must not remain mergeable.
+  if ! gh pr ready "$pr_num" --undo >>"$LOG" 2>&1; then
+    echo "ERROR: gh pr ready --undo failed for PR #$pr_num — PR may still be mergeable; manually quarantine before restarting" | tee -a "$LOG" >&2
+    exit 1
+  fi
+
+  # Fail-closed: if we can't label the PR, halt — it must not remain unlabelled.
+  if ! gh pr edit "$pr_num" --add-label review-codex-no-credits >>"$LOG" 2>&1; then
+    echo "ERROR: gh pr edit --add-label failed for PR #$pr_num — PR may be unlabelled; manually add 'review-codex-no-credits' before restarting" | tee -a "$LOG" >&2
+    exit 1
+  fi
+
+  local body
+  body="**babysit-with-review: Codex workspace out of credits — review blocked**
+
+Reason: ${reason}
+
+The Codex workspace has no credits remaining. No code-quality review took place.
+
+To resume: add credits to the Codex workspace, then remove the \`review-codex-no-credits\` label and restart the babysitter."
+  printf '%s\n' "$body" \
+    | gh pr comment "$pr_num" --body-file - >>"$LOG" 2>&1 \
+    || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
+}
+
 # Run codex exec with retry on MCP transport failures.
 # Uses $TMP_REVIEW (must be zeroed by caller) for the output-last-message file.
 # Uses $TMP_CODEX_FULL for the combined codex output (used for telltale detection).
@@ -878,11 +922,13 @@ To resume: upgrade the Codex CLI (\`codex update\`), then remove the \`review-co
 #         invalid output, etc.).
 #   2 — codex MCP transport failure; all retries exhausted.
 #   3 — backend compatibility failure; Codex CLI too old for configured model (no retry).
+#   4 — Codex workspace out of credits; no retry.
 codex_review_with_retry() {
   local codex_prompt="$1"
   local attempt
   local delays=(0 60 300)
   local compat_re='requires a newer version of Codex'
+  local credits_re='Your workspace is out of credits'
   # Telltale patterns for MCP transport failures. Update if Codex changes its error format.
   # Monitored via the MCP outage rate KPI (see L3-mcp-resilience.md kill criteria: >30% → find alternative reviewer).
   local mcp_re='Transport send error:|tool call error: tool call failed for `codex_apps/|error sending request for url \(https://chatgpt\.com/'
@@ -906,6 +952,12 @@ codex_review_with_retry() {
     if grep -qE "$compat_re" "$TMP_CODEX_FULL" 2>/dev/null; then
       echo "  [codex] FATAL: backend compatibility failure on attempt $attempt (rc=$rc); Codex CLI is too old for the configured model" | tee -a "$LOG" >&2
       return 3
+    fi
+
+    # Credits check: workspace exhausted → return 4, no retry.
+    if grep -qE "$credits_re" "$TMP_CODEX_FULL" 2>/dev/null; then
+      echo "  [codex] FATAL: Codex workspace out of credits on attempt $attempt (rc=$rc); add credits and restart" | tee -a "$LOG" >&2
+      return 4
     fi
 
     # Structural validation: require all three section headers before treating as success.
@@ -950,10 +1002,11 @@ run_review_cycle() {
     return 0
   fi
 
-  # Pre-flight compat probe: verify Codex CLI is compatible with the configured
-  # model before checking out the PR branch. A version mismatch means every
-  # review in this run will fail; detect it here and halt rather than burning cycles.
+  # Pre-flight probe: verify Codex CLI is compatible and workspace has credits before
+  # checking out the PR branch. A mismatch here means every review in this run will
+  # fail; detect it here and halt rather than burning cycles.
   local compat_re='requires a newer version of Codex'
+  local credits_re='Your workspace is out of credits'
   local _probe_full
   _probe_full=$(mktemp)
   local _probe_rc=0
@@ -966,6 +1019,12 @@ run_review_cycle() {
     rm -f "$_probe_full"
     fail_review_cycle_codex_outdated "$pr_num" "Codex pre-flight probe: CLI too old for configured model"
     return 3
+  fi
+  if grep -qE "$credits_re" "$_probe_full" 2>/dev/null; then
+    echo "  [review] FATAL: Codex workspace out of credits (pre-flight probe for PR #$pr_num); add credits before restarting" | tee -a "$LOG" >&2
+    rm -f "$_probe_full"
+    fail_review_cycle_codex_no_credits "$pr_num" "Codex pre-flight probe: workspace out of credits"
+    return 4
   fi
   rm -f "$_probe_full"
   if [ "$_probe_rc" -ne 0 ]; then
@@ -1055,11 +1114,14 @@ ${_hb}--- end prior review cycles ---
     if [ "$codex_rc" -eq 3 ]; then
       fail_review_cycle_codex_outdated "$pr_num" "Codex CLI version incompatibility during review (cycle $cycle)"
       return 3
+    elif [ "$codex_rc" -eq 4 ]; then
+      fail_review_cycle_codex_no_credits "$pr_num" "Codex workspace out of credits during review (cycle $cycle)"
+      return 4
     elif [ "$codex_rc" -eq 2 ]; then
       fail_review_cycle_mcp "$pr_num" "codex MCP transport failure after 3 retries (cycle $cycle)"
       return 2
     elif [ "$codex_rc" -ne 0 ]; then
-      echo "  [codex] non-MCP failure; bailing review cycle" | tee -a "$LOG" >&2
+      echo "  [codex] non-transport failure; bailing review cycle" | tee -a "$LOG" >&2
       fail_review_cycle "$pr_num" "codex exec failed (non-transport) during cycle $cycle"
       return 0
     fi
@@ -1376,6 +1438,7 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
       case "$_rc" in
         2) echo "Halting: codex MCP outage persists for PR #$_mcp_pr; retries exhausted. See $LOG" | tee -a "$LOG" >&2 ;;
         3) echo "Halting: Codex version incompatibility for PR #$_mcp_pr; upgrade CLI before restarting. See $LOG" | tee -a "$LOG" >&2 ;;
+        4) echo "Halting: Codex workspace out of credits for PR #$_mcp_pr; add credits then remove label and restart. See $LOG" | tee -a "$LOG" >&2 ;;
         *) echo "Halting: review cycle returned unexpected rc=$_rc for PR #$_mcp_pr. See $LOG" | tee -a "$LOG" >&2 ;;
       esac
       break
@@ -1481,6 +1544,7 @@ ${BASE_PROMPT}"
           case "$_rc" in
             2) echo "Halting: codex MCP transport outage on PR #$pr_num; retries exhausted. See $LOG" | tee -a "$LOG" >&2 ;;
             3) echo "Halting: Codex version incompatibility on PR #$pr_num; upgrade CLI before restarting. See $LOG" | tee -a "$LOG" >&2 ;;
+            4) echo "Halting: Codex workspace out of credits on PR #$pr_num; add credits then remove label and restart. See $LOG" | tee -a "$LOG" >&2 ;;
             *) echo "Halting: review cycle returned unexpected rc=$_rc for PR #$pr_num. See $LOG" | tee -a "$LOG" >&2 ;;
           esac
           break
