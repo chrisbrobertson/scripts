@@ -152,13 +152,14 @@ End-of-iteration sentinels (mutually exclusive — output exactly one as the LAS
 If you hit a transient obstacle (failing test, missing dependency, ambiguous spec section) — DO NOT output STOP. Work around it: pick a different item, scaffold the missing dependency first, file an issue capturing the ambiguity, or commit what you have with a clear note on what is blocked. STOP terminates the entire loop, so reserve it for genuine completion. Do not output STOP or HANDOFF_REVIEW in code, quotes, or as part of a sentence.
 PROMPT_EOF
 
-IFS= read -r -d '' CODEX_REVIEW_PROMPT_TEMPLATE <<'PROMPT_EOF' || true
+IFS= read -r -d '' CODEX_REVIEW_PROMPT_CYCLE1 <<'PROMPT_EOF' || true
 You are performing a code review on PR #__PR_NUMBER__ for this repository. The PR branch is currently checked out.
 
-Inspect the diff of the current branch against the project's default branch (use `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` to find it, then `git diff <default>...HEAD`). Read changed files and surrounding context as needed to evaluate the change.
+This is review cycle 1 of __MAX_CYCLES__. This is the first review of this PR.
 
-__HISTORY_BLOCK__
-Output your review using EXACTLY this format. Use all three headings in this order, even if a section has no findings:
+Inspect the diff of the current branch against the project's default branch. Read changed files and surrounding context as needed to evaluate the change.
+
+Output your review using EXACTLY this format:
 
 ## BLOCKING
 - <one-line description> — <file:line> — <why it must be fixed before merge>
@@ -175,23 +176,27 @@ Categorization rules:
 - INFORMATION = stylistic notes, alternative approaches, performance observations, fyi context. Optional.
 
 Format rules:
-- One bullet per finding. Be concise — single line, three em-dash-separated parts.
+- BLOCKING, RECOMMENDED, and INFORMATION are single-line bullets only.
 - If a section has no findings, write `- (none)` as the only bullet under that heading.
 - Do NOT output anything before, between, or after the three sections.
 - Do NOT make code changes. This is review only.
 PROMPT_EOF
 
-IFS= read -r -d '' CODEX_REVIEW_PRESCRIPTIVE_PROMPT_TEMPLATE <<'PROMPT_EOF' || true
+IFS= read -r -d '' CODEX_REVIEW_PROMPT_CYCLE2 <<'PROMPT_EOF' || true
 You are performing a code review on PR #__PR_NUMBER__ for this repository. The PR branch is currently checked out.
 
-Inspect the diff of the current branch against the project's default branch (use `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` to find it, then `git diff <default>...HEAD`). Read changed files and surrounding context as needed to evaluate the change.
+This is review cycle 2 of __MAX_CYCLES__. The previous cycle did not fully resolve BLOCKING issues.
 
+Inspect the diff of the current branch against the project's default branch. Read changed files and surrounding context as needed to evaluate the change.
+
+--- cycle history begin ---
 __HISTORY_BLOCK__
-Output your review using EXACTLY this format. Use all three headings in this order, even if a section has no findings:
+--- cycle history end ---
+
+Output your review using EXACTLY this format:
 
 ## BLOCKING
-- <one-line description> — <file:line> — <why it must be fixed before merge>
-  Suggested fix: <concrete code change — show the exact replacement or patch sketch, not a description of intent>
+- [NEW|RECURRENCE] <one-line description> — <file:line> — <why it must be fixed before merge>
 
 ## RECOMMENDED
 - <one-line description> — <file:line> — <why it should be addressed>
@@ -204,43 +209,310 @@ Categorization rules:
 - RECOMMENDED = quality improvements, missed edge cases, better patterns, doc gaps, error-handling gaps. Should be addressed but not strictly blocking.
 - INFORMATION = stylistic notes, alternative approaches, performance observations, fyi context. Optional.
 
+Convergence tracking:
+- Mark each BLOCKING finding with [NEW] if it was not flagged in previous cycles, or [RECURRENCE] if it was flagged before but remains unresolved.
+
 Format rules:
-- One bullet per finding. BLOCKING bullets require a second indented line: `  Suggested fix: <exact replacement>`. If you cannot produce a concrete fix, downgrade the finding to RECOMMENDED.
+- BLOCKING bullets start with [NEW|RECURRENCE] tag, followed by single-line description.
+- RECOMMENDED and INFORMATION are single-line bullets only (no tags).
+- If a section has no findings, write `- (none)` as the only bullet under that heading.
+- Do NOT output anything before, between, or after the three sections.
+- Do NOT make code changes. This is review only.
+PROMPT_EOF
+
+IFS= read -r -d '' CODEX_REVIEW_PROMPT_CYCLE3_4 <<'PROMPT_EOF' || true
+You are performing a code review on PR #__PR_NUMBER__ for this repository. The PR branch is currently checked out.
+
+This is review cycle __CYCLE__ of __MAX_CYCLES__. Multiple previous cycles have not resolved BLOCKING issues. This cycle uses prescriptive mode with detailed explanations.
+
+Inspect the diff of the current branch against the project's default branch. Read changed files and surrounding context as needed to evaluate the change.
+
+--- cycle history begin ---
+__HISTORY_BLOCK__
+--- cycle history end ---
+
+Output your review using EXACTLY this format:
+
+## BLOCKING
+- [NEW|RECURRENCE] <one-line description> — <file:line> — <why it must be fixed before merge>
+  Suggested fix: <concrete code change — show the exact replacement or patch sketch>
+  Root cause: <why this gap exists — when/how introduced, what changed>
+  Architectural context: <how this component fits into the system, what boundaries it enforces>
+  Impact: <what breaks if not fixed — user-facing symptoms, error rates, affected flows>
+
+## RECOMMENDED
+- <one-line description> — <file:line> — <why it should be addressed>
+
+## INFORMATION
+- <one-line description> — <file:line> — <context, suggestion, or fyi>
+
+Categorization rules:
+- BLOCKING = correctness bugs, security issues, broken tests, build failures, contract violations, broken invariants — anything that should not merge.
+- RECOMMENDED = quality improvements, missed edge cases, better patterns, doc gaps, error-handling gaps. Should be addressed but not strictly blocking.
+- INFORMATION = stylistic notes, alternative approaches, performance observations, fyi context. Optional.
+
+Prescriptive mode requirements:
+- Each BLOCKING finding MUST include all four parts: suggested fix, root cause, architectural context, impact.
+- If you cannot produce all four parts for a finding, downgrade it to RECOMMENDED.
+- Suggested fix must be concrete code showing the exact change needed.
+
+Convergence tracking:
+- Mark each BLOCKING finding with [NEW] if it was not flagged in previous cycles, or [RECURRENCE] if it was flagged before but remains unresolved.
+
+Format rules:
+- BLOCKING bullets are multi-line with four required sub-bullets (suggested fix, root cause, architectural context, impact).
 - RECOMMENDED and INFORMATION are single-line bullets only.
 - If a section has no findings, write `- (none)` as the only bullet under that heading.
 - Do NOT output anything before, between, or after the three sections.
 - Do NOT make code changes. This is review only.
 PROMPT_EOF
 
-IFS= read -r -d '' CLAUDE_REVIEW_PROMPT_TEMPLATE <<'PROMPT_EOF' || true
-A code review on PR #__PR_NUMBER__ has produced the findings below, along with any existing feedback on the PR from automated tools (such as CodeRabbit) and human reviewers.
+IFS= read -r -d '' CODEX_REVIEW_PROMPT_CYCLE5_6 <<'PROMPT_EOF' || true
+You are performing a code review on PR #__PR_NUMBER__ for this repository. The PR branch is currently checked out.
 
-You MUST action every BLOCKING finding before this PR can merge. Treat any actionable issues in the existing PR feedback (bugs, security problems, correctness failures) with the same BLOCKING priority regardless of source.
-You SHOULD action every RECOMMENDED finding (if you skip one, note the reason in the commit message).
-You may CONSIDER each INFORMATION finding — apply if clearly beneficial, otherwise ignore.
+This is review cycle __CYCLE__ of __MAX_CYCLES__. Multiple previous cycles have not resolved BLOCKING issues. Claude posted resolution justifications for the previous cycle's findings. You must adjudicate those justifications AND review the current code state.
 
-Scope discipline — read before making any changes:
-- Make minimal, targeted changes. Do NOT refactor adjacent code, rename, or tidy unrelated style while in the file.
-- Each finding gets its own commit. Run the relevant tests after each fix; do not batch fixes.
-- Before outputting DONE_REVIEW, run the full test/lint suite once more and verify your edits introduced no new surface (new untested branches, new files, changed signatures) beyond what the finding required.
-- Resist "improving" code Codex did not flag — last cycle's clean code is next cycle's risk surface.
+Inspect the diff of the current branch against the project's default branch. Read changed files and surrounding context as needed to evaluate the change.
 
-For each finding you action:
-1. Make the change.
-2. Run the relevant tests; fix any failures introduced.
-3. Commit with a message that names the finding category and what changed
-   (e.g. "fix(blocking): handle nil session in auth middleware").
-4. Push to the PR branch when done with this batch.
+--- cycle history begin ---
+__HISTORY_BLOCK__
+--- cycle history end ---
+
+--- Claude's resolution justifications (from previous cycle) begin ---
+__JUSTIFICATIONS__
+--- Claude's resolution justifications end ---
+
+You have two responsibilities this cycle:
+
+RESPONSIBILITY 1: Adjudicate Claude's resolution justifications.
+For each justification Claude posted, you must respond:
+- If Claude claimed a finding is "resolved": examine the referenced commit and the current code. Either the fix genuinely addresses the root cause and architectural constraints, or it does not.
+- If Claude claimed a finding is "invalid": evaluate the reasoning and the cited supporting reference. Either the reference proves the finding incorrect, or it does not.
+
+RESPONSIBILITY 2: Review the current code state for any remaining or new issues (same as previous cycles).
+
+Output your review using EXACTLY this format:
+
+## ADJUDICATION
+- BLOCKING <one-line finding from previous cycle>: ACCEPTED — <one-line confirmation that the fix/invalidity argument is sound>
+- BLOCKING <one-line finding from previous cycle>: DISAGREED — <reasoned explanation with code-level evidence of why the fix does not resolve the issue or why the finding remains valid>
+
+## BLOCKING
+- [NEW|RECURRENCE] <one-line description> — <file:line> — <why it must be fixed before merge>
+  Suggested fix: <concrete code change — show the exact replacement or patch sketch>
+  Root cause: <why this gap exists — when/how introduced, what changed>
+  Architectural context: <how this component fits into the system, what boundaries it enforces>
+  Impact: <what breaks if not fixed — user-facing symptoms, error rates, affected flows>
+
+## RECOMMENDED
+- <one-line description> — <file:line> — <why it should be addressed>
+
+## INFORMATION
+- <one-line description> — <file:line> — <context, suggestion, or fyi>
+
+Categorization rules:
+- BLOCKING = correctness bugs, security issues, broken tests, build failures, contract violations, broken invariants — anything that should not merge.
+- RECOMMENDED = quality improvements, missed edge cases, better patterns, doc gaps, error-handling gaps. Should be addressed but not strictly blocking.
+- INFORMATION = stylistic notes, alternative approaches, performance observations, fyi context. Optional.
+
+Adjudication rules:
+- You MUST adjudicate every justification Claude posted. No justification may be silently ignored.
+- ACCEPTED means you agree the finding is resolved or invalid — it will not recur in future reviews.
+- DISAGREED means the finding remains unresolved — it MUST appear in your BLOCKING section as [RECURRENCE] with an updated suggested fix that addresses your counter-argument.
+- Your disagreement must include specific code-level evidence (file:line references, logic traces, or behavioral analysis). Generic disagreements ("this doesn't look right") are not acceptable.
+
+Prescriptive mode requirements:
+- Each BLOCKING finding MUST include all four parts: suggested fix, root cause, architectural context, impact.
+- If you cannot produce all four parts for a finding, downgrade it to RECOMMENDED.
+- Suggested fix must be concrete code showing the exact change needed.
+
+Convergence tracking:
+- Mark each BLOCKING finding with [NEW] if it was not flagged in previous cycles, or [RECURRENCE] if it was flagged before but remains unresolved.
+
+Format rules:
+- ADJUDICATION section comes first, before BLOCKING/RECOMMENDED/INFORMATION.
+- BLOCKING bullets are multi-line with four required sub-bullets (suggested fix, root cause, architectural context, impact).
+- RECOMMENDED and INFORMATION are single-line bullets only.
+- If a section has no findings, write `- (none)` as the only bullet under that heading.
+- Do NOT make code changes. This is review only.
+PROMPT_EOF
+
+IFS= read -r -d '' CLAUDE_REVIEW_PROMPT_CYCLE1 <<'PROMPT_EOF' || true
+A code review on PR #__PR_NUMBER__ has produced the findings below, along with existing feedback from automated tools and human reviewers.
+
+This is review cycle 1 of __MAX_CYCLES__. This is the first review of this PR.
+
+You MUST action every BLOCKING finding before this PR can merge. Treat actionable issues in existing PR feedback with the same BLOCKING priority.
+
+Implementation:
+- Address all BLOCKING findings with minimal, targeted changes.
+- Run relevant tests after each fix.
+- Commit each fix separately using standard format: fix(<scope>): <what changed>
+- Push commits to PR branch when complete.
+
+Scope discipline:
+- Make minimal, targeted changes. Do NOT refactor adjacent code unless required by a finding.
+- Each finding gets its own commit.
+- Before outputting DONE_REVIEW, run the full test suite and verify no new surface introduced.
 
 End your final message with EXACTLY ONE of these sentinels on its own line:
+- DONE_REVIEW (you have addressed everything you intend to address)
+- STUCK_REVIEW <one-line reason> (you cannot proceed)
 
-- DONE_REVIEW
-  You have addressed everything you intend to address in this pass. The wrapper will run another codex review.
+--- existing PR feedback begin ---
+__PR_FEEDBACK__
+--- existing PR feedback end ---
 
-- STUCK_REVIEW <one-line reason>
-  You cannot proceed (e.g. missing dependency, contradictory finding, environment issue). The wrapper will exit the review cycle.
+--- codex review begin ---
+__REVIEW__
+--- codex review end ---
+PROMPT_EOF
 
-Do not output STOP or HANDOFF_REVIEW — those belong to the outer loop.
+IFS= read -r -d '' CLAUDE_REVIEW_PROMPT_CYCLE2_3 <<'PROMPT_EOF' || true
+A code review on PR #__PR_NUMBER__ has produced the findings below, along with existing feedback from automated tools and human reviewers.
+
+This is review cycle __CYCLE__ of __MAX_CYCLES__. The previous cycle(s) did not fully resolve BLOCKING issues.
+
+You MUST action every BLOCKING finding before this PR can merge. Treat actionable issues in existing PR feedback with the same BLOCKING priority.
+
+**CRITICAL: Use plan mode before implementing.**
+
+Step 1: Enter plan mode to create an implementation plan:
+  - Analyze all BLOCKING findings and their dependencies
+  - Determine the correct order to address them (some fixes may depend on others)
+  - Identify any cross-finding interactions or shared root causes
+  - Document trade-offs and alternatives for non-obvious decisions
+  - Output the plan for review before proceeding
+
+Step 2: Execute the plan:
+  - Implement each step sequentially
+  - Run relevant tests after each fix
+  - Commit each fix separately with this format:
+    fix(<scope>): <what changed>
+
+    Why: <rationale explaining trade-offs, alternatives considered, constraints>
+    Impact: <failure mode addressed — metrics or observability>
+  - Push commits to PR branch when complete
+
+Scope discipline:
+- Make minimal, targeted changes. Do NOT refactor adjacent code unless required by a finding.
+- Each finding gets its own commit.
+- Before outputting DONE_REVIEW, run the full test suite and verify no new surface introduced.
+
+End your final message with EXACTLY ONE of these sentinels on its own line:
+- DONE_REVIEW (you have addressed everything you intend to address)
+- STUCK_REVIEW <one-line reason> (you cannot proceed)
+
+--- existing PR feedback begin ---
+__PR_FEEDBACK__
+--- existing PR feedback end ---
+
+--- codex review begin ---
+__REVIEW__
+--- codex review end ---
+PROMPT_EOF
+
+IFS= read -r -d '' CLAUDE_REVIEW_PROMPT_CYCLE4 <<'PROMPT_EOF' || true
+A code review on PR #__PR_NUMBER__ has produced the findings below, along with existing feedback from automated tools and human reviewers.
+
+This is review cycle 4 of __MAX_CYCLES__. Multiple previous cycles have not resolved BLOCKING issues.
+
+You MUST action every BLOCKING finding before this PR can merge. Treat actionable issues in existing PR feedback with the same BLOCKING priority.
+
+**CRITICAL: Use plan mode before implementing.**
+
+Step 1: Enter plan mode to create an implementation plan:
+  - Analyze all BLOCKING findings and their dependencies
+  - Determine the correct order to address them (some fixes may depend on others)
+  - Identify any cross-finding interactions or shared root causes
+  - Document trade-offs and alternatives for non-obvious decisions
+  - Output the plan for review before proceeding
+
+Step 2: Execute the plan:
+  - Implement each step sequentially
+  - Run relevant tests after each fix
+  - Commit each fix separately with this format:
+    fix(<scope>): <what changed>
+
+    Why: <rationale explaining trade-offs, alternatives considered, constraints>
+    Impact: <failure mode addressed — metrics or observability>
+  - Push commits to PR branch when complete
+
+Step 3: Post resolution justification as PR comment:
+  For EACH BLOCKING finding in the Codex review, you must post a comment explaining:
+  - If resolved: "BLOCKING <one-line finding description> resolved in commit <SHA>. Why this resolves it: <specific explanation of how your change addresses the root cause identified by Codex and satisfies the architectural constraints>"
+  - If invalid: "BLOCKING <one-line finding description> is invalid. Reason: <explanation>. Supporting reference: <link to spec/docs/validated source proving the finding is incorrect>"
+
+  Use `gh pr comment __PR_NUMBER__ --body "<text>"` to post the justification.
+
+Scope discipline:
+- Make minimal, targeted changes. Do NOT refactor adjacent code unless required by a finding.
+- Each finding gets its own commit.
+- Before Step 3, run the full test suite and verify no new surface introduced.
+- Step 3 is MANDATORY before DONE_REVIEW.
+
+End your final message with EXACTLY ONE of these sentinels on its own line:
+- DONE_REVIEW (you have addressed everything you intend to address AND posted resolution justifications)
+- STUCK_REVIEW <one-line reason> (you cannot proceed)
+
+--- existing PR feedback begin ---
+__PR_FEEDBACK__
+--- existing PR feedback end ---
+
+--- codex review begin ---
+__REVIEW__
+--- codex review end ---
+PROMPT_EOF
+
+IFS= read -r -d '' CLAUDE_REVIEW_PROMPT_CYCLE5_6 <<'PROMPT_EOF' || true
+A code review on PR #__PR_NUMBER__ has produced the findings below, along with existing feedback from automated tools and human reviewers.
+
+This is review cycle __CYCLE__ of __MAX_CYCLES__. Multiple previous cycles have not resolved BLOCKING issues. Codex has adjudicated your previous resolution justifications.
+
+You MUST action every BLOCKING finding before this PR can merge. Treat actionable issues in existing PR feedback with the same BLOCKING priority.
+
+**CRITICAL: Process the ADJUDICATION section first, then use plan mode for remaining work.**
+
+Step 1: Process Codex adjudication results:
+  - For each ACCEPTED item: the finding is resolved. No further action needed.
+  - For each DISAGREED item: Codex has provided a reasoned counter-argument with code evidence. You must either:
+    (a) Implement a different fix that specifically addresses Codex's counter-argument, OR
+    (b) If you believe Codex's counter-argument is itself incorrect, report via STUCK_REVIEW with the specific finding, Codex's argument, and why you disagree (this escalates to human review).
+
+Step 2: Enter plan mode to create an implementation plan for all remaining BLOCKING findings:
+  - Include all DISAGREED items that you will re-address (from Step 1a)
+  - Include all new BLOCKING findings from the current review
+  - Determine the correct order to address them
+  - Document trade-offs and alternatives for non-obvious decisions
+  - Output the plan for review before proceeding
+
+Step 3: Execute the plan:
+  - Implement each step sequentially
+  - Run relevant tests after each fix
+  - Commit each fix separately with this format:
+    fix(<scope>): <what changed>
+
+    Why: <rationale explaining trade-offs, alternatives considered, constraints>
+    Impact: <failure mode addressed — metrics or observability>
+  - Push commits to PR branch when complete
+
+Step 4: Post resolution justification as PR comment:
+  For EACH BLOCKING finding (including DISAGREED items you re-addressed), post a comment explaining:
+  - If resolved: "BLOCKING <one-line finding description> resolved in commit <SHA>. Why this resolves it: <specific explanation of how your change addresses the root cause identified by Codex and satisfies the architectural constraints>"
+  - If invalid: "BLOCKING <one-line finding description> is invalid. Reason: <explanation>. Supporting reference: <link to spec/docs/validated source proving the finding is incorrect>"
+  - If re-addressed after disagreement: "BLOCKING <one-line finding description> re-addressed after Codex disagreement. Previous fix was insufficient because: <acknowledge Codex's point>. New fix in commit <SHA>: <explanation of how new approach resolves Codex's concern>"
+
+  Use `gh pr comment __PR_NUMBER__ --body "<text>"` to post the justification.
+
+Scope discipline:
+- Make minimal, targeted changes. Do NOT refactor adjacent code unless required by a finding.
+- Each finding gets its own commit.
+- Before Step 4, run the full test suite and verify no new surface introduced.
+- Step 4 is MANDATORY before DONE_REVIEW.
+
+End your final message with EXACTLY ONE of these sentinels on its own line:
+- DONE_REVIEW (you have addressed everything you intend to address AND posted resolution justifications)
+- STUCK_REVIEW <one-line reason> (you cannot proceed — use this if Codex's disagreement is itself incorrect and needs human review)
 
 --- existing PR feedback begin ---
 __PR_FEEDBACK__
@@ -520,6 +792,7 @@ run_review_cycle() {
   local cycle=0
   local review_start_sha=""
   local -a REVIEW_HISTORY=()
+  local justifications=""
 
   echo "=== review handoff: PR #$pr_num @ $(date -u +%FT%TZ) ===" | tee -a "$LOG" >&2
 
@@ -561,8 +834,6 @@ ${REVIEW_HISTORY[$_i]}
       _hb="${_hb}--- commits Claude made since review cycle started ---
 ${_commits:-"(none)"}
 --- end commits ---
-
-For each BLOCKING and RECOMMENDED finding, prefix the bullet with [NEW] if the issue is introduced by code added during this review cycle (the commits above), or [RECURRENCE] if substantively the same issue appears in a prior-cycle review above.
 "
       history_block="--- prior review cycles (for convergence tracking) ---
 ${_hb}--- end prior review cycles ---
@@ -570,22 +841,39 @@ ${_hb}--- end prior review cycles ---
       unset _hb _i _commits
     fi
 
-    # Select template: descriptive for cycles 1-2, prescriptive for cycle 3+.
+    # Select Codex template by cycle number.
     local _tmpl
-    if [ "$cycle" -ge 3 ]; then
-      _tmpl="$CODEX_REVIEW_PRESCRIPTIVE_PROMPT_TEMPLATE"
+    if [ "$cycle" -eq 1 ]; then
+      _tmpl="$CODEX_REVIEW_PROMPT_CYCLE1"
+    elif [ "$cycle" -eq 2 ]; then
+      _tmpl="$CODEX_REVIEW_PROMPT_CYCLE2"
+    elif [ "$cycle" -le 4 ]; then
+      _tmpl="$CODEX_REVIEW_PROMPT_CYCLE3_4"
     else
-      _tmpl="$CODEX_REVIEW_PROMPT_TEMPLATE"
+      _tmpl="$CODEX_REVIEW_PROMPT_CYCLE5_6"
     fi
     local codex_prompt
     codex_prompt="${_tmpl//__PR_NUMBER__/$pr_num}"
+    codex_prompt="${codex_prompt//__CYCLE__/$cycle}"
+    codex_prompt="${codex_prompt//__MAX_CYCLES__/$MAX_REVIEW_CYCLES}"
     codex_prompt="${codex_prompt//__HISTORY_BLOCK__/$history_block}"
+    codex_prompt="${codex_prompt//__JUSTIFICATIONS__/$justifications}"
     unset _tmpl
 
     local _has_history="no"
     [ -n "$history_block" ] && _has_history="yes"
-    local _tmpl_name="descriptive"
-    [ "$cycle" -ge 3 ] && _tmpl_name="prescriptive"
+    local _tmpl_name
+    if [ "$cycle" -eq 1 ]; then
+      _tmpl_name="descriptive-baseline"
+    elif [ "$cycle" -eq 2 ]; then
+      _tmpl_name="descriptive-convergence"
+    elif [ "$cycle" -le 4 ]; then
+      _tmpl_name="prescriptive-detailed"
+      echo "  [codex] detailed explanations enabled (cycle 3+)" | tee -a "$LOG" >&2
+    else
+      _tmpl_name="prescriptive-adjudication"
+      echo "  [codex] adjudication mode enabled (cycle 5+)" | tee -a "$LOG" >&2
+    fi
     echo "  [codex] template=${_tmpl_name} has_history=${_has_history} cycle=${cycle}/${MAX_REVIEW_CYCLES}" | tee -a "$LOG" >&2
     unset _has_history _tmpl_name
 
@@ -614,6 +902,14 @@ ${_hb}--- end prior review cycles ---
       echo "--- end codex review ---"
     } >> "$LOG"
 
+    # Parse adjudication results for cycle 5+ telemetry
+    if [ "$cycle" -ge 5 ]; then
+      local n_accepted n_disagreed
+      n_accepted=$(printf '%s\n' "$review" | grep -c '^- BLOCKING.*: ACCEPTED' || echo 0)
+      n_disagreed=$(printf '%s\n' "$review" | grep -c '^- BLOCKING.*: DISAGREED' || echo 0)
+      echo "  [codex] adjudication: $n_accepted accepted, $n_disagreed disagreed" | tee -a "$LOG" >&2
+    fi
+
     local n_blocking
     n_blocking=$(printf '%s\n' "$review" | count_blocking)
     echo "  [codex] $n_blocking blocking finding(s)" | tee -a "$LOG" >&2
@@ -635,10 +931,28 @@ ${_hb}--- end prior review cycles ---
     pr_feedback=$(collect_pr_feedback "$pr_num" 2>>"$LOG")
     [ -z "$pr_feedback" ] && pr_feedback="(none)"
 
+    # Select Claude template by cycle number
+    local _claude_tmpl
+    if [ "$cycle" -eq 1 ]; then
+      _claude_tmpl="$CLAUDE_REVIEW_PROMPT_CYCLE1"
+    elif [ "$cycle" -le 3 ]; then
+      _claude_tmpl="$CLAUDE_REVIEW_PROMPT_CYCLE2_3"
+      echo "  [claude] entering plan mode for PR #$pr_num cycle $cycle" | tee -a "$LOG" >&2
+    elif [ "$cycle" -eq 4 ]; then
+      _claude_tmpl="$CLAUDE_REVIEW_PROMPT_CYCLE4"
+      echo "  [claude] entering plan mode for PR #$pr_num cycle $cycle" | tee -a "$LOG" >&2
+    else
+      _claude_tmpl="$CLAUDE_REVIEW_PROMPT_CYCLE5_6"
+      echo "  [claude] entering plan mode for PR #$pr_num cycle $cycle" | tee -a "$LOG" >&2
+    fi
+
     local claude_prompt
-    claude_prompt="${CLAUDE_REVIEW_PROMPT_TEMPLATE//__PR_NUMBER__/$pr_num}"
+    claude_prompt="${_claude_tmpl//__PR_NUMBER__/$pr_num}"
+    claude_prompt="${claude_prompt//__CYCLE__/$cycle}"
+    claude_prompt="${claude_prompt//__MAX_CYCLES__/$MAX_REVIEW_CYCLES}"
     claude_prompt="${claude_prompt//__REVIEW__/$review}"
     claude_prompt="${claude_prompt//__PR_FEEDBACK__/$pr_feedback}"
+    unset _claude_tmpl
 
     local pre_sha post_sha
     pre_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
@@ -663,9 +977,19 @@ ${_hb}--- end prior review cycles ---
         ;;
       "DONE_REVIEW")
         echo "  [claude] DONE_REVIEW — looping for another codex pass" | tee -a "$LOG" >&2
+        # Capture resolution justifications for next cycle (cycle 4+)
+        if [ "$cycle" -ge 4 ]; then
+          justifications=$(gh pr view "$pr_num" --json comments -q '.comments[-1].body' 2>/dev/null || echo "")
+          echo "  [claude] resolution justifications posted to PR #$pr_num" | tee -a "$LOG" >&2
+        fi
         ;;
       *)
         echo "  [claude] no review-cycle sentinel on last line; treating as DONE_REVIEW" | tee -a "$LOG" >&2
+        # Capture resolution justifications for next cycle (cycle 4+)
+        if [ "$cycle" -ge 4 ]; then
+          justifications=$(gh pr view "$pr_num" --json comments -q '.comments[-1].body' 2>/dev/null || echo "")
+          echo "  [claude] resolution justifications posted to PR #$pr_num" | tee -a "$LOG" >&2
+        fi
         ;;
     esac
 
@@ -694,15 +1018,30 @@ ${_hb}--- end prior review cycles ---
   echo "--- base prompt ---"
   printf '%s\n' "$BASE_PROMPT"
   echo "--- end base prompt ---"
-  echo "--- codex review prompt template (descriptive, cycles 1-2) ---"
-  printf '%s\n' "$CODEX_REVIEW_PROMPT_TEMPLATE"
-  echo "--- end codex review prompt template ---"
-  echo "--- codex review prompt template (prescriptive, cycles 3+) ---"
-  printf '%s\n' "$CODEX_REVIEW_PRESCRIPTIVE_PROMPT_TEMPLATE"
-  echo "--- end codex review prescriptive prompt template ---"
-  echo "--- claude review prompt template ---"
-  printf '%s\n' "$CLAUDE_REVIEW_PROMPT_TEMPLATE"
-  echo "--- end claude review prompt template ---"
+  echo "--- codex review prompt: cycle 1 (descriptive baseline) ---"
+  printf '%s\n' "$CODEX_REVIEW_PROMPT_CYCLE1"
+  echo "--- end codex review prompt (cycle 1) ---"
+  echo "--- codex review prompt: cycle 2 (descriptive + convergence) ---"
+  printf '%s\n' "$CODEX_REVIEW_PROMPT_CYCLE2"
+  echo "--- end codex review prompt (cycle 2) ---"
+  echo "--- codex review prompt: cycles 3-4 (prescriptive + detailed) ---"
+  printf '%s\n' "$CODEX_REVIEW_PROMPT_CYCLE3_4"
+  echo "--- end codex review prompt (cycles 3-4) ---"
+  echo "--- codex review prompt: cycles 5-6 (prescriptive + adjudication) ---"
+  printf '%s\n' "$CODEX_REVIEW_PROMPT_CYCLE5_6"
+  echo "--- end codex review prompt (cycles 5-6) ---"
+  echo "--- claude review prompt: cycle 1 (standard) ---"
+  printf '%s\n' "$CLAUDE_REVIEW_PROMPT_CYCLE1"
+  echo "--- end claude review prompt (cycle 1) ---"
+  echo "--- claude review prompt: cycles 2-3 (plan-first) ---"
+  printf '%s\n' "$CLAUDE_REVIEW_PROMPT_CYCLE2_3"
+  echo "--- end claude review prompt (cycles 2-3) ---"
+  echo "--- claude review prompt: cycle 4 (plan-first + resolution justification) ---"
+  printf '%s\n' "$CLAUDE_REVIEW_PROMPT_CYCLE4"
+  echo "--- end claude review prompt (cycle 4) ---"
+  echo "--- claude review prompt: cycles 5-6 (plan-first + adjudication processing) ---"
+  printf '%s\n' "$CLAUDE_REVIEW_PROMPT_CYCLE5_6"
+  echo "--- end claude review prompt (cycles 5-6) ---"
 } >> "$LOG"
 
 # ---------- pre-flight checks ----------
