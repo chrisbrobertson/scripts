@@ -159,6 +159,14 @@ Pick the next unit of work in this priority order — stop at the first level th
 Scope discipline: pick something completable in this iteration — roughly 1–3 hours of work. Prefer landing one small thing fully (code + tests + docs + CHANGELOG entry) over starting several things. Follow every convention in CLAUDE.md.
 
 Per-iteration workflow:
+0. You are in a dedicated git worktree on a placeholder branch. As your FIRST action —
+   before reading files or writing code — rename this branch to reflect the work item you
+   are about to pick:
+     git branch -m <type>/<slug>-<issue-number>
+   Use `feat/` for new features, `fix/` for bug fixes, `docs/` for docs-only changes,
+   `chore/` for maintenance. Include the issue or PR number when working from a tracked
+   item (e.g., `feat/close-goals-124`, `fix/auth-header-87`). This branch name becomes the
+   PR branch name — choose descriptively; changing it after `git push` breaks the PR link.
 1. State which item you picked and why it is the most valuable next step right now.
 2. Implement it fully — code, tests, docs, and a CHANGELOG entry if the project uses one.
 3. Run the relevant test suite. If it fails, fix the underlying issue.
@@ -604,11 +612,12 @@ collect_state() {
 run_claude() {
   local prompt="$1"
   local out_file="$2"
-  claude -p "$prompt" \
+  local run_dir="${3:-$PWD}"
+  (cd "$run_dir" && claude -p "$prompt" \
     --model opusplan \
     --dangerously-skip-permissions \
     --output-format stream-json \
-    --verbose 2>>"$LOG" \
+    --verbose 2>>"$LOG") \
     | tee -a "$LOG" \
     | python3 -c '
 import json, sys
@@ -1330,7 +1339,11 @@ if [ "$_pf_behind" -gt 0 ]; then
   fi
 fi
 
+DEFAULT_BRANCH="$_pf_default"
 unset _pf_default _pf_current _pf_untracked _pf_n _pf_more _pf_ahead _pf_behind
+
+# Prune stale worktree metadata from previous crashed runs.
+git worktree prune >>"$LOG" 2>&1 || true
 
 # ---------- outer loop ----------
 
@@ -1380,8 +1393,34 @@ ${BASE_PROMPT}"
     echo "--- end state ---"
   } >> "$LOG"
 
-  if ! run_claude "$PROMPT" "$TMP_RESULT"; then
+  # --- per-iteration worktree ---
+  _wt_branch="wip/${PROJECT}/iter-${iter}"
+  _wt_dir="/tmp/babysit-${PROJECT}-iter${iter}-$$"
+  if ! git worktree add -b "$_wt_branch" "$_wt_dir" HEAD >>"$LOG" 2>&1; then
+    echo "  [outer] WARNING: worktree creation failed for iter $iter; Claude will run in $PWD" | tee -a "$LOG" >&2
+    _wt_dir=""
+    _wt_branch=""
+  else
+    echo "  [outer] worktree: $_wt_dir (branch: $_wt_branch)" | tee -a "$LOG" >&2
+  fi
+
+  if ! run_claude "$PROMPT" "$TMP_RESULT" "$_wt_dir"; then
     echo "ERROR: implementation claude exited non-zero on iter $iter; quarantining unreviewed open PRs" | tee -a "$LOG" >&2
+    # Push any WIP commits before removing the worktree, so work is not silently lost.
+    if [ -n "$_wt_dir" ]; then
+      _wt_actual=$(git -C "$_wt_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+      _wt_ahead=$(git -C "$_wt_dir" rev-list "${DEFAULT_BRANCH}..HEAD" --count 2>/dev/null || echo 0)
+      if [ "${_wt_ahead:-0}" -gt 0 ] && [ -n "${_wt_actual:-}" ]; then
+        echo "  [outer] pushing ${_wt_ahead} WIP commit(s) from ${_wt_actual} after crash" | tee -a "$LOG" >&2
+        git -C "$_wt_dir" push -u origin "HEAD:${_wt_actual}" >>"$LOG" 2>&1 || \
+          echo "  [outer] WARNING: WIP push failed for ${_wt_actual}" | tee -a "$LOG" >&2
+      fi
+      git worktree remove --force "$_wt_dir" >>"$LOG" 2>&1 || true
+      rm -rf "$_wt_dir"
+      [ -n "$_wt_branch" ] && git branch -D "$_wt_branch" >>"$LOG" 2>&1 || true
+    fi
+    _wt_dir=""
+    _wt_branch=""
     # Sweep open, non-draft PRs authored by @me that carry no review-* label.
     # A crashed implementation pass may have left such a PR mergeable-and-unreviewed,
     # which is the same silent-merge hole this script is designed to prevent.
@@ -1400,6 +1439,27 @@ ${BASE_PROMPT}"
     break
   fi
   echo "---" >> "$LOG"
+
+  # Remove the worktree BEFORE sentinel handling: run_review_cycle calls
+  # gh pr checkout, which fails if the PR branch is still checked out in the
+  # worktree ("fatal: ... is already used by worktree at ...").
+  # Claude has already pushed the branch to origin, so removing the local
+  # worktree is safe.
+  if [ -n "$_wt_dir" ]; then
+    _wt_actual=$(git -C "$_wt_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "$_wt_branch")
+    echo "  [outer] iter $iter branch: $_wt_actual" | tee -a "$LOG" >&2
+    _wt_ahead=$(git -C "$_wt_dir" rev-list "${DEFAULT_BRANCH}..HEAD" --count 2>/dev/null || echo 0)
+    if [ "${_wt_ahead:-0}" -gt 0 ]; then
+      echo "  [outer] safety-push: ${_wt_ahead} unpushed commit(s) on ${_wt_actual}" | tee -a "$LOG" >&2
+      git -C "$_wt_dir" push -u origin "HEAD:${_wt_actual}" >>"$LOG" 2>&1 || \
+        echo "  [outer] WARNING: safety-push failed for ${_wt_actual}" | tee -a "$LOG" >&2
+    fi
+    git worktree remove --force "$_wt_dir" >>"$LOG" 2>&1 || true
+    rm -rf "$_wt_dir"
+    [ -n "$_wt_branch" ] && git branch -D "$_wt_branch" >>"$LOG" 2>&1 || true
+    _wt_dir=""
+    _wt_branch=""
+  fi
 
   RESULT=$(cat "$TMP_RESULT")
   TRIMMED=$(printf '%s' "$RESULT" | sed -e 's/[[:space:]]*$//')
