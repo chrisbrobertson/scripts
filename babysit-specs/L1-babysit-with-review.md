@@ -16,18 +16,19 @@ complexity:
 # Frame
 
 ## TL;DR
+
 An autonomous development loop for solo developers and small teams that iterates on a project by invoking Claude for implementation work, then orchestrates Claude-Codex review cycles to ensure quality before merge.
 
 ## Analog
-Like GitHub Actions continuous integration workflows, but instead of running tests on human-written code, this runs an AI agent to write code and another AI agent to review it, iterating until quality gates pass.
 
-## Reader & next action
-Engineering leads and platform tooling teams — review for adoption in autonomous development workflows. After approval, reference L2 for component architecture and L3 specs for capability implementation details.
+Like GitHub Actions continuous integration workflows, but instead of running tests on human-written code, this runs an AI agent to write code and another AI agent to review it, iterating until quality gates pass.
 
 # Substance
 
 ## What we know
+
 From the existing implementation (babysit-with-review.sh):
+
 - Script operates on a single git repository (PWD-based invocation)
 - Successfully used in personal scripts repo (evidence: commit history showing convergence-aware review cycle implementation)
 - Handles 50+ iterations per run with configurable limits
@@ -36,12 +37,14 @@ From the existing implementation (babysit-with-review.sh):
 - Helper scripts (prs, issues, specs) provide state collection via --json output
 
 ## What we assume
+
 - [ASSUMPTION] Target users are solo developers or small teams (1-5 people) working on projects where autonomous iteration adds value. Flips if: enterprise adoption requires audit trails, approval gates, and compliance documentation.
 - [ASSUMPTION] The tool is for personal/internal use, not public distribution. Flips if: OSS distribution requires installation docs, versioning strategy, support model, and security hardening.
 - [ASSUMPTION] Users are comfortable with shell scripts and CLI tools. Flips if: GUI or hosted service is needed, requiring web application infrastructure.
 - [ASSUMPTION] Single-repo operation is sufficient. Flips if: monorepo or multi-repo orchestration is needed, requiring workspace management.
 
 ## Scale envelope
+
 - Users at launch: 1 (Chris Robertson)
 - Users at 6mo: < 10 (organic adoption within immediate team)
 - Users at 18mo: < 10 (limited distribution, personal/internal tool)
@@ -52,6 +55,7 @@ From the existing implementation (babysit-with-review.sh):
 - Growth curve: organic word-of-mouth within engineering teams
 
 ## Business case
+
 - Revenue model: Internal tool, no direct revenue
 - Value proposition: Reduces time-to-PR for well-scoped tasks from hours to minutes; reduces manual review burden through automated quality gates
 - Cost model: 
@@ -62,12 +66,14 @@ From the existing implementation (babysit-with-review.sh):
 - Success metric: Developer reports net-positive time savings after accounting for babysitter setup and prompt tuning
 
 ## Approvers
+
 - Product: Chris Robertson (owner/user)
 - Engineering: Chris Robertson
 - Finance / GTM: N/A (internal tool)
 - Compliance: N/A (operates on local workstation, no data retention beyond logs)
 
 ## Failure modes & blast radius
+
 - If we ship and nobody uses it beyond the author: Zero blast radius, remains a personal productivity tool
 - If review cycle produces false positives (flags valid code): Developer time wasted investigating non-issues; mitigated by prescriptive mode requiring concrete suggested fixes
 - If review cycle misses bugs (false negatives): Code quality degrades; mitigated by human review still required before production deployment
@@ -76,6 +82,7 @@ From the existing implementation (babysit-with-review.sh):
 # Bounds
 
 ## Out of scope
+
 - GUI or web-based interface (CLI only at launch)
 - Multi-repo orchestration (single repo per invocation)
 - Team coordination features (no shared queue, no work assignment)
@@ -84,12 +91,14 @@ From the existing implementation (babysit-with-review.sh):
 - Integration with issue trackers beyond gh CLI (no Jira, Linear, etc.)
 
 ## Assumptions-that-could-flip
+
 - Developer workstation execution assumption. If flipped to cloud/CI execution: requires environment setup automation, secrets management, and remote log access.
 - Single-user workflow assumption. If flipped to multi-user: requires lock file coordination across machines, shared state management, and conflict resolution.
 - Claude Code CLI availability. If flipped to direct API: requires API key management, rate limit handling, and streaming response parsing.
 - Bash script delivery assumption. If flipped to compiled binary or language-native (Python/Go): requires packaging, distribution, and cross-platform builds.
 
 ## Composes with / replaces
+
 - Replaces: Manual iterative development where developer writes code, runs tests, commits, reviews
 - Composes with: 
   - Existing CI/CD pipelines (babysitter creates PRs, CI validates before merge)
@@ -99,18 +108,22 @@ From the existing implementation (babysit-with-review.sh):
 # Signals
 
 ## Leading indicators (first 30-90 days)
+
 - Activation: Developer runs babysit-with-review.sh on at least one project
 - Time-to-value: First successful PR merged via autonomous loop within first week of use
 - Engagement depth: Developer uses tool on 2+ separate projects; runs 5+ iterations per week
 - Iteration quality: Average iterations-per-completed-task decreases over time (prompt improvement)
 
 ## Lagging indicators (90+ days)
+
 - Retention: Developer continues using tool 90 days after first use
 - Productivity: Net time saved (autonomous iteration time - prompt tuning time - issue resolution time) > 0
 - Quality: PRs created by babysitter pass code review at same or higher rate than manually created PRs
 - Adoption: Tool usage spreads to other developers in organization (if shared)
 
 ## Kill criteria
+
 - If time-to-PR via babysitter exceeds manual development time for >70% of tasks after 90 days → kill or pivot to different prompt strategy
 - If false positive rate in review cycle exceeds 50% → pivot to human-only review
 - If MCP outage frequency causes >30% of PRs to stall → remove Codex dependency, use alternative review approach
+

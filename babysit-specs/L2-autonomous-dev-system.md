@@ -16,15 +16,19 @@ complexity:
 # Frame
 
 ## TL;DR
+
 A bash-orchestrated system connecting Claude Code CLI, Codex CLI, GitHub CLI, and git to enable autonomous iterative development with quality-gated review cycles.
 
 ## Analog
+
 Like a CI/CD pipeline controller (e.g., GitHub Actions workflow runner), but orchestrating AI agents for development and review instead of running pre-scripted test suites.
 
 ## Reader & next action
+
 Engineering leads implementing autonomous development tools — understand component contracts and failure domains before deploying. SRE/platform teams reviewing operational characteristics and failure recovery.
 
 ## Component diagram
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ babysit-with-review.sh (orchestrator)                       │
@@ -52,15 +56,18 @@ Engineering leads implementing autonomous development tools — understand compo
 # Substance
 
 ## What we know
+
 From the existing implementation:
+
 - Orchestrator: Single bash script (~900 lines) with no external dependencies beyond standard Unix tools
 - Components run as subprocesses; orchestrator captures stdout/stderr and exit codes
 - Temp files used for inter-component communication (TMP_RESULT, TMP_REVIEW, TMP_CODEX_FULL)
-- Logs written to ~/sisyphus-logs/<project>-<timestamp>-<pid>.log
-- Lock file at ~/sisyphus-logs/<project>.stop prevents concurrent runs
+- Logs written to ~/sisyphus-logs/--.log
+- Lock file at ~/babysitter-logs/.stop prevents concurrent runs
 - No persistent state beyond git commits and GitHub PR metadata
 
 ## What we assume
+
 - [ASSUMPTION] Claude Code CLI remains OAuth-based with no API key requirement. Flips if: Claude moves to API-key-only access, requiring secrets management.
 - [ASSUMPTION] Codex CLI MCP transport remains the primary failure mode. Flips if: Codex becomes more reliable, allowing removal of retry logic.
 - [ASSUMPTION] gh CLI is authenticated and functional. Flips if: auth expires or repo permissions change, requiring pre-flight auth checks.
@@ -69,6 +76,7 @@ From the existing implementation:
 ## Cross-component contracts
 
 ### Orchestrator → Claude Code CLI
+
 - **Protocol:** Subprocess invocation with stdin prompt, stdout JSON stream
 - **Request shape:** 
   ```bash
@@ -83,6 +91,7 @@ From the existing implementation:
 - **Idempotency:** Non-idempotent; each call advances work state
 
 ### Orchestrator → Codex CLI
+
 - **Protocol:** Subprocess invocation with prompt, output file
 - **Request shape:**
   ```bash
@@ -90,10 +99,11 @@ From the existing implementation:
   ```
 - **Response shape:** Markdown with three required sections: `## BLOCKING`, `## RECOMMENDED`, `## INFORMATION`
 - **Retry policy:** 3 attempts with 0 / 60s / 300s delays on MCP transport failure
-- **MCP failure telltales:** Regexes: `Transport send error:`, `tool call failed for \`codex_apps/`, `error sending request for url \(https://chatgpt\.com/`
+- **MCP failure telltales:** Regexes: `Transport send error:`, `tool call failed for \`codex_apps/`,` error sending request for url [https://chatgpt\.com/`](https://chatgpt\.com/`)
 - **Idempotency:** Idempotent within a review cycle (same PR state → same review)
 
 ### Orchestrator → GitHub CLI
+
 - **Protocol:** Subprocess invocation with gh commands
 - **Commands used:**
   - `gh pr list` (with --json for machine-readable output)
@@ -110,6 +120,7 @@ From the existing implementation:
 - **Idempotency:** Most commands are idempotent (label add, comment post); merge is not
 
 ### Orchestrator → git CLI
+
 - **Protocol:** Subprocess invocation with git commands
 - **Pre-flight checks:**
   - `git diff --quiet` (no unstaged changes)
@@ -126,6 +137,7 @@ From the existing implementation:
 - **Idempotency:** Read operations are idempotent; write operations (checkout, pull) are state-changing
 
 ### Orchestrator → Helper Scripts
+
 - **Protocol:** Subprocess invocation with --json flag
 - **Scripts:**
   - `~/repo/scripts/prs` (PR list with CI rollup)
@@ -136,9 +148,11 @@ From the existing implementation:
 - **Idempotency:** Idempotent read-only operations
 
 ## SLOs and latency budgets
+
 [OPEN: numeric SLOs — owner: platform-tools-lead]
 
 Observed behavior (not formal SLOs):
+
 - **Outer loop iteration latency:** p50 ~2min, p95 ~10min, p99 ~20min (dominated by Claude inference time)
 - **Review cycle iteration latency:** p50 ~4min, p95 ~15min, p99 ~30min (Codex + Claude sequential calls)
 - **MCP retry latency:** 0 / 60s / 300s backoff → max 6min additional latency on failure
@@ -148,6 +162,7 @@ Observed behavior (not formal SLOs):
 Latency budget honors L1 product promise: Tool must complete tasks faster than manual development. Current p50 ~2min per iteration is acceptable for small tasks; p99 ~20min acceptable for complex tasks.
 
 ## Failure-domain map
+
 - **Cell scope:** Single developer workstation, single git repository
 - **Blast radius per failure class:**
   - **Claude API unavailable:** Outer loop halts at current iteration; no data loss (git state preserved)
@@ -161,9 +176,11 @@ Latency budget honors L1 product promise: Tool must complete tasks faster than m
   - **Helper scripts unavailable:** State collection returns "(unavailable)" placeholder, Claude continues with degraded context
 
 ## arlo-infra.yaml dependencies
+
 N/A — this is a developer workstation tool with no arlo-infra.yaml dependencies.
 
 External dependencies (not arlo-infra.yaml):
+
 - `claude` CLI (Claude Code, installed via `curl` or package manager)
 - `codex` CLI (optional, installed via package manager)
 - `gh` CLI (GitHub CLI, installed via Homebrew or package manager)
@@ -171,6 +188,7 @@ External dependencies (not arlo-infra.yaml):
 - Bash 4.0+ (macOS ships with 3.2; newer versions via Homebrew)
 
 ## Compliance posture
+
 - **Data residency:** All data on developer workstation; logs at ~/sisyphus-logs/
 - **SOC2 boundary impact:** None (internal tool, no customer data)
 - **Retention and deletion:** Logs persist indefinitely unless manually deleted; no automatic cleanup
@@ -178,12 +196,14 @@ External dependencies (not arlo-infra.yaml):
 - **Cross-region data flow:** None (local execution only)
 
 ## Verifiers
+
 - Architecture: Chris Robertson
 - SRE: [OPEN: SRE reviewer — owner: platform-tools-lead]
 - Security: [OPEN: security reviewer — owner: security-lead]
 - Compliance: N/A (internal tool)
 
 ## Failure modes & blast radius
+
 - **Vendor outage (Anthropic API):** Outer loop halts; developer waits or cancels run. Blast: single developer blocked for duration of outage.
 - **Vendor outage (OpenAI ChatGPT for Codex MCP):** Review cycle retries, then labels PR. Blast: PR review delayed but not lost.
 - **Lock file collision:** Second invocation refuses to start. Blast: developer must manually check for running processes and remove stale lock file.
@@ -194,6 +214,7 @@ External dependencies (not arlo-infra.yaml):
 # Bounds
 
 ## Out of scope
+
 - **Surfaces not supported:** Windows (PowerShell, CMD), cloud/CI execution (requires environment portability)
 - **Scaling ceiling:** Single repository per invocation; no multi-repo coordination
 - **Compliance regimes not covered:** No audit trails, no approval gates, no access control beyond filesystem permissions
@@ -204,12 +225,14 @@ External dependencies (not arlo-infra.yaml):
   - Web UI or API
 
 ## Assumptions-that-could-flip
+
 - **Bash orchestration assumption.** If flipped to compiled binary or language-native: requires build pipeline, cross-platform support, and dependency management.
 - **Subprocess invocation assumption.** If flipped to library/SDK integration: requires rewrite in Python/Go/etc., loses shell script simplicity.
 - **Filesystem-based state assumption.** If flipped to database/API state: requires persistence layer, concurrency control, and remote access.
 - **OAuth-based Claude access.** If flipped to API key: requires secrets management, key rotation, and rate limit handling.
 
 ## Composes with / replaces
+
 - **Supersedes:** Manual iterative development loop (edit → test → commit → review)
 - **Composes with:**
   - CI/CD systems (babysitter creates PRs, CI validates)
@@ -219,9 +242,11 @@ External dependencies (not arlo-infra.yaml):
 # Signals
 
 ## SLIs (leading)
+
 [OPEN: formal SLI definitions — owner: platform-tools-lead]
 
 Observable metrics (not formal SLIs):
+
 - **Iteration completion rate:** successful iterations / total iterations
 - **Review cycle convergence rate:** PRs reaching BLOCKING=0 / total PRs
 - **MCP failure rate:** Codex transport failures / total Codex invocations
@@ -229,26 +254,34 @@ Observable metrics (not formal SLIs):
 - **Stuck loop rate:** Runs halted by stuck detection / total runs
 
 ## Error budget burn (lagging)
+
 No formal error budget. Observed failure modes:
+
 - **Claude API 5xx:** <1% of calls (handled by retry in claude CLI)
 - **Codex MCP transport failure:** ~5-10% of calls (handled by orchestrator retry)
 - **gh CLI auth expiry:** ~1 per month (developer re-authenticates)
 
 ## Audit checkpoints
+
 N/A — internal tool, no formal audit requirements.
 
 Optional audit approach:
+
 - Weekly log review: scan ~/sisyphus-logs/ for error patterns
 - Monthly metric snapshot: iterations, PRs merged, time saved
 
 ## Capacity headroom triggers
+
 N/A — developer workstation tool with no shared capacity.
 
 Potential triggers if usage scales:
+
 - **Log disk usage:** Alert if ~/sisyphus-logs/ exceeds 1GB
 - **Concurrent runs per host:** Warn if multiple instances detected (lock file collision rate >10%)
 
 ## Kill criteria
+
 - If architectural assumption "Claude OAuth access" flips to API-key-only → requires redesign (secrets management layer)
 - If architectural assumption "Codex MCP transport" degrades to >50% failure rate → remove Codex dependency, use alternative review approach
 - If bash subprocess model cannot support parallelization (needed for multi-PR workflows) → rewrite in Go/Python with async/await
+
