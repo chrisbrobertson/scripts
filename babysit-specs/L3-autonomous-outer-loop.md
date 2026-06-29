@@ -1,7 +1,7 @@
 ---
 spec_type: feature
 id: ASF-FEAT-OUTER-LOOP
-status: review
+status: approved
 owners: [Chris Robertson]
 depends_on: [ASF-SYS-AUTONOMOUS-DEV]
 parent_l1: ASF-PROD-BABYSIT-WITH-REVIEW

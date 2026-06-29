@@ -1,7 +1,7 @@
 ---
 spec_type: system
 id: ASF-SYS-AUTONOMOUS-DEV
-status: review
+status: approved
 owners: [Chris Robertson]
 depends_on: [ASF-PROD-BABYSIT-WITH-REVIEW]
 serves_l1: [ASF-PROD-BABYSIT-WITH-REVIEW]

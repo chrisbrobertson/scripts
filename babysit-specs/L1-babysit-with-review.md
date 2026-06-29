@@ -1,7 +1,7 @@
 ---
 spec_type: product
 id: ASF-PROD-BABYSIT-WITH-REVIEW
-status: review
+status: approved
 owners: [Chris Robertson]
 depends_on: []
 experience_authority: none

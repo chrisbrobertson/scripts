@@ -1,7 +1,7 @@
 ---
 spec_type: feature
 id: ASF-FEAT-RETROSPECTIVE-REVIEW
-status: review
+status: approved
 owners: [Chris Robertson]
 depends_on: [ASF-FEAT-REVIEW-CYCLE, ASF-FEAT-MCP-RESILIENCE]
 parent_l1: ASF-PROD-BABYSIT-WITH-REVIEW
