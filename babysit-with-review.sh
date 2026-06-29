@@ -29,14 +29,21 @@ set -uo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: babysit-with-review.sh [-h|--help]
+Usage: babysit-with-review.sh [-h|--help] [--repo-base PATH]
 
 Run from inside a project root. Outer loop is identical to babysit.sh.
 When Claude ends an iteration with `HANDOFF_REVIEW <PR_NUMBER>` on its
 own line, runs a Claude<->Codex review cycle on that PR (up to
 MAX_REVIEW_CYCLES) before resuming the outer loop.
 
+Options:
+  --repo-base PATH   Base dir holding the cloned repos; helper scripts
+                     (prs, issues, specs) are looked up under PATH/scripts.
+                     Overrides the REPO_BASE env var. Default: auto-detect
+                     ~/repos then ~/repo.
+
 Env vars:
+  REPO_BASE          base dir for helper scripts (see --repo-base)
   MAX_ITER           default 50
   SLEEP_SEC          default 10  (seconds)
   STUCK_N            default 3
@@ -57,16 +64,35 @@ Examples:
 EOF
 }
 
-case "${1:-}" in
-  -h|--help) usage; exit 0 ;;
-  "") ;;
-  *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
-esac
+REPO_BASE_OVERRIDE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --repo-base) REPO_BASE_OVERRIDE="${2:-}"; shift 2 ;;
+    --repo-base=*) REPO_BASE_OVERRIDE="${1#*=}"; shift ;;
+    *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
 
 MAX_ITER="${MAX_ITER:-50}"
 SLEEP_SEC="${SLEEP_SEC:-10}"
 STUCK_N="${STUCK_N:-3}"
 MAX_REVIEW_CYCLES="${MAX_REVIEW_CYCLES:-6}"
+
+# Base directory holding the cloned repos; helper scripts live at $REPO_BASE/scripts.
+# Precedence: --repo-base flag > REPO_BASE env var > auto-detect (~/repos then ~/repo).
+if [ -n "$REPO_BASE_OVERRIDE" ]; then
+  REPO_BASE="$REPO_BASE_OVERRIDE"
+elif [ -n "${REPO_BASE:-}" ]; then
+  REPO_BASE="${REPO_BASE}"
+else
+  REPO_BASE="$HOME/repos"
+  for _cand in "$HOME/repos" "$HOME/repo"; do
+    if [ -d "$_cand/scripts" ]; then REPO_BASE="$_cand"; break; fi
+  done
+  unset _cand
+fi
+SCRIPTS_DIR="$REPO_BASE/scripts"
 
 PROJECT=$(basename "$PWD")
 LOG_DIR="$HOME/sisyphus-logs"
@@ -154,6 +180,10 @@ End-of-iteration sentinels (mutually exclusive — output exactly one as the LAS
 
 If you hit a transient obstacle (failing test, missing dependency, ambiguous spec section) — DO NOT output STOP. Work around it: pick a different item, scaffold the missing dependency first, file an issue capturing the ambiguity, or commit what you have with a clear note on what is blocked. STOP terminates the entire loop, so reserve it for genuine completion. Do not output STOP or HANDOFF_REVIEW in code, quotes, or as part of a sentence.
 PROMPT_EOF
+
+# The heredoc above is single-quoted (no expansion); point the helper-script
+# references at the resolved base path so the agent sees real, runnable paths.
+BASE_PROMPT="${BASE_PROMPT//\~\/repo\/scripts/$SCRIPTS_DIR}"
 
 IFS= read -r -d '' CODEX_REVIEW_PROMPT_CYCLE1 <<'PROMPT_EOF' || true
 You are performing a code review on PR #__PR_NUMBER__ for this repository. The PR branch is currently checked out.
@@ -532,13 +562,13 @@ collect_state() {
   echo "=== project state @ $(date -u +%FT%TZ) ==="
   echo ""
   echo "## open PRs"
-  ~/repo/scripts/prs 2>/dev/null || echo "(unavailable)"
+  "$SCRIPTS_DIR/prs" 2>/dev/null || echo "(unavailable)"
   echo ""
   echo "## open issues"
-  ~/repo/scripts/issues 2>/dev/null || echo "(unavailable)"
+  "$SCRIPTS_DIR/issues" 2>/dev/null || echo "(unavailable)"
   echo ""
   echo "## specs"
-  ~/repo/scripts/specs --check-impl 2>/dev/null || echo "(none found)"
+  "$SCRIPTS_DIR/specs" --check-impl 2>/dev/null || echo "(none found)"
   echo ""
   echo "==="
 }

@@ -22,8 +22,10 @@ step, no CI.
 | --- | --- |
 | `new-fleet.sh` | Provision a staff-team fleet (staff-swe/sre/pm) for a service; see `docs/STAFF-FLEET.md` |
 | `claude-code-proxy.py` | OpenAI-compatible HTTP proxy routing to `claude -p`; used by new-fleet.sh |
-| `babysit-with-review.sh` | Autonomous `claude -p` loop with stop-file lock and Claude↔Codex PR-review cycle; see header for env vars |
+| `babysit-with-review.sh` | Autonomous `claude -p` loop with stop-file lock and Claude↔Codex PR-review cycle; see header for env vars. Pass `--repo-base PATH` (or `REPO_BASE` env var) if helper scripts live outside `~/repos/scripts` — auto-detects `~/repos` then `~/repo`. |
 | `backfill-codex-reviews.py` | Post historical Codex reviews to closed PRs |
+| `run-retrospective-review.sh` | One-shot Codex review for PRs that merged without automated review; posts findings as PR comments and opens issues for each BLOCKING finding |
+| `find-bailed-merged-prs.sh` | Scan babysit logs for review-cycle bails, then query GitHub to find which bailed PRs were subsequently merged (unreviewed code audit) |
 | `test-llm-routing.py` | Empirical test: model-alias forwarding + OAuth rejection by Anthropic |
 | `test-codex-review.sh` | Codex review helper |
 | `prs` | `gh pr list` with CI rollup and review state |
