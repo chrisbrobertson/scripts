@@ -70,8 +70,11 @@ BAILED_PHRASES = [
     'hit MAX_REVIEW_CYCLES',
     'HEAD unchanged',
     'STUCK_REVIEW',
-    'gh pr checkout',   # "gh pr checkout N failed"
-    'marking PR',       # fail_review_cycle log line (post-fix)
+    'gh pr checkout',            # "gh pr checkout N failed"
+    'marking PR',                # fail_review_cycle log line (post-fix)
+    'non-MCP failure',           # codex non-transport fail (pre-compat-fix)
+    'requires a newer version of Codex',  # compat_re: CLI too old for model
+    'non-zero exit',             # implementation or review-pass claude crash
 ]
 
 log_files = sorted(
@@ -87,7 +90,7 @@ if not log_files:
     print(f'No log files found in {log_dir} — nothing to audit.', file=sys.stderr)
     sys.exit(0)
 
-# key: (project, pr_num) → {'outcome': ..., 'reason': ..., 'log': ...}
+# key: (project, pr_num) → {'outcome': ..., 'reason': ..., 'bail_reason': ..., 'log': ...}
 # Worst outcome wins: BAILED > UNKNOWN > CLEARED
 RANK = {'BAILED': 2, 'UNKNOWN': 1, 'CLEARED': 0}
 results = {}
@@ -111,13 +114,15 @@ for log_path in log_files:
     pr_num = None
     outcome = 'UNKNOWN'
     reason = 'no terminal marker in block'
+    bail_reason = ''
 
-    def emit(project, pr_num, outcome, reason, log_path):
+    def emit(project, pr_num, outcome, reason, bail_reason, log_path):
         key = (project, pr_num)
         cur_rank = RANK.get(results.get(key, {}).get('outcome', 'CLEARED'), 0)
         new_rank = RANK.get(outcome, 0)
         if new_rank >= cur_rank:
-            results[key] = {'outcome': outcome, 'reason': reason[:200], 'log': log_path}
+            results[key] = {'outcome': outcome, 'reason': reason[:200],
+                            'bail_reason': bail_reason, 'log': log_path}
 
     for i, line in enumerate(lines):
         line_s = line.rstrip('\n')
@@ -125,10 +130,11 @@ for log_path in log_files:
         handoff_m = re.match(r'^=== review handoff: PR #(\d+) @', line_s)
         if handoff_m:
             if pr_num is not None:
-                emit(project, pr_num, outcome, reason, log_path)
+                emit(project, pr_num, outcome, reason, bail_reason, log_path)
             pr_num = handoff_m.group(1)
             outcome = 'UNKNOWN'
             reason = 'no terminal marker in block'
+            bail_reason = ''
             continue
 
         if pr_num is None:
@@ -136,7 +142,7 @@ for log_path in log_files:
 
         # Block boundary (new iter or next handoff handled above)
         if re.match(r'^=== iter \d+', line_s) and i > 0:
-            emit(project, pr_num, outcome, reason, log_path)
+            emit(project, pr_num, outcome, reason, bail_reason, log_path)
             pr_num = None
             continue
 
@@ -144,6 +150,7 @@ for log_path in log_files:
         if 'cleared after' in line_s:
             outcome = 'CLEARED'
             reason = line_s.strip()
+            bail_reason = ''
         elif outcome != 'CLEARED':
             for phrase in BAILED_PHRASES:
                 if phrase in line_s:
@@ -151,10 +158,11 @@ for log_path in log_files:
                         continue
                     outcome = 'BAILED'
                     reason = line_s.strip()
+                    bail_reason = phrase
                     break
 
     if pr_num is not None:
-        emit(project, pr_num, outcome, reason, log_path)
+        emit(project, pr_num, outcome, reason, bail_reason, log_path)
 
 if review_log_count == 0:
     print(f'No babysit-with-review.sh logs found in {log_dir} — nothing to audit.', file=sys.stderr)
@@ -178,11 +186,12 @@ n_merged = 0
 for (project, pr_num), info in sorted(candidates.items()):
     outcome = info['outcome']
     reason = info['reason']
+    bail_reason = info.get('bail_reason', '')
 
     gh_repo = repo_override or repo_map.get(project, '')
 
     if not gh_repo:
-        no_map_rows.append((project, pr_num, outcome, reason, 'UNKNOWN', '-', '-', '(no repo mapping)'))
+        no_map_rows.append((project, pr_num, outcome, bail_reason, reason, 'UNKNOWN', '-', '-', '(no repo mapping)'))
         continue
 
     try:
@@ -198,11 +207,11 @@ for (project, pr_num), info in sorted(candidates.items()):
         merged_at = d.get('mergedAt') or '-'
         url = d.get('url', f'https://github.com/{gh_repo}/pull/{pr_num}')
     except Exception as e:
-        other_rows.append((project, pr_num, outcome, reason[:80], 'UNKNOWN', '-',
+        other_rows.append((project, pr_num, outcome, bail_reason, reason[:80], 'UNKNOWN', '-',
                            f'https://github.com/{gh_repo}/pull/{pr_num}', f'gh query failed: {e}'))
         continue
 
-    row = (project, pr_num, outcome, reason[:80], state, merged_at, url, '')
+    row = (project, pr_num, outcome, bail_reason, reason[:80], state, merged_at, url, '')
     if state == 'MERGED':
         n_merged += 1
         merged_rows.append(row)
@@ -211,7 +220,7 @@ for (project, pr_num), info in sorted(candidates.items()):
 
 # ---- output ----
 
-print('PROJECT\tPR\tOUTCOME\tREASON\tSTATE\tMERGED_AT\tURL\tNOTE')
+print('PROJECT\tPR\tOUTCOME\tBAIL_REASON\tREASON\tSTATE\tMERGED_AT\tURL\tNOTE')
 for row in merged_rows + other_rows + no_map_rows:
     print('\t'.join(str(x) for x in row))
 
