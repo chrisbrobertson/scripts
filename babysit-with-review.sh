@@ -1180,12 +1180,23 @@ ${_hb}--- end prior review cycles ---
         return 0
       fi
 
-      if gh pr merge "$pr_num" --squash --auto >>"$LOG" 2>&1; then
+      if gh pr merge "$pr_num" --squash --delete-branch --auto >>"$LOG" 2>&1; then
         echo "  [review] PR #$pr_num queued for auto-merge (merges when CI passes)" | tee -a "$LOG" >&2
-      elif gh pr merge "$pr_num" --squash >>"$LOG" 2>&1; then
+      elif gh pr merge "$pr_num" --squash --delete-branch >>"$LOG" 2>&1; then
         echo "  [review] PR #$pr_num merged." | tee -a "$LOG" >&2
       else
         echo "  [review] WARNING: merge failed for PR #$pr_num; left open for next iteration. See $LOG." | tee -a "$LOG" >&2
+        return 0
+      fi
+
+      # Clean up: switch back to default branch so the next outer-loop iteration
+      # starts from the right base, and delete the local PR branch.
+      local _pr_branch
+      _pr_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+      git checkout "$DEFAULT_BRANCH" >>"$LOG" 2>&1 || true
+      git pull --ff-only origin "$DEFAULT_BRANCH" >>"$LOG" 2>&1 || true
+      if [ -n "$_pr_branch" ] && [ "$_pr_branch" != "$DEFAULT_BRANCH" ]; then
+        git branch -D "$_pr_branch" >>"$LOG" 2>&1 || true
       fi
       return 0
     fi
@@ -1487,7 +1498,9 @@ ${BASE_PROMPT}"
       fi
       git worktree remove --force "$_wt_dir" >>"$LOG" 2>&1 || true
       rm -rf "$_wt_dir"
-      [ -n "$_wt_branch" ] && git branch -D "$_wt_branch" >>"$LOG" 2>&1 || true
+      if [ -n "$_wt_actual" ] && [ "$_wt_actual" != "$DEFAULT_BRANCH" ]; then
+        git branch -D "$_wt_actual" >>"$LOG" 2>&1 || true
+      fi
     fi
     _wt_dir=""
     _wt_branch=""
@@ -1526,7 +1539,11 @@ ${BASE_PROMPT}"
     fi
     git worktree remove --force "$_wt_dir" >>"$LOG" 2>&1 || true
     rm -rf "$_wt_dir"
-    [ -n "$_wt_branch" ] && git branch -D "$_wt_branch" >>"$LOG" 2>&1 || true
+    # Delete the actual branch (Claude renames from the placeholder during execution).
+    # gh pr checkout will re-create from remote if run_review_cycle needs it.
+    if [ -n "$_wt_actual" ] && [ "$_wt_actual" != "$DEFAULT_BRANCH" ]; then
+      git branch -D "$_wt_actual" >>"$LOG" 2>&1 || true
+    fi
     _wt_dir=""
     _wt_branch=""
   fi
