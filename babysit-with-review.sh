@@ -616,7 +616,7 @@ run_claude() {
   local prompt="$1"
   local out_file="$2"
   local run_dir="${3:-$PWD}"
-  local model="${4:-claude-sonnet-4-6}"
+  local model="${4:-claude-sonnet-5}"
   (cd "$run_dir" && claude -p "$prompt" \
     --model "$model" \
     --dangerously-skip-permissions \
@@ -1201,18 +1201,18 @@ ${_hb}--- end prior review cycles ---
     local _claude_tmpl _claude_model
     if [ "$cycle" -eq 1 ]; then
       _claude_tmpl="$CLAUDE_REVIEW_PROMPT_CYCLE1"
-      _claude_model="claude-sonnet-4-6"
+      _claude_model="claude-sonnet-5"
     elif [ "$cycle" -le 3 ]; then
       _claude_tmpl="$CLAUDE_REVIEW_PROMPT_CYCLE2_3"
-      _claude_model="claude-sonnet-4-6"
+      _claude_model="claude-sonnet-5"
       echo "  [claude] structured review pass for PR #$pr_num cycle $cycle" | tee -a "$LOG" >&2
     elif [ "$cycle" -eq 4 ]; then
       _claude_tmpl="$CLAUDE_REVIEW_PROMPT_CYCLE4"
-      _claude_model="claude-opus-4-7"
+      _claude_model="claude-opus-4-8"
       echo "  [claude] structured review pass for PR #$pr_num cycle $cycle (with justifications, opus)" | tee -a "$LOG" >&2
     else
       _claude_tmpl="$CLAUDE_REVIEW_PROMPT_CYCLE5_6"
-      _claude_model="claude-opus-4-7"
+      _claude_model="claude-opus-4-8"
       echo "  [claude] adjudication review pass for PR #$pr_num cycle $cycle (opus)" | tee -a "$LOG" >&2
     fi
 
