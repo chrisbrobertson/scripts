@@ -432,16 +432,15 @@ This is review cycle __CYCLE__ of __MAX_CYCLES__. The previous cycle(s) did not 
 
 You MUST action every BLOCKING finding before this PR can merge. Treat actionable issues in existing PR feedback with the same BLOCKING priority.
 
-**CRITICAL: Use plan mode before implementing.**
+**CRITICAL: Plan your approach BEFORE implementing.** Do NOT use the plan mode tool — you are running non-interactively and plan mode requires human approval to exit. Instead, plan inline:
 
-Step 1: Enter plan mode to create an implementation plan:
-  - Analyze all BLOCKING findings and their dependencies
+Step 1: Analyze and outline your approach (as text output):
+  - List all BLOCKING findings and their dependencies
   - Determine the correct order to address them (some fixes may depend on others)
   - Identify any cross-finding interactions or shared root causes
-  - Document trade-offs and alternatives for non-obvious decisions
-  - Output the plan for review before proceeding
+  - Note trade-offs and alternatives for non-obvious decisions
 
-Step 2: Execute the plan:
+Step 2: Execute your plan:
   - Implement each step sequentially
   - Run relevant tests after each fix
   - Commit each fix separately with this format:
@@ -481,16 +480,15 @@ This is review cycle 4 of __MAX_CYCLES__. Multiple previous cycles have not reso
 
 You MUST action every BLOCKING finding before this PR can merge. Treat actionable issues in existing PR feedback with the same BLOCKING priority.
 
-**CRITICAL: Use plan mode before implementing.**
+**CRITICAL: Plan your approach BEFORE implementing.** Do NOT use the plan mode tool — you are running non-interactively and plan mode requires human approval to exit. Instead, plan inline:
 
-Step 1: Enter plan mode to create an implementation plan:
-  - Analyze all BLOCKING findings and their dependencies
+Step 1: Analyze and outline your approach (as text output):
+  - List all BLOCKING findings and their dependencies
   - Determine the correct order to address them (some fixes may depend on others)
   - Identify any cross-finding interactions or shared root causes
-  - Document trade-offs and alternatives for non-obvious decisions
-  - Output the plan for review before proceeding
+  - Note trade-offs and alternatives for non-obvious decisions
 
-Step 2: Execute the plan:
+Step 2: Execute your plan:
   - Implement each step sequentially
   - Run relevant tests after each fix
   - Commit each fix separately with this format:
@@ -538,7 +536,7 @@ This is review cycle __CYCLE__ of __MAX_CYCLES__. Multiple previous cycles have 
 
 You MUST action every BLOCKING finding before this PR can merge. Treat actionable issues in existing PR feedback with the same BLOCKING priority.
 
-**CRITICAL: Process the ADJUDICATION section first, then use plan mode for remaining work.**
+**CRITICAL: Process the ADJUDICATION section first, then plan your approach inline.** Do NOT use the plan mode tool — you are running non-interactively and plan mode requires human approval to exit.
 
 Step 1: Process Codex adjudication results:
   - For each ACCEPTED item: the finding is resolved. No further action needed.
@@ -546,14 +544,13 @@ Step 1: Process Codex adjudication results:
     (a) Implement a different fix that specifically addresses Codex's counter-argument, OR
     (b) If you believe Codex's counter-argument is itself incorrect, report via STUCK_REVIEW with the specific finding, Codex's argument, and why you disagree (this escalates to human review).
 
-Step 2: Enter plan mode to create an implementation plan for all remaining BLOCKING findings:
+Step 2: Outline your implementation plan (as text output) for all remaining BLOCKING findings:
   - Include all DISAGREED items that you will re-address (from Step 1a)
   - Include all new BLOCKING findings from the current review
   - Determine the correct order to address them
-  - Document trade-offs and alternatives for non-obvious decisions
-  - Output the plan for review before proceeding
+  - Note trade-offs and alternatives for non-obvious decisions
 
-Step 3: Execute the plan:
+Step 3: Execute your plan:
   - Implement each step sequentially
   - Run relevant tests after each fix
   - Commit each fix separately with this format:
@@ -619,8 +616,9 @@ run_claude() {
   local prompt="$1"
   local out_file="$2"
   local run_dir="${3:-$PWD}"
+  local model="${4:-claude-sonnet-4-6}"
   (cd "$run_dir" && claude -p "$prompt" \
-    --model opusplan \
+    --model "$model" \
     --dangerously-skip-permissions \
     --output-format stream-json \
     --verbose 2>>"$LOG") \
@@ -1197,19 +1195,25 @@ ${_hb}--- end prior review cycles ---
     pr_feedback=$(collect_pr_feedback "$pr_num" 2>>"$LOG")
     [ -z "$pr_feedback" ] && pr_feedback="(none)"
 
-    # Select Claude template by cycle number
-    local _claude_tmpl
+    # Select Claude template and model by cycle number.
+    # Cycles 1-3: Sonnet (fast, sufficient for straightforward fixes).
+    # Cycles 4+: Opus (harder problems need stronger reasoning).
+    local _claude_tmpl _claude_model
     if [ "$cycle" -eq 1 ]; then
       _claude_tmpl="$CLAUDE_REVIEW_PROMPT_CYCLE1"
+      _claude_model="claude-sonnet-4-6"
     elif [ "$cycle" -le 3 ]; then
       _claude_tmpl="$CLAUDE_REVIEW_PROMPT_CYCLE2_3"
-      echo "  [claude] entering plan mode for PR #$pr_num cycle $cycle" | tee -a "$LOG" >&2
+      _claude_model="claude-sonnet-4-6"
+      echo "  [claude] structured review pass for PR #$pr_num cycle $cycle" | tee -a "$LOG" >&2
     elif [ "$cycle" -eq 4 ]; then
       _claude_tmpl="$CLAUDE_REVIEW_PROMPT_CYCLE4"
-      echo "  [claude] entering plan mode for PR #$pr_num cycle $cycle" | tee -a "$LOG" >&2
+      _claude_model="claude-opus-4-7"
+      echo "  [claude] structured review pass for PR #$pr_num cycle $cycle (with justifications, opus)" | tee -a "$LOG" >&2
     else
       _claude_tmpl="$CLAUDE_REVIEW_PROMPT_CYCLE5_6"
-      echo "  [claude] entering plan mode for PR #$pr_num cycle $cycle" | tee -a "$LOG" >&2
+      _claude_model="claude-opus-4-7"
+      echo "  [claude] adjudication review pass for PR #$pr_num cycle $cycle (opus)" | tee -a "$LOG" >&2
     fi
 
     local claude_prompt
@@ -1223,8 +1227,8 @@ ${_hb}--- end prior review cycles ---
     local pre_sha post_sha
     pre_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
 
-    echo "  [claude] addressing findings..." >&2
-    if ! run_claude "$claude_prompt" "$TMP_REVIEW_RESULT"; then
+    echo "  [claude] addressing findings (model: $_claude_model)..." >&2
+    if ! run_claude "$claude_prompt" "$TMP_REVIEW_RESULT" "$PWD" "$_claude_model"; then
       echo "  [claude] non-zero exit during review pass; bailing review cycle" | tee -a "$LOG" >&2
       fail_review_cycle "$pr_num" "claude exited non-zero while addressing review (cycle $cycle)"
       return 0
