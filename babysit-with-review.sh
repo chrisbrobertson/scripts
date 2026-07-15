@@ -1061,6 +1061,13 @@ valid_review_structure() {
   [ -s "$review_file" ] || return 1
   awk '
     BEGIN { current = 0; valid = 1 }
+    /^[[:space:]]*$/ { next }
+    /^## ADJUDICATION[[:space:]]*$/ {
+      adjudication_headings++
+      if (adjudication_headings != 1 || blocking_headings || recommended_headings || information_headings) valid = 0
+      current = 4
+      next
+    }
     /^## BLOCKING[[:space:]]*$/ {
       blocking_headings++
       if (blocking_headings != 1 || recommended_headings || information_headings) valid = 0
@@ -1079,15 +1086,28 @@ valid_review_structure() {
       current = 3
       next
     }
-    /^## / { current = 0; next }
+    /^## / { valid = 0; current = 0; next }
     /^- / {
       if (current == 1) blocking_bullets++
       else if (current == 2) recommended_bullets++
       else if (current == 3) information_bullets++
+      else if (current == 4) adjudication_bullets++
+      else valid = 0
+      next
     }
+    /^[[:space:]]+/ {
+      if (current == 1 && blocking_bullets > 0) next
+      if (current == 2 && recommended_bullets > 0) next
+      if (current == 3 && information_bullets > 0) next
+      if (current == 4 && adjudication_bullets > 0) next
+      valid = 0
+      next
+    }
+    { valid = 0 }
     END {
       if (blocking_headings != 1 || recommended_headings != 1 || information_headings != 1) valid = 0
       if (blocking_bullets < 1 || recommended_bullets < 1 || information_bullets < 1) valid = 0
+      if (adjudication_headings == 1 && adjudication_bullets < 1) valid = 0
       exit(valid ? 0 : 1)
     }
   ' "$review_file" 2>/dev/null

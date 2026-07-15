@@ -261,11 +261,21 @@ assert_review_rejected 'review rejects duplicate core heading' \
   $'## BLOCKING\n- (none)\n## BLOCKING\n- duplicate\n## RECOMMENDED\n- (none)\n## INFORMATION\n- (none)'
 assert_review_rejected 'review rejects out-of-order core headings' \
   $'## RECOMMENDED\n- (none)\n## BLOCKING\n- (none)\n## INFORMATION\n- (none)'
+assert_review_rejected 'review rejects critical prose inside BLOCKING' \
+  $'## BLOCKING\n- (none)\nCRITICAL: this must be fixed\n## RECOMMENDED\n- (none)\n## INFORMATION\n- (none)'
+assert_review_rejected 'review rejects critical trailing prose after INFORMATION' \
+  $'## BLOCKING\n- (none)\n## RECOMMENDED\n- (none)\n## INFORMATION\n- (none)\nCRITICAL: do not merge'
+assert_review_rejected 'review rejects prose before core headings' \
+  $'Review follows.\n## BLOCKING\n- (none)\n## RECOMMENDED\n- (none)\n## INFORMATION\n- (none)'
+assert_review_rejected 'review rejects prose between core sections' \
+  $'## BLOCKING\n- (none)\n## RECOMMENDED\n- (none)\nThis warning is not a bullet.\n## INFORMATION\n- (none)'
+assert_review_rejected 'review rejects unknown top-level heading' \
+  $'## SUMMARY\n- not part of the contract\n## BLOCKING\n- (none)\n## RECOMMENDED\n- (none)\n## INFORMATION\n- (none)'
 
 assert_review_accepted 'review accepts prescriptive multiline blocking finding' \
   $'## BLOCKING\n- [NEW] fail closed — script:1 — unsafe parser\n  Suggested fix: validate sections\n  Root cause: header-only validation\n  Architectural context: merge gate\n  Impact: unsafe merge\n## RECOMMENDED\n- (none)\n## INFORMATION\n- useful context'
 assert_review_accepted 'review accepts leading ADJUDICATION section' \
-  $'## ADJUDICATION\n- BLOCKING old issue: ACCEPTED — fixed\n## BLOCKING\n- (none)\n## RECOMMENDED\n- (none)\n## INFORMATION\n- (none)'
+  $'## ADJUDICATION\n- BLOCKING old issue: ACCEPTED — fixed\n  Evidence: commit abc123 resolves it\n\n## BLOCKING\n- (none)\n\n## RECOMMENDED\n- (none)\n\n## INFORMATION\n- (none)'
 
 # Same-provider roles are allowed and still independently configured.
 run_script config "$TMP/same-role.record" "$TMP/home" \
