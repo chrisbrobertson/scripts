@@ -1088,26 +1088,26 @@ valid_review_structure() {
     }
     /^## / { valid = 0; current = 0; next }
     /^- / {
-      if (current == 1) blocking_bullets++
-      else if (current == 2) recommended_bullets++
-      else if (current == 3) information_bullets++
-      else if (current == 4) adjudication_bullets++
-      else valid = 0
+      if (current < 1 || current > 4) {
+        valid = 0
+        next
+      }
+      is_none = ($0 == "- (none)")
+      if (none[current] || (is_none && bullets[current] > 0)) valid = 0
+      bullets[current]++
+      if (is_none) none[current] = 1
       next
     }
     /^[[:space:]]+/ {
-      if (current == 1 && blocking_bullets > 0) next
-      if (current == 2 && recommended_bullets > 0) next
-      if (current == 3 && information_bullets > 0) next
-      if (current == 4 && adjudication_bullets > 0) next
+      if (current >= 1 && current <= 4 && bullets[current] > 0 && !none[current]) next
       valid = 0
       next
     }
     { valid = 0 }
     END {
       if (blocking_headings != 1 || recommended_headings != 1 || information_headings != 1) valid = 0
-      if (blocking_bullets < 1 || recommended_bullets < 1 || information_bullets < 1) valid = 0
-      if (adjudication_headings == 1 && adjudication_bullets < 1) valid = 0
+      if (bullets[1] < 1 || bullets[2] < 1 || bullets[3] < 1) valid = 0
+      if (adjudication_headings == 1 && bullets[4] < 1) valid = 0
       exit(valid ? 0 : 1)
     }
   ' "$review_file" 2>/dev/null

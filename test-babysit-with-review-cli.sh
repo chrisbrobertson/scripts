@@ -271,11 +271,23 @@ assert_review_rejected 'review rejects prose between core sections' \
   $'## BLOCKING\n- (none)\n## RECOMMENDED\n- (none)\nThis warning is not a bullet.\n## INFORMATION\n- (none)'
 assert_review_rejected 'review rejects unknown top-level heading' \
   $'## SUMMARY\n- not part of the contract\n## BLOCKING\n- (none)\n## RECOMMENDED\n- (none)\n## INFORMATION\n- (none)'
+assert_review_rejected 'review rejects indented critical continuation after BLOCKING none' \
+  $'## BLOCKING\n- (none)\n  CRITICAL: this must be fixed\n## RECOMMENDED\n- (none)\n## INFORMATION\n- (none)'
+assert_review_rejected 'review rejects additional BLOCKING bullet after none' \
+  $'## BLOCKING\n- (none)\n- CRITICAL: this must be fixed\n## RECOMMENDED\n- (none)\n## INFORMATION\n- (none)'
+assert_review_rejected 'review rejects none after a real RECOMMENDED bullet' \
+  $'## BLOCKING\n- (none)\n## RECOMMENDED\n- real recommendation\n- (none)\n## INFORMATION\n- (none)'
+assert_review_rejected 'review rejects indented continuation after INFORMATION none' \
+  $'## BLOCKING\n- (none)\n## RECOMMENDED\n- (none)\n## INFORMATION\n- (none)\n  CRITICAL: do not merge'
+assert_review_rejected 'review rejects indented continuation after ADJUDICATION none' \
+  $'## ADJUDICATION\n- (none)\n  hidden adjudication\n## BLOCKING\n- (none)\n## RECOMMENDED\n- (none)\n## INFORMATION\n- (none)'
 
 assert_review_accepted 'review accepts prescriptive multiline blocking finding' \
   $'## BLOCKING\n- [NEW] fail closed — script:1 — unsafe parser\n  Suggested fix: validate sections\n  Root cause: header-only validation\n  Architectural context: merge gate\n  Impact: unsafe merge\n## RECOMMENDED\n- (none)\n## INFORMATION\n- useful context'
 assert_review_accepted 'review accepts leading ADJUDICATION section' \
   $'## ADJUDICATION\n- BLOCKING old issue: ACCEPTED — fixed\n  Evidence: commit abc123 resolves it\n\n## BLOCKING\n- (none)\n\n## RECOMMENDED\n- (none)\n\n## INFORMATION\n- (none)'
+assert_review_accepted 'review accepts multiple real findings with indented details' \
+  $'## BLOCKING\n- first finding\n  Suggested fix: first fix\n- second finding\n  Suggested fix: second fix\n## RECOMMENDED\n- first recommendation\n- second recommendation\n## INFORMATION\n- context'
 
 # Same-provider roles are allowed and still independently configured.
 run_script config "$TMP/same-role.record" "$TMP/home" \
