@@ -38,6 +38,24 @@ assert_not_contains() {
   else pass "$name"; fi
 }
 
+assert_review_rejected() {
+  local name="$1" review="$2"
+  set +e
+  STUB_FINAL_RESULT="$review" run_script reviewer "$TMP/structure-rejected.record" "$TMP/home" --reviewer claude >/dev/null 2>&1
+  local rc=$?
+  set -e
+  if [ "$rc" -ne 0 ]; then pass "$name"; else fail "$name"; fi
+}
+
+assert_review_accepted() {
+  local name="$1" review="$2"
+  set +e
+  STUB_FINAL_RESULT="$review" run_script reviewer "$TMP/structure-accepted.record" "$TMP/home" --reviewer claude >/dev/null 2>&1
+  local rc=$?
+  set -e
+  if [ "$rc" -eq 0 ]; then pass "$name"; else fail "$name"; fi
+}
+
 make_stubs() {
   local bin="$1"
   mkdir -p "$bin"
@@ -228,6 +246,26 @@ STUB_FINAL_RESULT='not a strict review' run_script reviewer "$TMP/review-invalid
 rc=$?
 set -e
 if [ "$rc" -ne 0 ]; then pass 'Claude review fails closed on invalid structure'; else fail 'Claude review fails closed on invalid structure'; fi
+
+# Strict structure is fail-closed: each core section appears exactly once, in
+# order, and has at least one explicit top-level bullet.
+assert_review_rejected 'review rejects headings with no bullets' \
+  $'## BLOCKING\n## RECOMMENDED\n## INFORMATION'
+assert_review_rejected 'review rejects bulletless BLOCKING section' \
+  $'## BLOCKING\nexplanation without a finding bullet\n## RECOMMENDED\n- (none)\n## INFORMATION\n- (none)'
+assert_review_rejected 'review rejects bulletless RECOMMENDED section' \
+  $'## BLOCKING\n- (none)\n## RECOMMENDED\ncontext only\n## INFORMATION\n- (none)'
+assert_review_rejected 'review rejects bulletless INFORMATION section' \
+  $'## BLOCKING\n- (none)\n## RECOMMENDED\n- (none)\n## INFORMATION\ncontext only'
+assert_review_rejected 'review rejects duplicate core heading' \
+  $'## BLOCKING\n- (none)\n## BLOCKING\n- duplicate\n## RECOMMENDED\n- (none)\n## INFORMATION\n- (none)'
+assert_review_rejected 'review rejects out-of-order core headings' \
+  $'## RECOMMENDED\n- (none)\n## BLOCKING\n- (none)\n## INFORMATION\n- (none)'
+
+assert_review_accepted 'review accepts prescriptive multiline blocking finding' \
+  $'## BLOCKING\n- [NEW] fail closed — script:1 — unsafe parser\n  Suggested fix: validate sections\n  Root cause: header-only validation\n  Architectural context: merge gate\n  Impact: unsafe merge\n## RECOMMENDED\n- (none)\n## INFORMATION\n- useful context'
+assert_review_accepted 'review accepts leading ADJUDICATION section' \
+  $'## ADJUDICATION\n- BLOCKING old issue: ACCEPTED — fixed\n## BLOCKING\n- (none)\n## RECOMMENDED\n- (none)\n## INFORMATION\n- (none)'
 
 # Same-provider roles are allowed and still independently configured.
 run_script config "$TMP/same-role.record" "$TMP/home" \

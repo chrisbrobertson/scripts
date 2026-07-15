@@ -1058,10 +1058,39 @@ To resume: add credits to the Codex workspace, then remove the \`review-codex-no
 # Validate the strict review parser contract shared by all reviewer harnesses.
 valid_review_structure() {
   local review_file="$1"
-  [ -s "$review_file" ] \
-    && grep -qE '^## BLOCKING[[:space:]]*$' "$review_file" 2>/dev/null \
-    && grep -qE '^## RECOMMENDED[[:space:]]*$' "$review_file" 2>/dev/null \
-    && grep -qE '^## INFORMATION[[:space:]]*$' "$review_file" 2>/dev/null
+  [ -s "$review_file" ] || return 1
+  awk '
+    BEGIN { current = 0; valid = 1 }
+    /^## BLOCKING[[:space:]]*$/ {
+      blocking_headings++
+      if (blocking_headings != 1 || recommended_headings || information_headings) valid = 0
+      current = 1
+      next
+    }
+    /^## RECOMMENDED[[:space:]]*$/ {
+      recommended_headings++
+      if (blocking_headings != 1 || recommended_headings != 1 || information_headings) valid = 0
+      current = 2
+      next
+    }
+    /^## INFORMATION[[:space:]]*$/ {
+      information_headings++
+      if (blocking_headings != 1 || recommended_headings != 1 || information_headings != 1) valid = 0
+      current = 3
+      next
+    }
+    /^## / { current = 0; next }
+    /^- / {
+      if (current == 1) blocking_bullets++
+      else if (current == 2) recommended_bullets++
+      else if (current == 3) information_bullets++
+    }
+    END {
+      if (blocking_headings != 1 || recommended_headings != 1 || information_headings != 1) valid = 0
+      if (blocking_bullets < 1 || recommended_bullets < 1 || information_bullets < 1) valid = 0
+      exit(valid ? 0 : 1)
+    }
+  ' "$review_file" 2>/dev/null
 }
 
 # Run codex exec with retry on MCP transport failures.
