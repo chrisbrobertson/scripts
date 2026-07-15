@@ -1,16 +1,16 @@
 #!/bin/bash
-# babysit-with-review.sh — babysit.sh + Claude<->Codex PR-review handoff.
+# babysit-with-review.sh — autonomous implementation + independent PR-review handoff.
 #
-# Same outer loop as babysit.sh. When Claude ends an iteration with the
+# Same outer loop as babysit.sh. When the implementer ends an iteration with the
 # sentinel `HANDOFF_REVIEW <PR_NUMBER>` on its own line, this wrapper runs
 # up to MAX_REVIEW_CYCLES (default 6) of:
-#   1. codex exec — produces a strict-markdown review with three sections:
+#   1. selected reviewer — produces a strict-markdown review with three sections:
 #      ## BLOCKING / ## RECOMMENDED / ## INFORMATION
-#   2. claude -p  — addresses BLOCKING (must), RECOMMENDED (should), and
-#                   considers INFORMATION findings; commits and pushes.
-# The cycle exits early when codex reports zero BLOCKING findings, when
-# claude reports STUCK_REVIEW, or when HEAD doesn't advance during a
-# claude pass (defensive against "DONE_REVIEW but no commits made").
+#   2. selected implementer — addresses BLOCKING (must), RECOMMENDED (should),
+#      and considers INFORMATION findings; commits and pushes.
+# The cycle exits early when the reviewer reports zero BLOCKING findings, when
+# the implementer reports STUCK_REVIEW, or when HEAD doesn't advance during an
+# implementation pass (defensive against "DONE_REVIEW but no commits made").
 #
 # Env vars:
 #   MAX_ITER           default 50   hard cap on outer iterations
@@ -28,15 +28,15 @@
 
 set -uo pipefail
 
-VERSION="1.0.1"
+VERSION="1.1.0"
 
 usage() {
   cat <<'EOF'
-Usage: babysit-with-review.sh [-h|--help] [--version] [--repo-base PATH]
+Usage: babysit-with-review.sh [-h|--help] [--version] [OPTIONS]
 
 Run from inside a project root. Outer loop is identical to babysit.sh.
-When Claude ends an iteration with `HANDOFF_REVIEW <PR_NUMBER>` on its
-own line, runs a Claude<->Codex review cycle on that PR (up to
+When the implementer ends an iteration with `HANDOFF_REVIEW <PR_NUMBER>` on its
+own line, runs an implementer/reviewer cycle on that PR (up to
 MAX_REVIEW_CYCLES) before resuming the outer loop.
 
 Options:
@@ -44,6 +44,22 @@ Options:
                      (prs, issues, specs) are looked up under PATH/scripts.
                      Overrides the REPO_BASE env var. Default: auto-detect
                      ~/repos then ~/repo.
+  --implementer claude|codex
+                     Implementation harness. Default: claude.
+  --implementer-model MODEL
+                     Model for all implementation passes. When omitted, the
+                     Claude implementer keeps its stage/cycle defaults.
+  --implementer-effort LEVEL
+                     Effort for all implementation passes.
+  --reviewer claude|codex
+                     Review harness. Default: codex.
+  --reviewer-model MODEL
+                     Model for every review pass and Codex preflight.
+  --reviewer-effort LEVEL
+                     Effort for every review pass and Codex preflight.
+
+All long options accepting values support both `--name VALUE` and
+`--name=VALUE` forms. Model and effort values are passed to the selected CLI.
 
 Env vars:
   REPO_BASE          base dir for helper scripts (see --repo-base)
@@ -65,20 +81,79 @@ Logs land in ~/sisyphus-logs/<project>-<timestamp>-<pid>.log.
 
 Examples:
   babysit-with-review.sh
+  babysit-with-review.sh --implementer codex --implementer-effort high
+  babysit-with-review.sh --reviewer=claude --reviewer-model=claude-opus-4-8
+  babysit-with-review.sh --implementer claude --reviewer claude
   MAX_REVIEW_CYCLES=3 babysit-with-review.sh
 EOF
 }
 
 REPO_BASE_OVERRIDE=""
+IMPLEMENTER="claude"
+IMPLEMENTER_MODEL=""
+IMPLEMENTER_EFFORT=""
+REVIEWER="codex"
+REVIEWER_MODEL=""
+REVIEWER_EFFORT=""
+
+missing_option_value() {
+  echo "Missing value for $1" >&2
+  usage >&2
+  exit 2
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
     --version) echo "babysit-with-review.sh $VERSION"; exit 0 ;;
-    --repo-base) REPO_BASE_OVERRIDE="${2:-}"; shift 2 ;;
-    --repo-base=*) REPO_BASE_OVERRIDE="${1#*=}"; shift ;;
+    --repo-base)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || missing_option_value "$1"
+      REPO_BASE_OVERRIDE="$2"; shift 2 ;;
+    --repo-base=*)
+      REPO_BASE_OVERRIDE="${1#*=}"; [ -n "$REPO_BASE_OVERRIDE" ] || missing_option_value "--repo-base"
+      shift ;;
+    --implementer)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || missing_option_value "$1"
+      IMPLEMENTER="$2"; shift 2 ;;
+    --implementer=*)
+      IMPLEMENTER="${1#*=}"; [ -n "$IMPLEMENTER" ] || missing_option_value "--implementer"
+      shift ;;
+    --implementer-model)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || missing_option_value "$1"
+      IMPLEMENTER_MODEL="$2"; shift 2 ;;
+    --implementer-model=*)
+      IMPLEMENTER_MODEL="${1#*=}"; [ -n "$IMPLEMENTER_MODEL" ] || missing_option_value "--implementer-model"
+      shift ;;
+    --implementer-effort)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || missing_option_value "$1"
+      IMPLEMENTER_EFFORT="$2"; shift 2 ;;
+    --implementer-effort=*)
+      IMPLEMENTER_EFFORT="${1#*=}"; [ -n "$IMPLEMENTER_EFFORT" ] || missing_option_value "--implementer-effort"
+      shift ;;
+    --reviewer)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || missing_option_value "$1"
+      REVIEWER="$2"; shift 2 ;;
+    --reviewer=*)
+      REVIEWER="${1#*=}"; [ -n "$REVIEWER" ] || missing_option_value "--reviewer"
+      shift ;;
+    --reviewer-model)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || missing_option_value "$1"
+      REVIEWER_MODEL="$2"; shift 2 ;;
+    --reviewer-model=*)
+      REVIEWER_MODEL="${1#*=}"; [ -n "$REVIEWER_MODEL" ] || missing_option_value "--reviewer-model"
+      shift ;;
+    --reviewer-effort)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || missing_option_value "$1"
+      REVIEWER_EFFORT="$2"; shift 2 ;;
+    --reviewer-effort=*)
+      REVIEWER_EFFORT="${1#*=}"; [ -n "$REVIEWER_EFFORT" ] || missing_option_value "--reviewer-effort"
+      shift ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+case "$IMPLEMENTER" in claude|codex) ;; *) echo "Invalid implementer: $IMPLEMENTER (expected claude or codex)" >&2; exit 2 ;; esac
+case "$REVIEWER" in claude|codex) ;; *) echo "Invalid reviewer: $REVIEWER (expected claude or codex)" >&2; exit 2 ;; esac
 
 MAX_ITER="${MAX_ITER:-50}"
 SLEEP_SEC="${SLEEP_SEC:-10}"
@@ -129,7 +204,8 @@ TMP_CODEX_FULL=$(mktemp)
 touch "$LOG" "$STOP_FILE"
 trap 'rm -f "$STOP_FILE" "$TMP_RESULT" "$TMP_REVIEW" "$TMP_REVIEW_RESULT" "$TMP_CODEX_FULL"' EXIT
 
-echo "Babysitting $PROJECT v${VERSION} (max=$MAX_ITER, stuck=$STUCK_N, review_cycles=$MAX_REVIEW_CYCLES) → $LOG"
+echo "Babysitting $PROJECT v${VERSION} (implementer=$IMPLEMENTER, reviewer=$REVIEWER, max=$MAX_ITER, stuck=$STUCK_N, review_cycles=$MAX_REVIEW_CYCLES) → $LOG"
+echo "  roles: implementer model=${IMPLEMENTER_MODEL:-stage-default} effort=${IMPLEMENTER_EFFORT:-default}; reviewer model=${REVIEWER_MODEL:-configured-default} effort=${REVIEWER_EFFORT:-configured-default}"
 echo "  graceful stop: rm $STOP_FILE"
 
 # ---------- prompts ----------
@@ -616,12 +692,12 @@ run_claude() {
   local prompt="$1"
   local out_file="$2"
   local run_dir="${3:-$PWD}"
-  local model="${4:-claude-sonnet-5}"
-  (cd "$run_dir" && claude -p "$prompt" \
-    --model "$model" \
-    --dangerously-skip-permissions \
-    --output-format stream-json \
-    --verbose 2>>"$LOG") \
+  local stage_model="${4:-claude-sonnet-5}"
+  local model="${IMPLEMENTER_MODEL:-$stage_model}"
+  local -a args=(-p "$prompt" --model "$model")
+  [ -n "$IMPLEMENTER_EFFORT" ] && args+=(--effort "$IMPLEMENTER_EFFORT")
+  args+=(--dangerously-skip-permissions --output-format stream-json --verbose)
+  (cd "$run_dir" && claude "${args[@]}" 2>>"$LOG") \
     | tee -a "$LOG" \
     | python3 -c '
 import json, sys
@@ -661,7 +737,37 @@ sys.stdout.write(final)
   return ${PIPESTATUS[0]}
 }
 
-# Count BLOCKING findings in a strict-markdown codex review on stdin.
+# Run a Codex implementation pass with the same autonomous/full-access policy
+# as Claude's permission bypass. Codex writes its final response directly to
+# out_file; diagnostic stdout/stderr is logged separately so it cannot corrupt
+# sentinel capture.
+run_codex_implementer() {
+  local prompt="$1"
+  local out_file="$2"
+  local run_dir="${3:-$PWD}"
+  local -a args=(exec --output-last-message "$out_file" --dangerously-bypass-approvals-and-sandbox)
+  [ -n "$IMPLEMENTER_MODEL" ] && args+=(--model "$IMPLEMENTER_MODEL")
+  [ -n "$IMPLEMENTER_EFFORT" ] && args+=(-c "model_reasoning_effort=\"$IMPLEMENTER_EFFORT\"")
+  : > "$out_file"
+  (cd "$run_dir" && codex "${args[@]}" "$prompt" 2>&1) \
+    | tee -a "$LOG" >&2
+  return ${PIPESTATUS[0]}
+}
+
+# Provider-neutral implementation dispatcher. stage_model is used only for
+# backward-compatible Claude defaults; an explicit implementer model overrides it.
+run_implementer() {
+  local prompt="$1"
+  local out_file="$2"
+  local run_dir="${3:-$PWD}"
+  local stage_model="${4:-claude-sonnet-5}"
+  case "$IMPLEMENTER" in
+    claude) run_claude "$prompt" "$out_file" "$run_dir" "$stage_model" ;;
+    codex) run_codex_implementer "$prompt" "$out_file" "$run_dir" ;;
+  esac
+}
+
+# Count BLOCKING findings in a strict-markdown review on stdin.
 # Treats a single `- (none)` bullet as zero findings.
 count_blocking() {
   awk '
@@ -680,7 +786,8 @@ count_blocking() {
 
 # Fetch all existing PR feedback: formal review bodies, top-level comments, and
 # inline review comments. Filters out comments posted by the babysitter itself
-# (prefixed with "**Codex review —" or "**babysit-with-review:") to avoid
+# (prefixed with "**Codex review —", "**Claude review —", or
+# "**babysit-with-review:") to avoid
 # feeding its own output back as external feedback.
 # Args: <pr_num>
 collect_pr_feedback() {
@@ -697,6 +804,7 @@ collect_pr_feedback() {
     --jq '.reviews[]
           | select(.body != "")
           | select(.body | startswith("**Codex review") | not)
+          | select(.body | startswith("**Claude review") | not)
           | select(.body | startswith("**babysit-with-review:") | not)
           | "### Review by \(.author.login) [\(.state)]\n\(.body)\n"' \
     2>/dev/null || true)
@@ -707,6 +815,7 @@ collect_pr_feedback() {
   comments=$(gh pr view "$pr_num" --json comments \
     --jq '.comments[]
           | select(.body | startswith("**Codex review") | not)
+          | select(.body | startswith("**Claude review") | not)
           | select(.body | startswith("**babysit-with-review:") | not)
           | "### Comment by \(.author.login)\n\(.body)\n"' \
     2>/dev/null || true)
@@ -723,7 +832,7 @@ collect_pr_feedback() {
   printf '%s' "$out"
 }
 
-# Post a codex review as a PR comment. Best-effort: failures logged, do not abort.
+# Post the selected harness review as a PR comment. Best-effort: failures logged.
 # Args: <pr_num> <cycle> <max_cycles> <review_file>
 post_codex_review() {
   local pr_num="$1"
@@ -733,8 +842,9 @@ post_codex_review() {
 
   [ -s "$review_file" ] || return 0
 
-  local body
-  body="**Codex review — PR #${pr_num} cycle ${cycle} of ${max}**
+  local body reviewer_name
+  case "$REVIEWER" in codex) reviewer_name="Codex" ;; claude) reviewer_name="Claude" ;; esac
+  body="**${reviewer_name} review — PR #${pr_num} cycle ${cycle} of ${max}**
 
 \`\`\`
 $(cat "$review_file")
@@ -742,7 +852,7 @@ $(cat "$review_file")
 
   printf '%s\n' "$body" \
     | gh pr comment "$pr_num" --body-file - >>"$LOG" 2>&1 \
-    || echo "  [review] WARNING: gh pr comment (codex review) failed for PR #$pr_num" | tee -a "$LOG" >&2
+    || echo "  [review] WARNING: gh pr comment ($REVIEWER review) failed for PR #$pr_num" | tee -a "$LOG" >&2
 }
 
 # Mark a PR as needing manual review when a review cycle bails for any reason.
@@ -773,7 +883,7 @@ fail_review_cycle() {
     exit 1
   fi
 
-  # Post the bail reason. (Codex review content is already on the PR via post_codex_review.)
+  # Post the bail reason. (Reviewer content is already on the PR.)
   local body
   body="**babysit-with-review: review cycle bailed — manual review required**
 
@@ -906,6 +1016,15 @@ To resume: add credits to the Codex workspace, then remove the \`review-codex-no
     || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
 }
 
+# Validate the strict review parser contract shared by all reviewer harnesses.
+valid_review_structure() {
+  local review_file="$1"
+  [ -s "$review_file" ] \
+    && grep -qE '^## BLOCKING[[:space:]]*$' "$review_file" 2>/dev/null \
+    && grep -qE '^## RECOMMENDED[[:space:]]*$' "$review_file" 2>/dev/null \
+    && grep -qE '^## INFORMATION[[:space:]]*$' "$review_file" 2>/dev/null
+}
+
 # Run codex exec with retry on MCP transport failures.
 # Uses $TMP_REVIEW (must be zeroed by caller) for the output-last-message file.
 # Uses $TMP_CODEX_FULL for the combined codex output (used for telltale detection).
@@ -941,7 +1060,10 @@ codex_review_with_retry() {
 
     local rc=0
     set +e
-    codex exec --output-last-message "$TMP_REVIEW" -s read-only "$codex_prompt" 2>&1 \
+    local -a codex_args=(exec --output-last-message "$TMP_REVIEW" -s read-only)
+    [ -n "$REVIEWER_MODEL" ] && codex_args+=(--model "$REVIEWER_MODEL")
+    [ -n "$REVIEWER_EFFORT" ] && codex_args+=(-c "model_reasoning_effort=\"$REVIEWER_EFFORT\"")
+    codex "${codex_args[@]}" "$codex_prompt" 2>&1 \
       | tee -a "$LOG" "$TMP_CODEX_FULL" >&2
     rc=${PIPESTATUS[0]}
     set -e
@@ -961,11 +1083,7 @@ codex_review_with_retry() {
     # Structural validation: require all three section headers before treating as success.
     # This closes the exit-0-garbage hole (e.g. a deprecation warning in place of a review).
     if [ "$rc" -eq 0 ] && [ -s "$TMP_REVIEW" ]; then
-      if grep -qE '^## BLOCKING[[:space:]]*$' "$TMP_REVIEW" 2>/dev/null \
-          && grep -qE '^## RECOMMENDED[[:space:]]*$' "$TMP_REVIEW" 2>/dev/null \
-          && grep -qE '^## INFORMATION[[:space:]]*$' "$TMP_REVIEW" 2>/dev/null; then
-        return 0
-      fi
+      if valid_review_structure "$TMP_REVIEW"; then return 0; fi
       echo "  [codex] exit 0 but review missing required section headers (## BLOCKING / ## RECOMMENDED / ## INFORMATION); treating as failure" | tee -a "$LOG" >&2
       # fall through to return 1
     fi
@@ -982,7 +1100,78 @@ codex_review_with_retry() {
   done
 }
 
-# Run the Claude<->Codex review cycle for a PR number.
+# Run a Claude review with non-mutating plan permissions. Claude's stream-json
+# result is reduced to the final response in TMP_REVIEW and validated against
+# the same strict section contract as Codex.
+claude_review() {
+  local review_prompt="$1"
+  local -a args=(-p "$review_prompt" --permission-mode plan)
+  [ -n "$REVIEWER_MODEL" ] && args+=(--model "$REVIEWER_MODEL")
+  [ -n "$REVIEWER_EFFORT" ] && args+=(--effort "$REVIEWER_EFFORT")
+  args+=(--output-format stream-json --verbose)
+  : > "$TMP_REVIEW"
+  set +e
+  claude "${args[@]}" 2>&1 \
+    | tee -a "$LOG" \
+    | python3 -c '
+import json, sys
+final = ""
+for line in sys.stdin:
+    try:
+        event = json.loads(line)
+    except Exception:
+        continue
+    if event.get("type") == "result":
+        final = event.get("result") or ""
+sys.stdout.write(final)
+' > "$TMP_REVIEW"
+  local rc=${PIPESTATUS[0]}
+  set -e
+  if [ "$rc" -ne 0 ]; then
+    echo "  [claude reviewer] non-zero exit (rc=$rc); treating review as incomplete" | tee -a "$LOG" >&2
+    return 1
+  fi
+  if ! valid_review_structure "$TMP_REVIEW"; then
+    echo "  [claude reviewer] review missing required section headers (## BLOCKING / ## RECOMMENDED / ## INFORMATION); treating as failure" | tee -a "$LOG" >&2
+    return 1
+  fi
+}
+
+review_with_retry() {
+  local review_prompt="$1"
+  case "$REVIEWER" in
+    codex) codex_review_with_retry "$review_prompt" ;;
+    claude) claude_review "$review_prompt" ;;
+  esac
+}
+
+# Codex-only preflight preserves compatibility and credit detection. Claude has
+# no equivalent provider-specific probe and fails closed when its review runs.
+reviewer_preflight() {
+  [ "$REVIEWER" = "codex" ] || return 0
+  local compat_re='requires a newer version of Codex'
+  local credits_re='Your workspace is out of credits'
+  local probe_full
+  probe_full=$(mktemp)
+  local -a args=(exec -s read-only)
+  [ -n "$REVIEWER_MODEL" ] && args+=(--model "$REVIEWER_MODEL")
+  [ -n "$REVIEWER_EFFORT" ] && args+=(-c "model_reasoning_effort=\"$REVIEWER_EFFORT\"")
+  local rc=0
+  set +e
+  codex "${args[@]}" "Say 'ok'." 2>&1 | tee -a "$LOG" "$probe_full" >/dev/null
+  rc=${PIPESTATUS[0]}
+  set -e
+  if grep -qE "$compat_re" "$probe_full" 2>/dev/null; then rm -f "$probe_full"; return 3; fi
+  if grep -qE "$credits_re" "$probe_full" 2>/dev/null; then rm -f "$probe_full"; return 4; fi
+  rm -f "$probe_full"
+  [ "$rc" -eq 0 ] || return 1
+}
+
+reviewer_binary_available() {
+  command -v "$REVIEWER" >/dev/null 2>&1
+}
+
+# Run the selected implementer/reviewer cycle for a PR number.
 run_review_cycle() {
   local pr_num="$1"
   local cycle=0
@@ -992,45 +1181,30 @@ run_review_cycle() {
 
   echo "=== review handoff: PR #$pr_num @ $(date -u +%FT%TZ) ===" | tee -a "$LOG" >&2
 
-  # Graceful degradation: if codex isn't installed (e.g. headless mbp16 host
-  # where review is handled by an external PM agent), skip the Claude↔Codex
-  # review cycle and just return — the outer loop continues normally.
-  if ! command -v codex >/dev/null 2>&1; then
-    echo "  [review] codex CLI not found; skipping review cycle (PR #$pr_num remains open for external review)" | tee -a "$LOG" >&2
+  # Graceful degradation checks the selected reviewer binary.
+  if ! reviewer_binary_available; then
+    echo "  [review] $REVIEWER CLI not found; skipping review cycle (PR #$pr_num remains open for external review)" | tee -a "$LOG" >&2
     return 0
   fi
 
-  # Pre-flight probe: verify Codex CLI is compatible and workspace has credits before
-  # checking out the PR branch. A mismatch here means every review in this run will
-  # fail; detect it here and halt rather than burning cycles.
-  local compat_re='requires a newer version of Codex'
-  local credits_re='Your workspace is out of credits'
-  local _probe_full
-  _probe_full=$(mktemp)
+  # Codex preflight is provider-specific; Claude failures take the generic
+  # review-incomplete path after the real review invocation.
   local _probe_rc=0
-  set +e
-  codex exec -s read-only "Say 'ok'." 2>&1 | tee -a "$LOG" "$_probe_full" >/dev/null
-  _probe_rc=${PIPESTATUS[0]}
-  set -e
-  if grep -qE "$compat_re" "$_probe_full" 2>/dev/null; then
+  reviewer_preflight || _probe_rc=$?
+  if [ "$_probe_rc" -eq 3 ]; then
     echo "  [review] FATAL: Codex version incompatibility detected in pre-flight probe (PR #$pr_num); upgrade CLI before retrying" | tee -a "$LOG" >&2
-    rm -f "$_probe_full"
     fail_review_cycle_codex_outdated "$pr_num" "Codex pre-flight probe: CLI too old for configured model"
     return 3
-  fi
-  if grep -qE "$credits_re" "$_probe_full" 2>/dev/null; then
+  elif [ "$_probe_rc" -eq 4 ]; then
     echo "  [review] FATAL: Codex workspace out of credits (pre-flight probe for PR #$pr_num); add credits before restarting" | tee -a "$LOG" >&2
-    rm -f "$_probe_full"
     fail_review_cycle_codex_no_credits "$pr_num" "Codex pre-flight probe: workspace out of credits"
     return 4
-  fi
-  rm -f "$_probe_full"
-  if [ "$_probe_rc" -ne 0 ]; then
-    echo "  [review] FATAL: Codex pre-flight probe returned rc=$_probe_rc; bailing review cycle for PR #$pr_num" | tee -a "$LOG" >&2
-    fail_review_cycle "$pr_num" "Codex pre-flight probe failed (rc=$_probe_rc) before checkout"
+  elif [ "$_probe_rc" -ne 0 ]; then
+    echo "  [review] FATAL: $REVIEWER pre-flight probe returned rc=$_probe_rc; bailing review cycle for PR #$pr_num" | tee -a "$LOG" >&2
+    fail_review_cycle "$pr_num" "$REVIEWER pre-flight probe failed (rc=$_probe_rc) before checkout"
     return 0
   fi
-  unset _probe_full _probe_rc
+  unset _probe_rc
 
   # Make sure we're on the PR branch.
   if ! gh pr checkout "$pr_num" >>"$LOG" 2>&1; then
@@ -1038,16 +1212,16 @@ run_review_cycle() {
     fail_review_cycle "$pr_num" "gh pr checkout failed before review could run"
     return 0
   fi
-  # Capture PR branch tip before any Claude commits so the history git log
-  # only surfaces commits Claude makes during this review cycle.
+  # Capture PR branch tip before remediation commits so cycle history only
+  # surfaces changes made by the selected implementer during this review cycle.
   review_start_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
 
   while [ "$cycle" -lt "$MAX_REVIEW_CYCLES" ]; do
     cycle=$((cycle + 1))
     echo "--- review cycle $cycle / $MAX_REVIEW_CYCLES (PR #$pr_num) @ $(date -u +%FT%TZ) ---" | tee -a "$LOG" >&2
 
-    # ---- codex pass ----
-    # Build history block for cycle 2+: prior reviews + commits Claude made.
+    # ---- reviewer pass ----
+    # Build history block for cycle 2+: prior reviews + remediation commits.
     local history_block=""
     if [ "$cycle" -ge 2 ] && [ "${#REVIEW_HISTORY[@]}" -gt 0 ]; then
       local _hb=""
@@ -1059,7 +1233,7 @@ ${REVIEW_HISTORY[$_i]}
       done
       local _commits
       _commits=$(git log --oneline "${review_start_sha}..HEAD" 2>/dev/null || true)
-      _hb="${_hb}--- commits Claude made since review cycle started ---
+      _hb="${_hb}--- commits the implementer made since review cycle started ---
 ${_commits:-"(none)"}
 --- end commits ---
 "
@@ -1069,7 +1243,7 @@ ${_hb}--- end prior review cycles ---
       unset _hb _i _commits
     fi
 
-    # Select Codex template by cycle number.
+    # Select the existing review template by cycle number.
     local _tmpl
     if [ "$cycle" -eq 1 ]; then
       _tmpl="$CODEX_REVIEW_PROMPT_CYCLE1"
@@ -1097,30 +1271,30 @@ ${_hb}--- end prior review cycles ---
       _tmpl_name="descriptive-convergence"
     elif [ "$cycle" -le 4 ]; then
       _tmpl_name="prescriptive-detailed"
-      echo "  [codex] detailed explanations enabled (cycle 3+)" | tee -a "$LOG" >&2
+      echo "  [$REVIEWER reviewer] detailed explanations enabled (cycle 3+)" | tee -a "$LOG" >&2
     else
       _tmpl_name="prescriptive-adjudication"
-      echo "  [codex] adjudication mode enabled (cycle 5+)" | tee -a "$LOG" >&2
+      echo "  [$REVIEWER reviewer] adjudication mode enabled (cycle 5+)" | tee -a "$LOG" >&2
     fi
-    echo "  [codex] template=${_tmpl_name} has_history=${_has_history} cycle=${cycle}/${MAX_REVIEW_CYCLES}" | tee -a "$LOG" >&2
+    echo "  [$REVIEWER reviewer] template=${_tmpl_name} has_history=${_has_history} cycle=${cycle}/${MAX_REVIEW_CYCLES}" | tee -a "$LOG" >&2
     unset _has_history _tmpl_name
 
-    echo "  [codex] reviewing PR #$pr_num..." >&2
-    local codex_rc=0
-    codex_review_with_retry "$codex_prompt" || codex_rc=$?
+    echo "  [$REVIEWER reviewer] reviewing PR #$pr_num..." >&2
+    local reviewer_rc=0
+    review_with_retry "$codex_prompt" || reviewer_rc=$?
 
-    if [ "$codex_rc" -eq 3 ]; then
+    if [ "$REVIEWER" = "codex" ] && [ "$reviewer_rc" -eq 3 ]; then
       fail_review_cycle_codex_outdated "$pr_num" "Codex CLI version incompatibility during review (cycle $cycle)"
       return 3
-    elif [ "$codex_rc" -eq 4 ]; then
+    elif [ "$REVIEWER" = "codex" ] && [ "$reviewer_rc" -eq 4 ]; then
       fail_review_cycle_codex_no_credits "$pr_num" "Codex workspace out of credits during review (cycle $cycle)"
       return 4
-    elif [ "$codex_rc" -eq 2 ]; then
+    elif [ "$REVIEWER" = "codex" ] && [ "$reviewer_rc" -eq 2 ]; then
       fail_review_cycle_mcp "$pr_num" "codex MCP transport failure after 3 retries (cycle $cycle)"
       return 2
-    elif [ "$codex_rc" -ne 0 ]; then
-      echo "  [codex] non-transport failure; bailing review cycle" | tee -a "$LOG" >&2
-      fail_review_cycle "$pr_num" "codex exec failed (non-transport) during cycle $cycle"
+    elif [ "$reviewer_rc" -ne 0 ]; then
+      echo "  [$REVIEWER reviewer] review failed; bailing review cycle" | tee -a "$LOG" >&2
+      fail_review_cycle "$pr_num" "$REVIEWER review failed during cycle $cycle"
       return 0
     fi
 
@@ -1131,9 +1305,9 @@ ${_hb}--- end prior review cycles ---
     post_codex_review "$pr_num" "$cycle" "$MAX_REVIEW_CYCLES" "$TMP_REVIEW"
 
     {
-      echo "--- codex review (cycle $cycle) ---"
+      echo "--- $REVIEWER review (cycle $cycle) ---"
       printf '%s\n' "$review"
-      echo "--- end codex review ---"
+      echo "--- end $REVIEWER review ---"
     } >> "$LOG"
 
     # Parse adjudication results for cycle 5+ telemetry
@@ -1141,12 +1315,12 @@ ${_hb}--- end prior review cycles ---
       local n_accepted n_disagreed
       n_accepted=$(printf '%s\n' "$review" | grep -c '^- BLOCKING.*: ACCEPTED' || echo 0)
       n_disagreed=$(printf '%s\n' "$review" | grep -c '^- BLOCKING.*: DISAGREED' || echo 0)
-      echo "  [codex] adjudication: $n_accepted accepted, $n_disagreed disagreed" | tee -a "$LOG" >&2
+      echo "  [$REVIEWER reviewer] adjudication: $n_accepted accepted, $n_disagreed disagreed" | tee -a "$LOG" >&2
     fi
 
     local n_blocking
     n_blocking=$(printf '%s\n' "$review" | count_blocking)
-    echo "  [codex] $n_blocking blocking finding(s)" | tee -a "$LOG" >&2
+    echo "  [$REVIEWER reviewer] $n_blocking blocking finding(s)" | tee -a "$LOG" >&2
 
     # Guard: if count_blocking returned non-integer, bail — never merge on a parse error.
     if ! [[ "$n_blocking" =~ ^[0-9]+$ ]]; then
@@ -1167,7 +1341,7 @@ ${_hb}--- end prior review cycles ---
         if gh api -X POST "repos/${_owner_repo}/statuses/${_head_sha}" \
             -f state=success \
             -f context=codex-review \
-            -f description="Codex review passed (cycle ${cycle} of ${MAX_REVIEW_CYCLES})" \
+            -f description="$REVIEWER review passed (cycle ${cycle} of ${MAX_REVIEW_CYCLES})" \
             -f target_url="https://github.com/${_owner_repo}/pull/${pr_num}" \
             >>"$LOG" 2>&1; then
           echo "  [review] codex-review status set to success for ${_head_sha:0:8}" | tee -a "$LOG" >&2
@@ -1201,7 +1375,7 @@ ${_hb}--- end prior review cycles ---
       return 0
     fi
 
-    # ---- claude pass ----
+    # ---- implementer remediation pass ----
     local pr_feedback
     pr_feedback=$(collect_pr_feedback "$pr_num" 2>>"$LOG")
     [ -z "$pr_feedback" ] && pr_feedback="(none)"
@@ -1216,15 +1390,15 @@ ${_hb}--- end prior review cycles ---
     elif [ "$cycle" -le 3 ]; then
       _claude_tmpl="$CLAUDE_REVIEW_PROMPT_CYCLE2_3"
       _claude_model="claude-sonnet-5"
-      echo "  [claude] structured review pass for PR #$pr_num cycle $cycle" | tee -a "$LOG" >&2
+      echo "  [$IMPLEMENTER implementer] structured remediation pass for PR #$pr_num cycle $cycle" | tee -a "$LOG" >&2
     elif [ "$cycle" -eq 4 ]; then
       _claude_tmpl="$CLAUDE_REVIEW_PROMPT_CYCLE4"
       _claude_model="claude-opus-4-8"
-      echo "  [claude] structured review pass for PR #$pr_num cycle $cycle (with justifications, opus)" | tee -a "$LOG" >&2
+      echo "  [$IMPLEMENTER implementer] structured remediation pass for PR #$pr_num cycle $cycle (with justifications)" | tee -a "$LOG" >&2
     else
       _claude_tmpl="$CLAUDE_REVIEW_PROMPT_CYCLE5_6"
       _claude_model="claude-opus-4-8"
-      echo "  [claude] adjudication review pass for PR #$pr_num cycle $cycle (opus)" | tee -a "$LOG" >&2
+      echo "  [$IMPLEMENTER implementer] adjudication remediation pass for PR #$pr_num cycle $cycle" | tee -a "$LOG" >&2
     fi
 
     local claude_prompt
@@ -1238,10 +1412,11 @@ ${_hb}--- end prior review cycles ---
     local pre_sha post_sha
     pre_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
 
-    echo "  [claude] addressing findings (model: $_claude_model)..." >&2
-    if ! run_claude "$claude_prompt" "$TMP_REVIEW_RESULT" "$PWD" "$_claude_model"; then
-      echo "  [claude] non-zero exit during review pass; bailing review cycle" | tee -a "$LOG" >&2
-      fail_review_cycle "$pr_num" "claude exited non-zero while addressing review (cycle $cycle)"
+    local _resolved_implementer_model="${IMPLEMENTER_MODEL:-$_claude_model}"
+    echo "  [$IMPLEMENTER implementer] addressing findings (model: $_resolved_implementer_model)..." >&2
+    if ! run_implementer "$claude_prompt" "$TMP_REVIEW_RESULT" "$PWD" "$_claude_model"; then
+      echo "  [$IMPLEMENTER implementer] non-zero exit during review pass; bailing review cycle" | tee -a "$LOG" >&2
+      fail_review_cycle "$pr_num" "$IMPLEMENTER exited non-zero while addressing review (cycle $cycle)"
       return 0
     fi
 
@@ -1252,32 +1427,32 @@ ${_hb}--- end prior review cycles ---
 
     case "$last_line" in
       "STUCK_REVIEW"*)
-        echo "  [claude] $last_line — bailing review cycle" | tee -a "$LOG" >&2
-        fail_review_cycle "$pr_num" "claude reported STUCK_REVIEW (cycle $cycle)"
+        echo "  [$IMPLEMENTER implementer] $last_line — bailing review cycle" | tee -a "$LOG" >&2
+        fail_review_cycle "$pr_num" "$IMPLEMENTER reported STUCK_REVIEW (cycle $cycle)"
         return 0
         ;;
       "DONE_REVIEW")
-        echo "  [claude] DONE_REVIEW — looping for another codex pass" | tee -a "$LOG" >&2
+        echo "  [$IMPLEMENTER implementer] DONE_REVIEW — looping for another reviewer pass" | tee -a "$LOG" >&2
         # Capture resolution justifications for next cycle (cycle 4+)
         if [ "$cycle" -ge 4 ]; then
           justifications=$(gh pr view "$pr_num" --json comments -q '.comments[-1].body' 2>/dev/null || echo "")
-          echo "  [claude] resolution justifications posted to PR #$pr_num" | tee -a "$LOG" >&2
+          echo "  [$IMPLEMENTER implementer] resolution justifications posted to PR #$pr_num" | tee -a "$LOG" >&2
         fi
         ;;
       *)
-        echo "  [claude] no review-cycle sentinel on last line; treating as DONE_REVIEW" | tee -a "$LOG" >&2
+        echo "  [$IMPLEMENTER implementer] no review-cycle sentinel on last line; treating as DONE_REVIEW" | tee -a "$LOG" >&2
         # Capture resolution justifications for next cycle (cycle 4+)
         if [ "$cycle" -ge 4 ]; then
           justifications=$(gh pr view "$pr_num" --json comments -q '.comments[-1].body' 2>/dev/null || echo "")
-          echo "  [claude] resolution justifications posted to PR #$pr_num" | tee -a "$LOG" >&2
+          echo "  [$IMPLEMENTER implementer] resolution justifications posted to PR #$pr_num" | tee -a "$LOG" >&2
         fi
         ;;
     esac
 
     post_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
     if [ -n "$pre_sha" ] && [ "$pre_sha" = "$post_sha" ]; then
-      echo "  [claude] HEAD unchanged (no commits made) — bailing review cycle to avoid infinite loop" | tee -a "$LOG" >&2
-      fail_review_cycle "$pr_num" "claude reported DONE_REVIEW but made no commits (cycle $cycle)"
+      echo "  [$IMPLEMENTER implementer] HEAD unchanged (no commits made) — bailing review cycle to avoid infinite loop" | tee -a "$LOG" >&2
+      fail_review_cycle "$pr_num" "$IMPLEMENTER reported DONE_REVIEW but made no commits (cycle $cycle)"
       return 0
     fi
   done
@@ -1285,6 +1460,46 @@ ${_hb}--- end prior review cycles ---
   echo "  [review] hit MAX_REVIEW_CYCLES=$MAX_REVIEW_CYCLES on PR #$pr_num; resuming outer loop" | tee -a "$LOG" >&2
   fail_review_cycle "$pr_num" "exhausted MAX_REVIEW_CYCLES=$MAX_REVIEW_CYCLES without clearing all blocking findings"
 }
+
+# Narrow deterministic test hook for argument and provider-command regression
+# coverage. Normal execution is unchanged when BABYSIT_TEST_MODE is unset.
+if [ -n "${BABYSIT_TEST_MODE:-}" ]; then
+  case "$BABYSIT_TEST_MODE" in
+    config)
+      printf 'implementer=%s\nimplementer_model=%s\nimplementer_effort=%s\n' \
+        "$IMPLEMENTER" "$IMPLEMENTER_MODEL" "$IMPLEMENTER_EFFORT"
+      printf 'reviewer=%s\nreviewer_model=%s\nreviewer_effort=%s\n' \
+        "$REVIEWER" "$REVIEWER_MODEL" "$REVIEWER_EFFORT"
+      ;;
+    implementer-outer)
+      run_implementer "test implementation prompt" "$TMP_RESULT" "$PWD" "claude-sonnet-5" || exit $?
+      cat "$TMP_RESULT"
+      ;;
+    implementer-remediation)
+      run_implementer "test remediation prompt" "$TMP_REVIEW_RESULT" "$PWD" "${BABYSIT_TEST_STAGE_MODEL:-claude-sonnet-5}" || exit $?
+      cat "$TMP_REVIEW_RESULT"
+      ;;
+    reviewer)
+      review_with_retry "test review prompt" || exit $?
+      cat "$TMP_REVIEW"
+      ;;
+    reviewer-preflight)
+      reviewer_preflight
+      ;;
+    reviewer-availability)
+      if reviewer_binary_available; then
+        printf 'available_reviewer=%s\n' "$REVIEWER"
+      else
+        printf 'missing_reviewer=%s\n' "$REVIEWER"
+      fi
+      ;;
+    *)
+      echo "Unknown BABYSIT_TEST_MODE: $BABYSIT_TEST_MODE" >&2
+      exit 2
+      ;;
+  esac
+  exit 0
+fi
 
 # ---------- log header ----------
 
@@ -1296,6 +1511,12 @@ ${_hb}--- end prior review cycles ---
   echo "sleep:             ${SLEEP_SEC}s"
   echo "stuck_n:           $STUCK_N"
   echo "max_review_cycles: $MAX_REVIEW_CYCLES"
+  echo "implementer:       $IMPLEMENTER"
+  echo "implementer_model: ${IMPLEMENTER_MODEL:-stage-default}"
+  echo "implementer_effort:${IMPLEMENTER_EFFORT:+ $IMPLEMENTER_EFFORT}"
+  echo "reviewer:          $REVIEWER"
+  echo "reviewer_model:    ${REVIEWER_MODEL:-configured-default}"
+  echo "reviewer_effort:   ${REVIEWER_EFFORT:+ $REVIEWER_EFFORT}"
   echo "--- base prompt ---"
   printf '%s\n' "$BASE_PROMPT"
   echo "--- end base prompt ---"
@@ -1441,7 +1662,7 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
   fi
 
   # Retry any PR stalled by a previous codex MCP transport failure.
-  # The PR is un-drafted and re-reviewed before invoking claude for this iter.
+  # The PR is un-drafted and re-reviewed before invoking the implementer.
   _mcp_pr=$(gh pr list --state open --label review-mcp-outage --limit 1 --json number -q '.[0].number' 2>/dev/null || echo "")
   if [ -n "$_mcp_pr" ]; then
     echo "[outer] retrying review cycle for PR #$_mcp_pr (review-mcp-outage)" | tee -a "$LOG" >&2
@@ -1478,15 +1699,15 @@ ${BASE_PROMPT}"
   _wt_branch="wip/${PROJECT}/iter-${iter}"
   _wt_dir="/tmp/babysit-${PROJECT}-iter${iter}-$$"
   if ! git worktree add -b "$_wt_branch" "$_wt_dir" HEAD >>"$LOG" 2>&1; then
-    echo "  [outer] WARNING: worktree creation failed for iter $iter; Claude will run in $PWD" | tee -a "$LOG" >&2
+    echo "  [outer] WARNING: worktree creation failed for iter $iter; $IMPLEMENTER will run in $PWD" | tee -a "$LOG" >&2
     _wt_dir=""
     _wt_branch=""
   else
     echo "  [outer] worktree: $_wt_dir (branch: $_wt_branch)" | tee -a "$LOG" >&2
   fi
 
-  if ! run_claude "$PROMPT" "$TMP_RESULT" "$_wt_dir"; then
-    echo "ERROR: implementation claude exited non-zero on iter $iter; quarantining unreviewed open PRs" | tee -a "$LOG" >&2
+  if ! run_implementer "$PROMPT" "$TMP_RESULT" "$_wt_dir"; then
+    echo "ERROR: implementation $IMPLEMENTER exited non-zero on iter $iter; quarantining unreviewed open PRs" | tee -a "$LOG" >&2
     # Push any WIP commits before removing the worktree, so work is not silently lost.
     if [ -n "$_wt_dir" ]; then
       _wt_actual=$(git -C "$_wt_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
@@ -1515,7 +1736,7 @@ ${BASE_PROMPT}"
     if [ -n "$_quarantine_prs" ]; then
       while IFS= read -r _qpr; do
         echo "  [outer] quarantining unreviewed open PR #$_qpr (implementation crash on iter $iter)" | tee -a "$LOG" >&2
-        fail_review_cycle "$_qpr" "implementation claude crashed before review handoff (iter $iter)"
+        fail_review_cycle "$_qpr" "implementation $IMPLEMENTER crashed before review handoff (iter $iter)"
       done <<< "$_quarantine_prs"
     fi
     unset _quarantine_prs _qpr
@@ -1526,7 +1747,7 @@ ${BASE_PROMPT}"
   # Remove the worktree BEFORE sentinel handling: run_review_cycle calls
   # gh pr checkout, which fails if the PR branch is still checked out in the
   # worktree ("fatal: ... is already used by worktree at ...").
-  # Claude has already pushed the branch to origin, so removing the local
+  # The implementer has already pushed the branch to origin, so removing the local
   # worktree is safe.
   if [ -n "$_wt_dir" ]; then
     _wt_actual=$(git -C "$_wt_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "$_wt_branch")
@@ -1539,7 +1760,7 @@ ${BASE_PROMPT}"
     fi
     git worktree remove --force "$_wt_dir" >>"$LOG" 2>&1 || true
     rm -rf "$_wt_dir"
-    # Delete the actual branch (Claude renames from the placeholder during execution).
+    # Delete the actual branch (the implementer renames the placeholder during execution).
     # gh pr checkout will re-create from remote if run_review_cycle needs it.
     if [ -n "$_wt_actual" ] && [ "$_wt_actual" != "$DEFAULT_BRANCH" ]; then
       git branch -D "$_wt_actual" >>"$LOG" 2>&1 || true

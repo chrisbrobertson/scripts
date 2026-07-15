@@ -10,6 +10,8 @@ TIF (Trustable, Intuitive, Flexible) specifications documenting the autonomous d
 | **L2** | [L2-autonomous-dev-system.md](L2-autonomous-dev-system.md) | System architecture: bash orchestrator + Claude/Codex/gh/git components |
 | **L3** | [L3-autonomous-outer-loop.md](L3-autonomous-outer-loop.md) | Iterative loop: state collection → Claude → sentinel detection |
 | **L3** | [L3-review-cycle.md](L3-review-cycle.md) | Review cycle: Codex reviews → Claude fixes → convergence tracking |
+| **L4** | [L4-selectable-implementer.md](L4-selectable-implementer.md) | Select Claude or Codex implementation harness with role-specific model/effort |
+| **L4** | [L4-selectable-reviewer.md](L4-selectable-reviewer.md) | Select Claude or Codex review harness with role-specific model/effort |
 | **L3** | [L3-mcp-resilience.md](L3-mcp-resilience.md) | MCP resilience: retry-with-backoff for Codex transport failures |
 
 ## Plans
