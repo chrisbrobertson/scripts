@@ -1,7 +1,7 @@
 ---
 spec_type: task
 id: ARLO-TASK-SELECTABLE-IMPLEMENTER
-status: draft
+status: ready
 owners: [Chris Robertson]
 depends_on: []
 parent_feature: ARLO-FEAT-OUTER-LOOP

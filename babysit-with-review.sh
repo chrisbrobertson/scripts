@@ -16,12 +16,13 @@
 #   MAX_ITER           default 50   hard cap on outer iterations
 #   SLEEP_SEC          default 10   pause between outer iterations (seconds)
 #   STUCK_N            default 3    consecutive identical results = stuck
-#   MAX_REVIEW_CYCLES  default 6    max codex<->claude cycles per PR
+#   MAX_REVIEW_CYCLES  default 6    max reviewer/implementer cycles per PR
 #
-# MCP-outage resilience: when codex cannot reach its backend, the wrapper
+# MCP-outage resilience: when Codex is selected as reviewer and cannot reach
+# its backend, the wrapper
 # retries up to 3 times (0 / 60s / 300s back-off), labels the PR
 # `review-mcp-outage`, and halts. On the next babysitter run the pre-iter
-# scan retries the labelled PR automatically before running claude.
+# scan retries the labelled PR automatically before running the implementer.
 # `review-incomplete` = human action required; `review-mcp-outage` = auto-retry.
 # `review-codex-outdated` = Codex CLI too old for model; upgrade CLI then remove label.
 # `review-codex-no-credits` = Codex workspace out of credits; add credits then remove label.
@@ -102,48 +103,65 @@ missing_option_value() {
   exit 2
 }
 
+is_cli_option_token() {
+  case "$1" in
+    -h|--help|--version|--repo-base|--repo-base=*|\
+    --implementer|--implementer=*|--implementer-model|--implementer-model=*|--implementer-effort|--implementer-effort=*|\
+    --reviewer|--reviewer=*|--reviewer-model|--reviewer-model=*|--reviewer-effort|--reviewer-effort=*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+require_option_value() {
+  local option="$1"
+  local value="${2:-}"
+  if [ -z "$value" ] || is_cli_option_token "$value"; then
+    missing_option_value "$option"
+  fi
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
     --version) echo "babysit-with-review.sh $VERSION"; exit 0 ;;
     --repo-base)
-      [ "$#" -ge 2 ] && [ -n "$2" ] || missing_option_value "$1"
+      require_option_value "$1" "${2:-}"
       REPO_BASE_OVERRIDE="$2"; shift 2 ;;
     --repo-base=*)
       REPO_BASE_OVERRIDE="${1#*=}"; [ -n "$REPO_BASE_OVERRIDE" ] || missing_option_value "--repo-base"
       shift ;;
     --implementer)
-      [ "$#" -ge 2 ] && [ -n "$2" ] || missing_option_value "$1"
+      require_option_value "$1" "${2:-}"
       IMPLEMENTER="$2"; shift 2 ;;
     --implementer=*)
       IMPLEMENTER="${1#*=}"; [ -n "$IMPLEMENTER" ] || missing_option_value "--implementer"
       shift ;;
     --implementer-model)
-      [ "$#" -ge 2 ] && [ -n "$2" ] || missing_option_value "$1"
+      require_option_value "$1" "${2:-}"
       IMPLEMENTER_MODEL="$2"; shift 2 ;;
     --implementer-model=*)
       IMPLEMENTER_MODEL="${1#*=}"; [ -n "$IMPLEMENTER_MODEL" ] || missing_option_value "--implementer-model"
       shift ;;
     --implementer-effort)
-      [ "$#" -ge 2 ] && [ -n "$2" ] || missing_option_value "$1"
+      require_option_value "$1" "${2:-}"
       IMPLEMENTER_EFFORT="$2"; shift 2 ;;
     --implementer-effort=*)
       IMPLEMENTER_EFFORT="${1#*=}"; [ -n "$IMPLEMENTER_EFFORT" ] || missing_option_value "--implementer-effort"
       shift ;;
     --reviewer)
-      [ "$#" -ge 2 ] && [ -n "$2" ] || missing_option_value "$1"
+      require_option_value "$1" "${2:-}"
       REVIEWER="$2"; shift 2 ;;
     --reviewer=*)
       REVIEWER="${1#*=}"; [ -n "$REVIEWER" ] || missing_option_value "--reviewer"
       shift ;;
     --reviewer-model)
-      [ "$#" -ge 2 ] && [ -n "$2" ] || missing_option_value "$1"
+      require_option_value "$1" "${2:-}"
       REVIEWER_MODEL="$2"; shift 2 ;;
     --reviewer-model=*)
       REVIEWER_MODEL="${1#*=}"; [ -n "$REVIEWER_MODEL" ] || missing_option_value "--reviewer-model"
       shift ;;
     --reviewer-effort)
-      [ "$#" -ge 2 ] && [ -n "$2" ] || missing_option_value "$1"
+      require_option_value "$1" "${2:-}"
       REVIEWER_EFFORT="$2"; shift 2 ;;
     --reviewer-effort=*)
       REVIEWER_EFFORT="${1#*=}"; [ -n "$REVIEWER_EFFORT" ] || missing_option_value "--reviewer-effort"
@@ -154,6 +172,27 @@ done
 
 case "$IMPLEMENTER" in claude|codex) ;; *) echo "Invalid implementer: $IMPLEMENTER (expected claude or codex)" >&2; exit 2 ;; esac
 case "$REVIEWER" in claude|codex) ;; *) echo "Invalid reviewer: $REVIEWER (expected claude or codex)" >&2; exit 2 ;; esac
+
+implementer_startup_model_policy() {
+  if [ -n "$IMPLEMENTER_MODEL" ]; then
+    printf '%s' "$IMPLEMENTER_MODEL"
+  elif [ "$IMPLEMENTER" = "claude" ]; then
+    printf '%s' 'stage-default'
+  else
+    printf '%s' 'configured-default'
+  fi
+}
+
+resolved_implementer_model() {
+  local claude_stage_model="$1"
+  if [ -n "$IMPLEMENTER_MODEL" ]; then
+    printf '%s' "$IMPLEMENTER_MODEL"
+  elif [ "$IMPLEMENTER" = "claude" ]; then
+    printf '%s' "$claude_stage_model"
+  else
+    printf '%s' 'configured-default'
+  fi
+}
 
 MAX_ITER="${MAX_ITER:-50}"
 SLEEP_SEC="${SLEEP_SEC:-10}"
@@ -205,7 +244,7 @@ touch "$LOG" "$STOP_FILE"
 trap 'rm -f "$STOP_FILE" "$TMP_RESULT" "$TMP_REVIEW" "$TMP_REVIEW_RESULT" "$TMP_CODEX_FULL"' EXIT
 
 echo "Babysitting $PROJECT v${VERSION} (implementer=$IMPLEMENTER, reviewer=$REVIEWER, max=$MAX_ITER, stuck=$STUCK_N, review_cycles=$MAX_REVIEW_CYCLES) → $LOG"
-echo "  roles: implementer model=${IMPLEMENTER_MODEL:-stage-default} effort=${IMPLEMENTER_EFFORT:-default}; reviewer model=${REVIEWER_MODEL:-configured-default} effort=${REVIEWER_EFFORT:-configured-default}"
+echo "  roles: implementer model=$(implementer_startup_model_policy) effort=${IMPLEMENTER_EFFORT:-default}; reviewer model=${REVIEWER_MODEL:-configured-default} effort=${REVIEWER_EFFORT:-configured-default}"
 echo "  graceful stop: rm $STOP_FILE"
 
 # ---------- prompts ----------
@@ -1412,7 +1451,8 @@ ${_hb}--- end prior review cycles ---
     local pre_sha post_sha
     pre_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
 
-    local _resolved_implementer_model="${IMPLEMENTER_MODEL:-$_claude_model}"
+    local _resolved_implementer_model
+    _resolved_implementer_model=$(resolved_implementer_model "$_claude_model")
     echo "  [$IMPLEMENTER implementer] addressing findings (model: $_resolved_implementer_model)..." >&2
     if ! run_implementer "$claude_prompt" "$TMP_REVIEW_RESULT" "$PWD" "$_claude_model"; then
       echo "  [$IMPLEMENTER implementer] non-zero exit during review pass; bailing review cycle" | tee -a "$LOG" >&2
@@ -1493,6 +1533,10 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ]; then
         printf 'missing_reviewer=%s\n' "$REVIEWER"
       fi
       ;;
+    model-policy)
+      printf 'startup_model=%s\n' "$(implementer_startup_model_policy)"
+      printf 'remediation_model=%s\n' "$(resolved_implementer_model 'claude-opus-4-8')"
+      ;;
     *)
       echo "Unknown BABYSIT_TEST_MODE: $BABYSIT_TEST_MODE" >&2
       exit 2
@@ -1512,7 +1556,7 @@ fi
   echo "stuck_n:           $STUCK_N"
   echo "max_review_cycles: $MAX_REVIEW_CYCLES"
   echo "implementer:       $IMPLEMENTER"
-  echo "implementer_model: ${IMPLEMENTER_MODEL:-stage-default}"
+  echo "implementer_model: $(implementer_startup_model_policy)"
   echo "implementer_effort:${IMPLEMENTER_EFFORT:+ $IMPLEMENTER_EFFORT}"
   echo "reviewer:          $REVIEWER"
   echo "reviewer_model:    ${REVIEWER_MODEL:-configured-default}"

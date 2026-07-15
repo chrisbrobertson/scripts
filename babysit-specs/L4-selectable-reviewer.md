@@ -1,7 +1,7 @@
 ---
 spec_type: task
 id: ARLO-TASK-SELECTABLE-REVIEWER
-status: draft
+status: ready
 owners: [Chris Robertson]
 depends_on: [ARLO-TASK-SELECTABLE-IMPLEMENTER]
 parent_feature: ARLO-FEAT-REVIEW-CYCLE

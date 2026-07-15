@@ -121,6 +121,34 @@ do
   fi
 done
 
+# A recognized wrapper option cannot be consumed as a separate-form value.
+for args in \
+  '--repo-base --help' \
+  '--implementer --help' '--implementer-model --version' '--implementer-effort --reviewer' \
+  '--reviewer --version' '--reviewer-model --implementer' '--reviewer-effort --repo-base=/tmp'
+do
+  case_dir="$TMP/option-as-value-${args//[^a-zA-Z0-9]/_}"
+  mkdir -p "$case_dir/home"
+  set +e
+  # shellcheck disable=SC2086
+  run_script config "$case_dir/record" "$case_dir/home" $args >"$case_dir/out" 2>"$case_dir/err"
+  rc=$?
+  set -e
+  if [ "$rc" -eq 2 ] && [ ! -e "$case_dir/home/sisyphus-logs" ]; then
+    pass "recognized option is rejected as a missing value: $args"
+  else
+    echo "  rc=$rc; log_dir=$([ -e "$case_dir/home/sisyphus-logs" ] && echo present || echo absent)" >&2
+    fail "recognized option is rejected as a missing value: $args"
+  fi
+done
+
+# Arbitrary model/effort strings beginning with '-' remain valid unless they
+# are recognized wrapper options.
+run_script config "$TMP/dash-values.record" "$TMP/home" \
+  --implementer-model --provider-native-model --reviewer-effort=-provider-native-effort > "$TMP/dash-values.out"
+assert_contains "$TMP/dash-values.out" 'implementer_model=--provider-native-model' 'unrecognized dash-prefixed model remains valid'
+assert_contains "$TMP/dash-values.out" 'reviewer_effort=-provider-native-effort' 'unrecognized dash-prefixed effort remains valid'
+
 # Default outer and remediation Claude models stay stage/cycle dependent.
 : > "$TMP/impl-default.record"
 run_script implementer-outer "$TMP/impl-default.record" "$TMP/home" > "$TMP/impl-default.out"
@@ -222,6 +250,18 @@ run_script reviewer-availability "$TMP/availability-claude.record" "$TMP/home" -
 mv "$TMP/bin/codex.off" "$TMP/bin/codex"
 assert_contains "$TMP/availability.out" 'missing_reviewer=codex' 'missing selected reviewer is detected gracefully'
 assert_contains "$TMP/availability-claude.out" 'available_reviewer=claude' 'available selected reviewer is used even when Codex is missing'
+
+# Displayed/logged model policy distinguishes Claude stage defaults from Codex
+# configured defaults, including remediation passes.
+run_script model-policy "$TMP/policy-claude.record" "$TMP/home" --implementer claude > "$TMP/policy-claude.out"
+assert_contains "$TMP/policy-claude.out" 'startup_model=stage-default' 'default Claude startup model policy is stage-default'
+assert_contains "$TMP/policy-claude.out" 'remediation_model=claude-opus-4-8' 'default Claude remediation log uses cycle model'
+run_script model-policy "$TMP/policy-codex.record" "$TMP/home" --implementer codex > "$TMP/policy-codex.out"
+assert_contains "$TMP/policy-codex.out" 'startup_model=configured-default' 'default Codex startup model policy is configured-default'
+assert_contains "$TMP/policy-codex.out" 'remediation_model=configured-default' 'default Codex remediation log uses configured-default'
+run_script model-policy "$TMP/policy-explicit.record" "$TMP/home" --implementer codex --implementer-model explicit-model > "$TMP/policy-explicit.out"
+assert_contains "$TMP/policy-explicit.out" 'startup_model=explicit-model' 'explicit implementer model appears in startup policy'
+assert_contains "$TMP/policy-explicit.out" 'remediation_model=explicit-model' 'explicit implementer model appears in remediation policy'
 
 if "$SCRIPT" --help | grep -q -- '--implementer MODEL'; then fail 'help labels harness as model'; else pass 'help does not confuse harness with model'; fi
 for option in implementer implementer-model implementer-effort reviewer reviewer-model reviewer-effort; do
