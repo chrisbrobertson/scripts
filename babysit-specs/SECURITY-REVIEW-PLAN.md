@@ -32,38 +32,30 @@ Security review of babysit-with-review.sh autonomous development system across L
 **Review checklist:**
 - [ ] Confirm lock file prevents concurrent babysitter runs on same project
 - [ ] Verify gh CLI handles concurrent label operations gracefully (idempotent add/remove)
-- [ ] Check if label application failures are logged and recoverable (lines 425-426, 456-457)
-- [ ] Assess whether failed label operations block review cycle progress (Answer: No, logged as warnings)
+- [x] Confirm label application failures: `gh pr ready --undo` and `gh pr edit --add-label` are **fail-closed** — they call `exit 1` on failure (`fail_review_cycle*` functions). Only `gh pr comment` (posting the bail reason) is best-effort.
+- [x] Assess whether failed label operations block review cycle progress: **Yes, they halt the babysitter.** A PR that was not quarantined must not re-enter the outer loop; fail-closed is intentional.
 
-**Recommendation:** Accept as-is. Lock file prevents concurrent runs; gh CLI label operations are idempotent; failures are non-blocking warnings.
+**Recommendation:** ~~Accept as-is. Failures are non-blocking warnings.~~ **Status updated:** Label/draft failures are already fail-closed (`exit 1`). This is correct behavior — no action needed.
 
 ---
 
-### 3. Auto-Merge Approval (L3-review-cycle)
+### 3. Auto-Merge Approval (L3-review-cycle) — **RESOLVED**
 
 **Risk:** PRs auto-merge when BLOCKING=0 without additional human approval gate.
 
+**Status: Resolved.** The approval gate shipped as part of v1.1.0. Action item 1 from the original plan is done.
+
+**What shipped:**
+- When BLOCKING=0, `run_review_cycle` POSTs `codex-review=success` via `gh api -X POST repos/<owner>/statuses/<sha> -f context=codex-review -f state=success` before attempting any merge. If the POST fails (network, permissions, or unresolvable owner/SHA), the function returns 0 without merging — the PR stays open.
+- `setup-branch-protection.sh --repo OWNER/REPO` (run once per managed repo by the operator) makes `codex-review` a required status check with `enforce_admins: true`. This means: (a) direct `git push origin main` is rejected, (b) `gh pr merge` without the status passes only if branch protection is configured, (c) implementation Claude cannot set this status (only `run_review_cycle` sets it).
+- CI must still pass before auto-merge completes (`--auto` flag).
+
 **Review checklist:**
-- [ ] Confirm auto-merge only triggers after Codex review clears all BLOCKING findings (line 623)
-- [ ] Verify CI must still pass before merge completes (`--auto` flag waits for CI)
-- [ ] Check if manual approval can be enforced via GitHub branch protection rules (external to script)
-- [ ] Assess blast radius: PR merges to default branch; reversible via revert commit
-- [ ] Determine if organization policy requires human approval before merge (context-dependent)
-
-**Recommendation:** 
-- **Accept auto-merge for personal repos** where developer owns default branch
-- **Add approval requirement for team repos**: Modify review cycle to skip auto-merge or require GitHub branch protection with required reviewers
-
-**Code change (if approval needed):**
-```bash
-# Replace lines 623-629 with:
-if [ "$n_blocking" -eq 0 ]; then
-  echo "  [review] zero blocking findings; PR #$pr_num cleared after $cycle cycle(s)" | tee -a "$LOG" >&2
-  gh pr ready "$pr_num" >>"$LOG" 2>&1 || true  # Mark ready, but don't merge
-  echo "  [review] PR #$pr_num ready for human approval" | tee -a "$LOG" >&2
-  return 0
-fi
-```
+- [x] `codex-review=success` status set before merge attempt — verified in `run_review_cycle`
+- [x] POST failure leaves PR open rather than merging without the status
+- [x] `enforce_admins: true` prevents operator-level bypasses
+- [x] CI must still pass (`--auto` flag)
+- [ ] **Remaining team-repo decision:** whether required human reviewer approval is also needed (GitHub branch protection `required_approving_review_count`). The status gate alone may not satisfy all team policies.
 
 ---
 
@@ -78,7 +70,7 @@ fi
 - [ ] Assess whether false positives cause wasteful retries or security issues (Answer: wasteful retries, not security)
 - [ ] Determine if new Codex error messages could bypass detection (false negative risk)
 
-**Telltale patterns:**
+**Telltale patterns (current, in `codex_review_with_retry`):**
 ```bash
 mcp_re='Transport send error:|tool call error: tool call failed for `codex_apps/|error sending request for url \(https://chatgpt\.com/'
 ```
@@ -86,14 +78,12 @@ mcp_re='Transport send error:|tool call error: tool call failed for `codex_apps/
 **Recommendation:** 
 - **Accept patterns as-is** — fixed strings, not injectable
 - **Monitor for false negatives** — if new Codex MCP errors appear, update regex
-- **Document pattern maintenance** — add comment in code: "Update regex if Codex changes error format"
 
-**Code change:**
+**Action item 2: DONE.** The maintenance comment already exists verbatim in `codex_review_with_retry`:
 ```bash
-# Add comment at line 484:
-# Telltale patterns for MCP transport failures. Update if Codex error format changes.
-# Monitored via MCP outage rate in L1 KPIs (threshold: >30% → escalate).
-local mcp_re='Transport send error:|tool call error: tool call failed for `codex_apps/|error sending request for url \(https://chatgpt\.com/'
+# Telltale patterns for MCP transport failures. Update if Codex changes its error format.
+# Monitored via the MCP outage rate KPI (see L3-mcp-resilience.md kill criteria: >30% → find alternative reviewer).
+local mcp_re='Transport send error:|...'
 ```
 
 ---
@@ -154,19 +144,19 @@ local mcp_re='Transport send error:|tool call error: tool call failed for `codex
 
 ## Summary & Prioritization
 
-| Finding | Severity | Recommendation |
+| Finding | Severity | Status |
 |---|---|---|
-| Lock file race condition | Low | Accept (rare, single-user scenario) |
-| PR label race condition | Low | Accept (prevented by lock file) |
-| Auto-merge approval | Medium | **Decision required:** Accept for personal repos OR add approval gate for team repos |
-| Telltale regex injection | Low | Accept, add maintenance comment |
-| Command injection | Low | Accept (validated input, proper quoting) |
-| Secrets exposure in logs | Low | Accept for personal use, document log sensitivity |
-| Dependency trust | Medium | Accept, document installation sources, monitor Codex CLI |
+| Lock file race condition | Low | Accepted (rare, single-user scenario) |
+| PR label race condition | Low | **Resolved** — fail-closed (`exit 1`), not warnings |
+| Auto-merge approval | Medium | **Resolved** — `codex-review` status gate + `setup-branch-protection.sh` shipped in v1.1.0 |
+| Telltale regex injection | Low | **Resolved** — maintenance comment added to source |
+| Command injection | Low | Accepted (validated input, proper quoting) |
+| Secrets exposure in logs | Low | Accepted for personal use, document log sensitivity |
+| Dependency trust | Medium | Accepted, document installation sources, monitor Codex CLI |
 
-**Action items:**
-1. **Owner decision:** Auto-merge behavior (accept as-is or add approval requirement)
-2. Add telltale regex maintenance comment (5-minute code change)
-3. Document log sensitivity in README/CLAUDE.md (10-minute doc update)
+**Remaining action items:**
+1. ~~**Owner decision:** Auto-merge behavior~~ — resolved; optional follow-up: decide on `required_approving_review_count` for team repos
+2. ~~Add telltale regex maintenance comment~~ — done
+3. Document log sensitivity in README/CLAUDE.md (10-minute doc update) — still open
 
-**Estimated effort:** 2-4 hours (review) + 15 minutes (code/doc changes if needed)
+**Estimated remaining effort:** ~10 minutes (log sensitivity doc update)

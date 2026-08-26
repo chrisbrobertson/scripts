@@ -4,39 +4,43 @@ TIF (Trustable, Intuitive, Flexible) specifications documenting the autonomous d
 
 ## Specs
 
-| Layer | File | Description |
-|---|---|---|
-| **L1** | [L1-babysit-with-review.md](L1-babysit-with-review.md) | Product spec: autonomous dev loop for solo/small teams (<10 users) |
-| **L2** | [L2-autonomous-dev-system.md](L2-autonomous-dev-system.md) | System architecture: bash orchestrator + Claude/Codex/gh/git components |
-| **L3** | [L3-autonomous-outer-loop.md](L3-autonomous-outer-loop.md) | Iterative loop: state collection → Claude → sentinel detection |
-| **L3** | [L3-review-cycle.md](L3-review-cycle.md) | Review cycle: Codex reviews → Claude fixes → convergence tracking |
-| **L4** | [L4-selectable-implementer.md](L4-selectable-implementer.md) | Select Claude or Codex implementation harness with role-specific model/effort |
-| **L4** | [L4-selectable-reviewer.md](L4-selectable-reviewer.md) | Select Claude or Codex review harness with role-specific model/effort |
-| **L3** | [L3-mcp-resilience.md](L3-mcp-resilience.md) | MCP resilience: retry-with-backoff for Codex transport failures |
+| Layer | File | Status | Description |
+|---|---|---|---|
+| **L1** | [L1-babysit-with-review.md](L1-babysit-with-review.md) | review | Product spec: autonomous dev loop for solo/small teams (<10 users) |
+| **L2** | [L2-autonomous-dev-system.md](L2-autonomous-dev-system.md) | review | System architecture: bash orchestrator + selectable implementer/reviewer + gh/git |
+| **L3** | [L3-autonomous-outer-loop.md](L3-autonomous-outer-loop.md) | review | Iterative loop: worktree → collect_state → run_implementer → sentinel detection |
+| **L3** | [L3-review-cycle.md](L3-review-cycle.md) | review | Review cycle: reviewer → implementer fixes → convergence + codex-review status gate |
+| **L3** | [L3-mcp-resilience.md](L3-mcp-resilience.md) | review | MCP resilience: retry-with-backoff + valid_review_structure for Codex transport failures |
+| **L3** | [L3-retrospective-review.md](L3-retrospective-review.md) | review | Retrospective review: one-shot Codex review for merged PRs that bypassed forward-path |
+| **L4** | [L4-selectable-implementer.md](L4-selectable-implementer.md) | **ready** | Select Claude or Codex implementation harness with role-specific model/effort |
+| **L4** | [L4-selectable-reviewer.md](L4-selectable-reviewer.md) | **ready** | Select Claude or Codex review harness with role-specific model/effort |
 
 ## Plans
 
 | Plan | File | Description |
 |---|---|---|
 | **Security** | [SECURITY-REVIEW-PLAN.md](SECURITY-REVIEW-PLAN.md) | Review checklist: lock file races, auto-merge approval, telltale regex |
-| **QA** | [QA-TEST-PLAN.md](QA-TEST-PLAN.md) | 38 test cases across outer loop, review cycle, and MCP resilience |
+| **QA** | [QA-TEST-PLAN.md](QA-TEST-PLAN.md) | 27 test cases across outer loop, review cycle, and MCP resilience (test harness: `BABYSIT_TEST_MODE` + `test-babysit-with-review-cli.sh`) |
 
 ## Status
 
-- **Current status:** `review` (awaiting approval)
+- **L1/L2/L3 features:** `review` (awaiting approval)
+- **L4 tasks:** `ready` (both selectable-implementer and selectable-reviewer)
 - **Complexity:** 2/30 (trivial band per TIF rubric)
 - **Fit check:** Passed (specs are appropriate artifact)
-- **Blockers to `ready`:** 
-  - Security review decision: auto-merge approval gate (accept as-is or add approval requirement)
-  - QA smoke tests (Phase 1 + Phase 2 from test plan)
+- **Blockers to `ready` (L1/L2/L3):** 
+  - ~~Security review decision: auto-merge approval gate~~ — resolved; `codex-review` status gate shipped in v1.1.0
+  - ~~QA test harness~~ — `BABYSIT_TEST_MODE` + `test-babysit-with-review-cli.sh` exist
+  - QA smoke tests (Phase 1 + Phase 2 from test plan) — still to execute
 
 ## Key Decisions Documented
 
 1. **Scale:** <10 users at 6mo/18mo (personal/internal tool, not OSS distribution)
-2. **Architecture:** Bash orchestrator with subprocess components (Claude, Codex, gh, git)
-3. **Review convergence:** Prescriptive mode kicks in at cycle 3 (requires "Suggested fix:")
+2. **Architecture:** Bash orchestrator with subprocess components (selectable implementer + selectable reviewer + gh + git); v1.1.0, 1,921 lines
+3. **Review convergence:** Prescriptive mode kicks in at cycle 3 (requires "Suggested fix:"); inline planning (not plan mode) at cycle 2+
 4. **MCP resilience:** 3 retries with 0/60s/300s backoff on transport failures
-5. **Auto-merge:** PRs merge automatically when BLOCKING=0 (decision point for team repos)
+5. **Merge gate:** PRs merge only after `codex-review=success` status POSTed by `run_review_cycle` (enforced by `setup-branch-protection.sh`); BLOCKING=0 alone does not merge
+6. **Four quarantine labels:** `review-incomplete` (human action, no retry), `review-mcp-outage` (auto-retry), `review-codex-outdated` (upgrade CLI), `review-codex-no-credits` (add credits)
 
 ## Next Steps
 

@@ -79,11 +79,11 @@ Design decisions:
 - **One issue per blocking finding** (not one issue per PR). Title format:
   `[retrospective] <one-line finding> (merged PR #N)`. Deduplication: if an issue with
   this exact title already exists (open or closed), it is skipped.
-- **Structural validation reused.** The same three-section-header check from
-  ARLO-FEAT-MCP-RESILIENCE is applied before treating a Codex response as a valid review.
+- **Structural validation (weaker than forward-path).** `run-retrospective-review.sh` uses three bare `grep -qE` header checks (`^## BLOCKING`, `^## RECOMMENDED`, `^## INFORMATION`) — it does NOT use the `valid_review_structure` function from ARLO-FEAT-MCP-RESILIENCE. As a consequence it accepts some output that the forward-path script rejects (e.g., bare headers with no bullets, `- (none)` mixed with other bullets). This is a known divergence.
 - **Codex compat failure skips the PR.** If Codex returns the `compat_re` pattern, the
   PR is logged to stderr as skipped. The operator must first upgrade Codex before
   retrospective review can run.
+- **No `credits_re` check.** The script only checks `COMPAT_RE` and `MCP_RE`; Codex credit exhaustion falls through to a generic failure (PR skipped as a Codex failure, without the specific `review-codex-no-credits` signal from the forward-path).
 - **`find-bailed-merged-prs.sh` is the source of truth for detection.** The retrospective
   script does not re-scan logs; it accepts PR numbers from stdin (TSV, second column) or
   as CLI arguments.
@@ -105,9 +105,10 @@ Design decisions:
 
 ### Request shape
 ```bash
-run-retrospective-review.sh --repo OWNER/REPO PR_NUMBER [PR_NUMBER ...]
-# repo: OWNER/REPO string (e.g., chrisbrobertson/secondbrain)
+run-retrospective-review.sh [--repo OWNER/REPO] [--dry-run] [--no-issues] PR_NUMBER [PR_NUMBER ...]
+# --repo: optional; auto-detected via `gh repo view` when omitted
 # PR_NUMBER: merged PR number (open PRs are skipped with a note)
+# Unknown flags: exit 2 with usage message
 ```
 
 ### Response shape
@@ -126,8 +127,7 @@ PR #136: already reviewed → skipped (idempotent)
 2. **Idempotency:** A PR with an existing `<!-- retrospective-review: pr=N -->` marker
    is never reviewed twice.
 3. **Worktree cleanup:** Temporary worktrees are removed in an `EXIT` trap even on error.
-4. **Structural validation:** Codex output must contain all three section headers before
-   being treated as a review. Invalid output → PR skipped, logged to stderr.
+4. **Structural validation (loose):** Codex output must contain all three section headers (`## BLOCKING`, `## RECOMMENDED`, `## INFORMATION`) per three bare `grep -qE` checks. This is weaker than `valid_review_structure`. Invalid output → PR skipped, logged to stderr.
 5. **Issue deduplication:** Issues are not created if an issue with the same title prefix
    already exists.
 6. **Non-fatal per-PR errors:** A failure on one PR (worktree error, Codex failure, gh
@@ -215,7 +215,7 @@ Events emitted to stderr:
   - `find-bailed-merged-prs.sh` (detection — pipes PR list)
   - `backfill-codex-reviews.py` (log-based backfill — different use case: posts reviews
     that WERE captured in logs but never posted to GitHub; retrospective runs NEW reviews)
-  - ARLO-FEAT-MCP-RESILIENCE (structural validation reused)
+  - ARLO-FEAT-MCP-RESILIENCE (conceptually related; this script uses a simpler three-header grep rather than `valid_review_structure`)
 - **Distinct from `backfill-codex-reviews.py`:** That script posts review content already
   captured in sisyphus logs. This script runs a new Codex review for PRs where no valid
   review was ever captured.
@@ -230,7 +230,7 @@ Events emitted to stderr:
    `already reviewed → skipped` and no duplicate comment is posted.
 3. **Given** Codex returns 2 blocking findings, **when** review completes, **then** 2
    GitHub issues are created with titles prefixed `[retrospective]` and labelled
-   `kind:bug,retrospective`.
+   `retrospective,priority:high`.
 4. **Given** Codex returns 0 blocking findings, **when** review completes, **then** the
    PR receives a `[RETROSPECTIVE REVIEW — PASSED]` comment and no issues are created.
 5. **Given** a non-merged (OPEN) PR number is passed, **when** script runs, **then** PR

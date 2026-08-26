@@ -27,12 +27,13 @@ step, no CI.
 | `backfill-codex-reviews.py` | Post historical Codex reviews to closed PRs |
 | `run-retrospective-review.sh` | One-shot Codex review for PRs that merged without automated review; posts findings as PR comments and opens issues for each BLOCKING finding |
 | `find-bailed-merged-prs.sh` | Scan babysit logs for review-cycle bails, then query GitHub to find which bailed PRs were subsequently merged (unreviewed code audit) |
+| `test-babysit-with-review-cli.sh` | Deterministic CLI regression harness for babysit-with-review.sh using recording stubs (`BABYSIT_TEST_MODE`) |
 | `test-llm-routing.py` | Empirical test: model-alias forwarding + OAuth rejection by Anthropic |
 | `test-codex-review.sh` | Codex review helper |
 | `prs` | `gh pr list` with CI rollup and review state |
 | `issues` | `gh issue list` sorted by priority labels |
 | `specs` | List spec files with frontmatter status and components; searches any `specs/` or `*-specs/` directory |
-| `babysit-specs/` | TIF specs for `babysit-with-review.sh` (L1–L3 + QA + security plans); see `babysit-specs/README.md` |
+| `babysit-specs/` | TIF specs for `babysit-with-review.sh` (L1–L4 + QA + security plans); see `babysit-specs/README.md` |
 
 ## Staff-fleet agents
 

@@ -35,7 +35,7 @@ TMP_REVIEW=""           # caller zeros before call, function populates
 TMP_CODEX_FULL=""       # function zeros on each attempt, logs full output
 
 # Return codes
-0  # success - Codex completed, TMP_REVIEW is non-empty and structurally valid
+0  # success - Codex completed, TMP_REVIEW is non-empty and passes valid_review_structure
 1  # non-transport failure (prompt issue, crash, invalid output structure, etc.)
 2  # MCP transport failure - all 3 retries exhausted
 3  # backend compatibility failure - Codex CLI too old for configured model; no retry
@@ -56,7 +56,7 @@ Review cycle feature (ARLO-FEAT-REVIEW-CYCLE) invoking codex_review_with_retry()
 From implementation (babysit-with-review.sh):
 - Fixed retry policy: 3 attempts with delays [0, 60, 300] seconds
 - Telltale detection: three separate constants (`compat_re`, `credits_re`, `mcp_re`); checked in that order on every attempt
-- Success criteria: exit code 0 AND non-empty TMP_REVIEW file AND all three section headers present (`## BLOCKING`, `## RECOMMENDED`, `## INFORMATION`)
+- Success criteria: exit code 0 AND non-empty TMP_REVIEW file AND `valid_review_structure` passes (see Contract below for the full awk contract)
 - Failure classification: backend compatibility (compat_re match) → return 3; credit exhaustion (credits_re match) → return 4; MCP transport (mcp_re match, all 3 retries) → return 2; all other non-zero / structurally-invalid → return 1
 - Logging: All codex output teed to both LOG and TMP_CODEX_FULL for telltale scanning
 - Early success: If attempt N succeeds, no further attempts made
@@ -67,7 +67,7 @@ From implementation (babysit-with-review.sh):
 - [ASSUMPTION] MCP transport failures are transient (retry helps). Flips if: failures are persistent (e.g., Codex account suspended), requiring non-retry error path.
 - [ASSUMPTION] Three retries with 0/60s/300s delays is optimal. Flips if: empirical data shows different delay schedule is better (e.g., 0/30s/120s).
 - [ASSUMPTION] `compat_re`, `credits_re`, and `mcp_re` together cover all known failure classes. **Flipped 2026-05-10:** `gpt-5.5` with Codex v0.117.0 produced HTTP 400 outside all prior `mcp_re` patterns. Fix: separate `compat_re` for version/model errors. **Flipped 2026-06-28:** Codex v0.142.4 with `gpt-5.5` returned `ERROR: Your workspace is out of credits.` (rc=1) with no `compat_re` or `mcp_re` match, falling through to `review-incomplete`. Fix: separate `credits_re` for workspace exhaustion; unknown non-zero exits without a telltale match continue to return 1.
-- [ASSUMPTION] Non-empty TMP_REVIEW with all three section headers indicates success. Flips if: Codex can produce structurally-valid but semantically-invalid output (e.g., hallucinated section headers), requiring semantic validation.
+- [ASSUMPTION] Non-empty TMP_REVIEW that passes `valid_review_structure` indicates success. Flips if: Codex can produce structurally-valid but semantically-invalid output (e.g., well-formed headers with hallucinated content), requiring semantic validation.
 - [ASSUMPTION] Backend compatibility failures are detectable via `compat_re`. Flips if: OpenAI changes the error message format, requiring regex update.
 
 ## Contract
@@ -81,7 +81,7 @@ codex_review_with_retry "<codex_prompt>"
 ### Response shape (return codes + side effects)
 ```bash
 # Return codes
-0   # Codex completed successfully; TMP_REVIEW populated with review markdown
+0   # Codex completed successfully; TMP_REVIEW populated and passes valid_review_structure
 1   # Codex failed (non-transport); TMP_REVIEW may be empty or partial
 2   # MCP transport failure; all retries exhausted; TMP_REVIEW empty
 3   # Backend compat failure; Codex CLI too old for configured model; TMP_REVIEW empty
@@ -96,19 +96,32 @@ codex_review_with_retry "<codex_prompt>"
 ### Invariants
 1. **Retry count:** Exactly 3 attempts for MCP transport failures; 1 attempt for backend compat or credit exhaustion failures (no retry)
 2. **Delay schedule:** Attempt 1 = 0s, attempt 2 = 60s, attempt 3 = 300s (fixed, not configurable; only applies to MCP transport path)
-3. **Early exit:** If attempt N succeeds (rc=0, TMP_REVIEW non-empty, all three section headers present), return 0 immediately
+3. **Early exit:** If attempt N succeeds (rc=0, TMP_REVIEW non-empty, `valid_review_structure` passes), return 0 immediately
 4. **Telltale precedence:** `compat_re` checked first, then `credits_re`, then `mcp_re`; compat match returns 3, credits match returns 4, both without retry
 5. **Return code semantics:** Return 3 = backend compat (compat_re match); return 4 = credit exhaustion (credits_re match); return 2 = MCP transport (mcp_re match, all 3 retries exhausted); return 1 = any other failure including structurally-invalid output
 6. **TMP file zeroing:** Each attempt zeros TMP_REVIEW and TMP_CODEX_FULL before invoking codex
 
-### Error model
-- **Codex exit code 0, TMP_REVIEW non-empty, all three section headers present:** Success, return 0
-- **Codex exit code 0, TMP_REVIEW non-empty, section header(s) missing:** Structurally invalid output, return 1 (no retry)
-- **Codex exit code 0, TMP_REVIEW empty:** Treat as failure, check telltales
+### `valid_review_structure` contract
+
+The function `valid_review_structure` (awk, babysit-with-review.sh) validates TMP_REVIEW. It passes (returns 0) iff ALL of:
+- File is non-empty
+- Optionally: exactly one `## ADJUDICATION` heading, appearing *before* any other heading; if present, must have ≥1 bullet
+- Exactly one `## BLOCKING` heading, followed by exactly one `## RECOMMENDED`, followed by exactly one `## INFORMATION` (in that order)
+- No other `##`-level headings appear anywhere
+- Each section has ≥1 bullet
+- `- (none)` may only appear as the sole bullet in its section (no other bullets before or after in that section)
+- Indented continuation lines are allowed only after a real (non-`(none)`) bullet
+
+Three bare headers with no bullets, or extra `##` headings, or `- (none)` mixed with other bullets all fail.
+
+### Error model (check order within each attempt: compat_re → credits_re → structural → mcp_re)
 - **Any exit code, `compat_re` match:** Backend compatibility failure, return 3 immediately (no retry)
 - **Any exit code, `credits_re` match:** Workspace credit exhaustion, return 4 immediately (no retry)
-- **Codex exit code non-zero, `mcp_re` match:** MCP transport failure, retry (or return 2 if last attempt)
-- **Codex exit code non-zero, no telltale match:** Non-transport failure, return 1 (no retry)
+- **Codex exit code 0, TMP_REVIEW non-empty, `valid_review_structure` passes:** Success, return 0
+- **Codex exit code 0, TMP_REVIEW non-empty, `valid_review_structure` fails:** Structurally invalid output — fall through to `mcp_re` check (so an invalid-structure output that *also* carries an `mcp_re` telltale returns 2/retry, not 1)
+- **Codex exit code 0, TMP_REVIEW empty:** Treat as failure, fall through to `mcp_re` check
+- **Any exit code, `mcp_re` match:** MCP transport failure, retry (or return 2 if last attempt)
+- **Any exit code, no telltale match, structural check failed or rc≠0:** Non-transport failure, return 1 (no retry)
 - **All 3 attempts fail with `mcp_re` match:** Return 2
 
 ### Idempotency
@@ -204,8 +217,9 @@ Function is internal to script; no versioning. Breaking changes (retry count, de
 10. **Given** TMP_CODEX_FULL contains both `compat_re` and `mcp_re` matches (hypothetical), **when** function checks, **then** `compat_re` fires first and returns 3 (compat takes priority).
 13. **Given** Codex output contains `Your workspace is out of credits` (`credits_re` match), **when** function is called, **then** return 4 immediately (no retry).
 14. **Given** TMP_CODEX_FULL contains both `credits_re` and `mcp_re` matches (hypothetical), **when** function checks, **then** `credits_re` fires first and returns 4 (credits checked before mcp_re).
-11. **Given** Codex exits 0, TMP_REVIEW is non-empty but missing `## RECOMMENDED` header, **when** function checks, **then** return 1 (structural validation failure, no retry).
-12. **Given** Codex exits 0, TMP_REVIEW contains all three section headers, **when** function checks, **then** return 0 (positive structural validation passes).
+11. **Given** Codex exits 0, TMP_REVIEW is non-empty but missing `## RECOMMENDED` header, **when** function checks, **then** `valid_review_structure` fails; if no `mcp_re` telltale, return 1 (structural validation failure, no retry).
+12. **Given** Codex exits 0, TMP_REVIEW contains all three section headers each with ≥1 bullet and no extra `##` headings, **when** function checks, **then** `valid_review_structure` passes and return 0.
+12b. **Given** Codex exits 0, TMP_REVIEW contains all three section headers but each with zero bullets (bare headers only), **when** function checks, **then** `valid_review_structure` fails and return 1 (no retry).
 
 ## Telemetry events tied to L1 KPIs
 - **Retry count distribution** → Reliability KPI (most calls should succeed on attempt 1)
