@@ -12,19 +12,23 @@ TIF (Trustable, Intuitive, Flexible) specifications documenting the autonomous d
 | **L3** | [L3-review-cycle.md](L3-review-cycle.md) | review | Review cycle: reviewer → implementer fixes → convergence + codex-review status gate |
 | **L3** | [L3-mcp-resilience.md](L3-mcp-resilience.md) | review | MCP resilience: retry-with-backoff + valid_review_structure for Codex transport failures |
 | **L3** | [L3-retrospective-review.md](L3-retrospective-review.md) | review | Retrospective review: one-shot Codex review for merged PRs that bypassed forward-path |
+| **L3** | [L3-work-prep.md](L3-work-prep.md) | **ready** | Work-prep loop: ticket → TIF spec pipeline with human approval gate and sub-ticket creation |
+| **L3** | [L3-builder.md](L3-builder.md) | **ready** | Builder loop: spec → PR pipeline with convergent adversarial review cycle and human merge gate |
 | **L4** | [L4-selectable-implementer.md](L4-selectable-implementer.md) | **ready** | Select Claude or Codex implementation harness with role-specific model/effort |
 | **L4** | [L4-selectable-reviewer.md](L4-selectable-reviewer.md) | **ready** | Select Claude or Codex review harness with role-specific model/effort |
 
-## Plans
+## Plans & Amendments
 
 | Plan | File | Description |
 |---|---|---|
 | **Security** | [SECURITY-REVIEW-PLAN.md](SECURITY-REVIEW-PLAN.md) | Review checklist: lock file races, auto-merge approval, telltale regex |
 | **QA** | [QA-TEST-PLAN.md](QA-TEST-PLAN.md) | 27 test cases across outer loop, review cycle, and MCP resilience (test harness: `BABYSIT_TEST_MODE` + `test-babysit-with-review-cli.sh`) |
+| **Amendments** | [AMENDMENTS-work-prep-builder.md](AMENDMENTS-work-prep-builder.md) | L1 + L2 amendment notes for work-prep and builder additions (apply before implementing) |
 
 ## Status
 
-- **L1/L2/L3 features:** `review` (awaiting approval)
+- **L1/L2/L3 features (original):** `review` (awaiting approval)
+- **L3 work-prep + builder:** `ready` (approved by owner 2026-08-27)
 - **L4 tasks:** `ready` (both selectable-implementer and selectable-reviewer)
 - **Complexity:** 2/30 (trivial band per TIF rubric)
 - **Fit check:** Passed (specs are appropriate artifact)
@@ -41,6 +45,9 @@ TIF (Trustable, Intuitive, Flexible) specifications documenting the autonomous d
 4. **MCP resilience:** 3 retries with 0/60s/300s backoff on transport failures
 5. **Merge gate:** PRs merge only after `codex-review=success` status POSTed by `run_review_cycle` (enforced by `setup-branch-protection.sh`); BLOCKING=0 alone does not merge
 6. **Four quarantine labels:** `review-incomplete` (human action, no retry), `review-mcp-outage` (auto-retry), `review-codex-outdated` (upgrade CLI), `review-codex-no-credits` (add credits)
+7. **Work-prep approval gate:** Human posts unambiguous approval comment (case-insensitive `\bapproved\b`) on spec PR → work-prep merges spec, labels source ticket `status:ready-to-build`, creates sub-ticket for builder
+8. **Builder halt (no auto-merge):** Builder halts when reviewer returns BLOCKING=0 OR max cycles exhausted; posts reviewer summary PR comment; human does final merge
+9. **Parallel label namespaces:** Builder uses `build-*` labels; babysit-with-review.sh uses `review-*` labels; no overlap
 
 ## Next Steps
 

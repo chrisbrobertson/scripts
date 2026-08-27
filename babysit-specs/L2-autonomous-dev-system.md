@@ -60,6 +60,22 @@ Both roles independently selectable via --implementer/--reviewer flags.
 
 **Authoritative surface:** Bash orchestrator is the single control plane. All components are stateless; orchestrator maintains iteration state via filesystem (logs, lock files, temp files).
 
+```
+babysit-work-prep.sh (research + spec loop)
+  - Outer loop: per-ticket worktree → research → spec draft → PR lifecycle
+  - Approval gate: detect approval comment → merge spec PR → sub-ticket creation
+  - Sources: gh issue list | Jira REST API
+  - Uses: claude -p (implementer only), gh CLI, git worktree, $SCRIPTS_DIR/specs
+  - Stop file: ~/sisyphus-logs/<project>-work-prep.stop
+
+babysit-builder.sh (implementation + convergent review loop)
+  - Outer loop: sub-ticket discovery → per-ticket worktree → run_implementer → run_build_cycle
+  - Halt gate: BLOCKING=0 OR max cycles → post summary → human merge
+  - Uses: same selectable implementer/reviewer harnesses as babysit-with-review.sh
+  - Mirrors: run_review_cycle + valid_review_structure + MCP retry (no auto-merge)
+  - Stop file: ~/sisyphus-logs/<project>-builder.stop
+```
+
 # Substance
 
 ## What we know
@@ -73,6 +89,8 @@ From the existing implementation:
 - Lock file at `$HOME/sisyphus-logs/<project>.stop`; a pre-existing file is a collision (`exit 1`); the script creates it on startup
 - No persistent state beyond git commits and GitHub PR metadata
 - Helper scripts resolved via `SCRIPTS_DIR="$REPO_BASE/scripts"`; `REPO_BASE` autodetects `~/repos` then `~/repo`
+- Two companion scripts share the same REPO_BASE/scripts infrastructure and sisyphus-logs directory: `babysit-work-prep.sh` (ticket → spec) and `babysit-builder.sh` (spec → PR). Each uses its own stop file (`<project>-work-prep.stop` / `<project>-builder.stop`).
+- `babysit-builder.sh` reuses `TMP_RESULT`, `TMP_REVIEW`, `TMP_REVIEW_RESULT`, `TMP_CODEX_FULL` for its build cycle (same function as in `babysit-with-review.sh`)
 
 ## What we assume
 
@@ -190,6 +208,29 @@ From the existing implementation:
 - **Auth/deps:** Inherit from gh CLI authentication
 - **Idempotency:** Idempotent read-only operations
 
+### babysit-work-prep.sh → GitHub CLI
+
+- `gh issue list --label ... --json` (ticket discovery and sub-ticket queue)
+- `gh pr create`, `gh pr view`, `gh pr merge` (spec PR lifecycle)
+- `gh issue create` (sub-ticket creation)
+- `gh issue edit --add-label/--remove-label` (source ticket labeling)
+- `gh pr list --json comments` (approval detection — scans comment bodies)
+
+### babysit-work-prep.sh → Jira REST API (when `--source jira|both`)
+
+- **Endpoint:** `$JIRA_BASE_URL/rest/api/3/search?jql=project=$JIRA_PROJECT+AND+status=Open`
+- **Auth:** Bearer token from `JIRA_TOKEN` env var
+- **Response shape:** JSON array of issue objects with `id`, `key`, `summary`, `description`
+- **Failure mode:** Jira API unavailable → skip Jira tickets, continue with GitHub issues
+
+### babysit-builder.sh → GitHub CLI
+
+- `gh issue list --label status:ready-to-build,sub-ticket --json` (build queue)
+- `gh issue edit --add-label/--remove-label` (sub-ticket label transitions)
+- `gh pr create`, `gh pr view`, `gh pr comment` (build PR lifecycle)
+- Same `gh pr edit`, `gh pr ready`, `gh label create` as `babysit-with-review.sh`
+- Note: `gh pr merge` is NOT used (human merge gate)
+
 ## SLOs and latency budgets
 
 Formal numeric SLOs are deferred — single-user internal tool with no SLA obligations.
@@ -262,7 +303,7 @@ External dependencies (not arlo-infra.yaml):
 - **Scaling ceiling:** Single repository per invocation; no multi-repo coordination
 - **Compliance regimes not covered:** No audit trails, no approval gates, no access control beyond filesystem permissions
 - **Non-goals:**
-  - Parallelization (multiple PRs in flight simultaneously)
+  - Parallelization (multiple PRs in flight simultaneously within a single invocation; `babysit-work-prep.sh` may have multiple open spec PRs simultaneously, but each is owned by one run)
   - Distributed execution (workload splitting across machines)
   - Historical analytics (aggregation across runs)
   - Web UI or API
@@ -325,4 +366,5 @@ Potential triggers if usage scales:
 - If architectural assumption "Claude OAuth access" flips to API-key-only → requires redesign (secrets management layer)
 - If architectural assumption "Codex MCP transport" degrades to >50% failure rate → remove Codex dependency, use alternative review approach
 - If bash subprocess model cannot support parallelization (needed for multi-PR workflows) → rewrite in Go/Python with async/await
+- If bash subprocess model cannot support the three-script pipeline (work-prep → builder → babysit-with-review) as independent processes → evaluate a unified orchestrator; bash is adequate for the current sequential model
 

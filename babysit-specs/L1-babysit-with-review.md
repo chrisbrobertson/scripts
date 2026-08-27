@@ -17,7 +17,7 @@ complexity:
 
 ## TL;DR
 
-An autonomous development loop for solo developers and small teams that iterates on a project by invoking Claude for implementation work, then orchestrates Claude-Codex review cycles to ensure quality before merge.
+An autonomous development loop for solo developers and small teams that iterates on a project by invoking Claude for implementation work, then orchestrates Claude-Codex review cycles to ensure quality before merge. A companion research loop (`babysit-work-prep.sh`) translates raw tickets into fully-scoped TIF spec files ready for AI-agent building, with human approval required before hand-off. A builder loop (`babysit-builder.sh`) implements approved specs using the same adversarial review cycle, halting for human merge rather than auto-merging.
 
 ## Analog
 
@@ -32,6 +32,7 @@ From the existing implementation (babysit-with-review.sh):
 - Script operates on a single git repository (PWD-based invocation)
 - Successfully used in personal scripts repo (evidence: commit history showing convergence-aware review cycle implementation)
 - Handles 50+ iterations per run with configurable limits
+- Two companion scripts extend the loop: `babysit-work-prep.sh` (ticket → spec pipeline with human approval gate) and `babysit-builder.sh` (spec → PR pipeline with human merge gate). Both reuse the same REPO_BASE infrastructure, stop-file protocol, and selectable implementer/reviewer harnesses.
 - Codex review integration is optional (graceful degradation when codex CLI unavailable)
 - Logging infrastructure exists at ~/sisyphus-logs/ with per-project lock files
 - Helper scripts (prs, issues, specs) provide state collection via --json output
@@ -51,6 +52,8 @@ From the existing implementation (babysit-with-review.sh):
 - Repos per user: 1-10 active projects
 - Iterations per run: typically 5-20, max 50
 - Review cycles per PR: typically 1-3, max 6
+- Spec-drafting tickets per work-prep run: typically 5-20, max 20
+- Build tickets per builder run: typically 1-5 per run
 - Geographies: developer workstations (no cloud hosting)
 - Growth curve: organic word-of-mouth within engineering teams
 
@@ -88,7 +91,8 @@ From the existing implementation (babysit-with-review.sh):
 - Team coordination features (no shared queue, no work assignment)
 - Hosted/SaaS deployment (developer workstation only)
 - Windows support (macOS/Linux bash environments only)
-- Integration with issue trackers beyond gh CLI (no Jira, Linear, etc.)
+- Integration with issue trackers beyond GitHub and Jira (no Linear, Shortcut, etc.)
+- Jira status transitions (label-based handoff only; Jira/GitHub sync is operator-configured)
 
 ## Assumptions-that-could-flip
 
@@ -104,6 +108,8 @@ From the existing implementation (babysit-with-review.sh):
   - Existing CI/CD pipelines (babysitter creates PRs, CI validates before merge)
   - Code review tools (CodeRabbit, human reviewers provide additional feedback)
   - Project management tools (gh issues provides work queue)
+  - `babysit-work-prep.sh` (ticket → spec pipeline, feeds builder queue)
+  - `babysit-builder.sh` (spec → PR pipeline, produces review-ready PRs)
 
 # Signals
 
