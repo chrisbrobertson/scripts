@@ -48,7 +48,7 @@ mcp_re='Transport send error:|tool call error: tool call failed for `codex_apps/
 ```
 
 ## Consumer
-Review cycle feature (ARLO-FEAT-REVIEW-CYCLE) invoking codex_review_with_retry() function.
+Review cycle feature (ARLO-FEAT-REVIEW-CYCLE) invokes this function indirectly through the `review_with_retry()` dispatcher, which routes to `codex_review_with_retry()` when `REVIEWER=codex`. **The retry/backoff machinery below is Codex-only** (added by ARLO-TASK-SELECTABLE-REVIEWER, 2026-07-15): when `REVIEWER=claude`, `review_with_retry()` calls `claude_review()` instead, which makes a single attempt, has no telltale detection, no retry/backoff, and only returns 0 (success) or 1 (failure) — it fails closed with no equivalent probe for provider-specific outages. The retry loop, backoff schedule, `compat_re`/`credits_re`/`mcp_re` telltales, and return codes 2/3/4 described below apply only to this Codex path. The `valid_review_structure` contract (see below) is the one exception: it is shared machinery, called by both `codex_review_with_retry()` and `claude_review()` to validate output structure regardless of reviewer harness.
 
 # Substance
 
@@ -128,7 +128,7 @@ Three bare headers with no bullets, or extra `##` headings, or `- (none)` mixed 
 Idempotent on success (same prompt → same review). Non-idempotent on transient failure (retry N may succeed after retry N-1 failed).
 
 ### Versioning policy
-Function is internal to script; no versioning. Breaking changes (retry count, delay schedule, telltale regex) require in-place edit.
+Function is internal to script; no versioning. Breaking changes (retry count, delay schedule, telltale regex) require in-place edit. **`compat_re` and `credits_re` are duplicated as separate local declarations in `reviewer_preflight()`** (babysit-with-review.sh, the preflight probe) in addition to `codex_review_with_retry()` — a regex update applied to one site and not the other silently reintroduces the false-negative blast radius already documented above (compat/credit failures falling through to `review-incomplete` instead of their dedicated labels). Update both sites together.
 
 ## Performance budget
 - **p50 latency (success on attempt 1):** ~1 minute (Codex review time)
@@ -148,8 +148,8 @@ Function is internal to script; no versioning. Breaking changes (retry count, de
 - **Events emitted:**
   - `[codex] waiting Ns before retry (attempt M of 3)...` (on retry, N = delay in seconds)
   - `[codex] MCP transport failure on attempt M of 3 (rc=N, review=<present|empty>)` (on telltale match)
-  - `[codex] reviewing PR #N...` (on each attempt, logged by caller before invoking function)
-- **Sinks:** Main log file (~/sisyphus-logs/<project>-<timestamp>-<pid>.log)
+  - `[$REVIEWER reviewer] reviewing PR #N...` (logged once per `run_review_cycle` invocation by the caller, before `review_with_retry()` is entered — not per retry attempt, and not prefixed `[codex]`: `$REVIEWER` reflects the selected reviewer harness)
+- **Sinks:** Main log file (~/sisyphus-logs/<project>-<timestamp>-<pid>.log) for the two `codex_review_with_retry()`-internal events above. The `reviewing PR #N...` line is stderr-only (`>&2`, not `tee -a "$LOG"`) and does **not** reach the log file.
 - **Linkage to L1 KPIs:**
   - Reliability KPI: (MCP transport failures / total Codex calls) = Codex availability
   - Productivity KPI: Average retries-per-call (lower = better Codex reliability)
