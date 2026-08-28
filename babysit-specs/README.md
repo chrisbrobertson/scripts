@@ -12,8 +12,8 @@ TIF (Trustable, Intuitive, Flexible) specifications documenting the autonomous d
 | **L3** | [L3-review-cycle.md](L3-review-cycle.md) | review | Review cycle: reviewer → implementer fixes → convergence + codex-review status gate |
 | **L3** | [L3-mcp-resilience.md](L3-mcp-resilience.md) | review | MCP resilience: retry-with-backoff + valid_review_structure for Codex transport failures |
 | **L3** | [L3-retrospective-review.md](L3-retrospective-review.md) | review | Retrospective review: one-shot Codex review for merged PRs that bypassed forward-path |
-| **L3** | [L3-work-prep.md](L3-work-prep.md) | **ready** | Work-prep loop: ticket → TIF spec pipeline with human approval gate and sub-ticket creation |
-| **L3** | [L3-builder.md](L3-builder.md) | **ready** | Builder loop: spec → PR pipeline with convergent adversarial review cycle and human merge gate |
+| **L3** | L3-work-prep.md | review | Work-prep loop: ticket → TIF spec pipeline with human approval gate and sub-ticket creation — drafted on open PR #8 (`docs/l3-work-prep-spec`), not yet merged to main |
+| **L3** | [L3-builder.md](L3-builder.md) | review | Builder loop: spec → PR pipeline with convergent adversarial review cycle and human merge gate |
 | **L4** | [L4-selectable-implementer.md](L4-selectable-implementer.md) | **ready** | Select Claude or Codex implementation harness with role-specific model/effort |
 | **L4** | [L4-selectable-reviewer.md](L4-selectable-reviewer.md) | **ready** | Select Claude or Codex review harness with role-specific model/effort |
 
@@ -23,12 +23,30 @@ TIF (Trustable, Intuitive, Flexible) specifications documenting the autonomous d
 |---|---|---|
 | **Security** | [SECURITY-REVIEW-PLAN.md](SECURITY-REVIEW-PLAN.md) | Review checklist: lock file races, auto-merge approval, telltale regex |
 | **QA** | [QA-TEST-PLAN.md](QA-TEST-PLAN.md) | 27 test cases across outer loop, review cycle, and MCP resilience (test harness: `BABYSIT_TEST_MODE` + `test-babysit-with-review-cli.sh`) |
-| **Amendments** | [AMENDMENTS-work-prep-builder.md](AMENDMENTS-work-prep-builder.md) | L1 + L2 amendment notes for work-prep and builder additions (apply before implementing) |
+
+Note: the work-prep/builder amendment notes were applied directly to
+`L1-babysit-with-review.md` and `L2-autonomous-dev-system.md` (see their "companion
+scripts" sections) rather than kept in a separate amendments file — no
+`AMENDMENTS-work-prep-builder.md` file was ever committed.
 
 ## Status
 
 - **L1/L2/L3 features (original):** `review` (awaiting approval)
-- **L3 work-prep + builder:** `ready` (approved by owner 2026-08-27)
+- **L3 work-prep + builder design decisions (7-9 below):** approved by owner 2026-08-27
+- **L3 work-prep spec:** `review` — drafted 2026-08-27 on open PR #8 (`docs/l3-work-prep-spec`,
+  not yet merged to main); several implementation mechanics are flagged `[ASSUMPTION]`
+  pending owner sign-off
+- **L3 builder spec:** `review` — drafted 2026-08-27 from the approved decisions, then
+  revised same-day to key off a `build-ready` label across GitHub/Jira tickets (not
+  just work-prep sub-tickets) and to kick back gap-having specs for clarification
+  instead of building them as-is. Several implementation mechanics are still flagged
+  `[ASSUMPTION]` pending owner sign-off (see "What we assume" in
+  [L3-builder.md](L3-builder.md)) — most notably the branch-protection interaction
+  (does a converged build PR need a `codex-review=success` status posted without a
+  merge?), the multi-source Jira query mechanics, and the spec-gap kickback mechanics.
+  **Coordination note:** the shipped `babysit-work-prep.sh` currently emits
+  `status:ready-to-build` + `sub-ticket`, not `build-ready` — it needs to be updated
+  to match before builder can consume its output.
 - **L4 tasks:** `ready` (both selectable-implementer and selectable-reviewer)
 - **Complexity:** 2/30 (trivial band per TIF rubric)
 - **Fit check:** Passed (specs are appropriate artifact)
@@ -36,6 +54,7 @@ TIF (Trustable, Intuitive, Flexible) specifications documenting the autonomous d
   - ~~Security review decision: auto-merge approval gate~~ — resolved; `codex-review` status gate shipped in v1.1.0
   - ~~QA test harness~~ — `BABYSIT_TEST_MODE` + `test-babysit-with-review-cli.sh` exist
   - QA smoke tests (Phase 1 + Phase 2 from test plan) — still to execute
+  - L3-builder: owner sign-off on the `[ASSUMPTION]` items above before status can move to `ready`
 
 ## Key Decisions Documented
 
