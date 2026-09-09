@@ -1,10 +1,10 @@
 ---
 spec_type: task
-id: ARLO-TASK-SELECTABLE-REVIEWER
+id: ASF-TASK-SELECTABLE-REVIEWER
 status: ready
 owners: [Chris Robertson]
-depends_on: [ARLO-TASK-SELECTABLE-IMPLEMENTER]
-parent_feature: ARLO-FEAT-REVIEW-CYCLE
+depends_on: [ASF-TASK-SELECTABLE-IMPLEMENTER]
+parent_feature: ASF-FEAT-REVIEW-CYCLE
 fit_check: passed
 complexity:
   total: 2
@@ -21,7 +21,7 @@ Allow operators to select Claude or Codex as the independent review harness and 
 
 ## Parent feature
 
-ARLO-FEAT-REVIEW-CYCLE.
+ASF-FEAT-REVIEW-CYCLE.
 
 # Substance
 

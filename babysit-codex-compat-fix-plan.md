@@ -164,7 +164,7 @@ compat_re='requires a newer version of Codex'
 
 **Section "Out of scope"** — add note:
 > Codex pre-flight version detection is owned by the review cycle spec
-> (ARLO-FEAT-REVIEW-CYCLE), not this spec.
+> (ASF-FEAT-REVIEW-CYCLE), not this spec.
 
 ### 2. `L3-review-cycle.md` — pre-flight, structural validation, fail-closed bail, new label
 

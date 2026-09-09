@@ -1,11 +1,11 @@
 ---
 spec_type: feature
-id: ARLO-FEAT-MCP-RESILIENCE
+id: ASF-FEAT-MCP-RESILIENCE
 status: review
 owners: [Chris Robertson]
-depends_on: [ARLO-SYS-AUTONOMOUS-DEV]
-parent_l1: ARLO-PROD-BABYSIT-WITH-REVIEW
-parent_l2: ARLO-SYS-AUTONOMOUS-DEV
+depends_on: [ASF-SYS-AUTONOMOUS-DEV]
+parent_l1: ASF-PROD-BABYSIT-WITH-REVIEW
+parent_l2: ASF-SYS-AUTONOMOUS-DEV
 fit_check: passed
 complexity:
   total: 2
@@ -48,7 +48,7 @@ mcp_re='Transport send error:|tool call error: tool call failed for `codex_apps/
 ```
 
 ## Consumer
-Review cycle feature (ARLO-FEAT-REVIEW-CYCLE) invoking codex_review_with_retry() function.
+Review cycle feature (ASF-FEAT-REVIEW-CYCLE) invoking codex_review_with_retry() function.
 
 # Substance
 
@@ -181,7 +181,7 @@ Function is internal to script; no versioning. Breaking changes (retry count, de
   - Codex prompt assembly (handled by review cycle caller)
   - PR labeling (`review-mcp-outage`, `review-codex-outdated`, `review-codex-no-credits` applied by caller, not this function)
   - Dynamic retry policy (no adaptive backoff, no jitter)
-  - **Codex pre-flight version probe** — owned by ARLO-FEAT-REVIEW-CYCLE; this function detects compat failures at invocation time but does not pre-probe before the review cycle starts
+  - **Codex pre-flight version probe** — owned by ASF-FEAT-REVIEW-CYCLE; this function detects compat failures at invocation time but does not pre-probe before the review cycle starts
 - **Capacity limits:**
   - Fixed 3 retries (no configuration)
   - Fixed delay schedule (no exponential backoff)
@@ -199,7 +199,7 @@ Function is internal to script; no versioning. Breaking changes (retry count, de
 ## Composes with / replaces
 - **Replaces:** Bare Codex invocation with no error handling
 - **Composes with:**
-  - ARLO-FEAT-REVIEW-CYCLE (caller, uses this for Codex resilience)
+  - ASF-FEAT-REVIEW-CYCLE (caller, uses this for Codex resilience)
   - Codex CLI (subprocess invoked by this function)
 
 # Signals

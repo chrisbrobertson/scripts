@@ -1,11 +1,11 @@
 ---
 spec_type: feature
-id: ARLO-FEAT-OUTER-LOOP
+id: ASF-FEAT-OUTER-LOOP
 status: review
 owners: [Chris Robertson]
-depends_on: [ARLO-SYS-AUTONOMOUS-DEV]
-parent_l1: ARLO-PROD-BABYSIT-WITH-REVIEW
-parent_l2: ARLO-SYS-AUTONOMOUS-DEV
+depends_on: [ASF-SYS-AUTONOMOUS-DEV]
+parent_l1: ASF-PROD-BABYSIT-WITH-REVIEW
+parent_l2: ASF-SYS-AUTONOMOUS-DEV
 fit_check: passed
 complexity:
   total: 2
@@ -72,7 +72,7 @@ From implementation (babysit-with-review.sh):
 - Temp files: `TMP_RESULT` (implementer output), `TMP_REVIEW` (reviewer output), `TMP_REVIEW_RESULT` (implementer review response), `TMP_CODEX_FULL` (full codex output for telltale scanning)
 - Pre-flight checks (`reviewer_binary_available`, `reviewer_preflight`, git state) ensure clean state before first iteration; `git worktree prune` runs at pre-flight
 - **Per-iteration worktree:** `git worktree add -b wip/<project>/iter-N` before each implementer invocation. The implementer's first instruction is `git branch -m <type>/<slug>-<issue>` to rename the branch. Any unpushed commits are pushed to origin as a safety net before the worktree is discarded. Worktree is removed (`worktree remove --force` + `branch -D`) *before* sentinel handling so `gh pr checkout` in `run_review_cycle` does not conflict.
-- **MCP-outage pre-iteration retry:** At the top of each outer-loop iteration, if the current PR is labelled `review-mcp-outage`, `run_review_cycle` is retried immediately (up to the outer loop's normal iteration budget). This is distinct from the intra-retry in ARLO-FEAT-MCP-RESILIENCE.
+- **MCP-outage pre-iteration retry:** At the top of each outer-loop iteration, if the current PR is labelled `review-mcp-outage`, `run_review_cycle` is retried immediately (up to the outer loop's normal iteration budget). This is distinct from the intra-retry in ASF-FEAT-MCP-RESILIENCE.
 - **Crash-quarantine sweep:** On implementer non-zero exit, any WIP commits are pushed to origin, the worktree is torn down, then every open non-draft PR assigned to `@me` that lacks a `review-*` label is quarantined via `fail_review_cycle` (labeled `review-incomplete`, marked draft).
 - Helper scripts resolve via `SCRIPTS_DIR="$REPO_BASE/scripts"`. `REPO_BASE` precedence: `--repo-base` flag > `REPO_BASE` env var > autodetect `~/repos` (if exists) then `~/repo`.
 
@@ -195,8 +195,8 @@ Script version: `1.1.0` (semver, `--version` flag). Breaking changes (env var re
 ## Composes with / replaces
 - **Replaces:** Manual loop of (think about task → write code → commit → review)
 - **Composes with:**
-  - ARLO-FEAT-REVIEW-CYCLE (triggered by HANDOFF_REVIEW sentinel)
-  - ARLO-FEAT-MCP-RESILIENCE (provides Codex retry logic for review cycle)
+  - ASF-FEAT-REVIEW-CYCLE (triggered by HANDOFF_REVIEW sentinel)
+  - ASF-FEAT-MCP-RESILIENCE (provides Codex retry logic for review cycle)
   - Helper scripts (prs, issues, specs for state collection)
 
 # Signals

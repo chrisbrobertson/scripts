@@ -1,11 +1,11 @@
 ---
 spec_type: feature
-id: ARLO-FEAT-REVIEW-CYCLE
+id: ASF-FEAT-REVIEW-CYCLE
 status: review
 owners: [Chris Robertson]
-depends_on: [ARLO-SYS-AUTONOMOUS-DEV, ARLO-FEAT-MCP-RESILIENCE]
-parent_l1: ARLO-PROD-BABYSIT-WITH-REVIEW
-parent_l2: ARLO-SYS-AUTONOMOUS-DEV
+depends_on: [ASF-SYS-AUTONOMOUS-DEV, ASF-FEAT-MCP-RESILIENCE]
+parent_l1: ASF-PROD-BABYSIT-WITH-REVIEW
+parent_l2: ASF-SYS-AUTONOMOUS-DEV
 fit_check: passed
 complexity:
   total: 2
@@ -87,7 +87,7 @@ From implementation (babysit-with-review.sh):
 - **Merge gate (codex-review status):** when BLOCKING=0, the wrapper first POSTs `gh api -X POST repos/<owner>/statuses/<sha> -f context=codex-review -f state=success` via `gh api`. If the POST fails, or owner/repo or head SHA cannot be resolved, it logs a WARNING and returns 0 *without merging*. Only after a successful status POST does it attempt `gh pr merge --squash --delete-branch --auto`, falling back to an immediate merge. `setup-branch-protection.sh` makes `codex-review` a required status check with `enforce_admins: true`; this is the actual mechanism that prevents implementation Claude from self-merging.
 - **Graceful degradation:** if the selected reviewer binary is not installed, skip the review cycle (logged) and return 0.
 - **Reviewer pre-flight probe (`reviewer_preflight`):** before the cycle loop, `run_review_cycle` calls `reviewer_preflight`. For Codex it runs `codex exec -s read-only "Say 'ok'."` with the configured model/effort, checks only `compat_re` and `credits_re` (no structural validation), and returns 3/4/1/0. For Claude, `reviewer_preflight` is a no-op (returns 0 immediately). If the probe returns 3, `run_review_cycle` calls `fail_review_cycle_codex_outdated` and returns 3. If it returns 4, it calls `fail_review_cycle_codex_no_credits` and returns 4. Any other non-zero calls `fail_review_cycle` and returns 0.
-- **Structural validation:** `review_with_retry` (via `valid_review_structure` in ARLO-FEAT-MCP-RESILIENCE) returns 0 only when TMP_REVIEW passes the full contract (see L3-mcp-resilience for the exact awk rules). A structurally invalid output with rc=0 is treated as failure (return 1).
+- **Structural validation:** `review_with_retry` (via `valid_review_structure` in ASF-FEAT-MCP-RESILIENCE) returns 0 only when TMP_REVIEW passes the full contract (see L3-mcp-resilience for the exact awk rules). A structurally invalid output with rc=0 is treated as failure (return 1).
 - **`fail_review_cycle` is fail-closed for labelling/draft commands:** `gh pr ready --undo` and `gh pr edit --add-label` failures abort the babysitter (`exit 1`). `gh pr comment` (posting the bail reason) remains best-effort.
 - **`fail_review_cycle_codex_outdated`:** labels PR `review-codex-outdated`, marks draft, posts upgrade instructions comment, calls `exit 1`.
 - **`fail_review_cycle_codex_no_credits`:** labels PR `review-codex-no-credits`, marks draft, posts add-credits instructions comment, calls `exit 1`.
@@ -138,7 +138,7 @@ run_review_cycle <PR_NUMBER>
 6. **Solution rationale:** Implementer documents implementation rationale for each fix via Why: and Impact: blocks in commit messages (cycle 2+)
 7. **Explicit resolution justification:** Cycle 4+ requires the implementer to explicitly justify how each BLOCKING finding was resolved or prove it is invalid with supporting references
 8. **Adjudication:** Cycle 5–6 requires the reviewer to accept or provide reasoned disagreement for each of the implementer's resolution justifications from the previous cycle
-9. **BLOCKING counting:** Only bullets under `## BLOCKING` that are not `- (none)` count. Structural validation is a pre-condition (see `valid_review_structure` in ARLO-FEAT-MCP-RESILIENCE): invalid output is a reviewer failure, not a zero-findings pass.
+9. **BLOCKING counting:** Only bullets under `## BLOCKING` that are not `- (none)` count. Structural validation is a pre-condition (see `valid_review_structure` in ASF-FEAT-MCP-RESILIENCE): invalid output is a reviewer failure, not a zero-findings pass.
 10. **PR branch checkout:** Cycle starts by checking out PR branch via `gh pr checkout <PR_NUMBER>`
 11. **Label application:** `review-incomplete` for human-action bails, `review-mcp-outage` for transport failures, `review-codex-outdated` for backend compatibility failures, `review-codex-no-credits` for credit exhaustion
 12. **Fail-closed labelling:** `fail_review_cycle` gh label/draft commands abort the babysitter on failure; only the follow-up `gh pr comment` is best-effort
@@ -148,7 +148,7 @@ run_review_cycle <PR_NUMBER>
 - **Pre-flight probe: `compat_re` match:** Label PR `review-codex-outdated`, post upgrade instructions comment, `exit 1` (halts babysitter). Note: probe checks only `compat_re` and `credits_re`, not structural validity.
 - **Pre-flight probe: `credits_re` match:** Label PR `review-codex-no-credits`, post add-credits instructions comment, `exit 1` (halts babysitter)
 - **Pre-flight probe: non-zero, no telltale match:** Label PR `review-incomplete` (fail-closed), return 0
-- **MCP transport failure from `review_with_retry`:** Retried by ARLO-FEAT-MCP-RESILIENCE (3× with backoff), if all fail → return 2
+- **MCP transport failure from `review_with_retry`:** Retried by ASF-FEAT-MCP-RESILIENCE (3× with backoff), if all fail → return 2
 - **Reviewer backend compatibility failure (return 3 from `review_with_retry`):** Label PR `review-codex-outdated`, `exit 1` (halts babysitter)
 - **Reviewer credit exhaustion (return 4 from `review_with_retry`):** Label PR `review-codex-no-credits`, `exit 1` (halts babysitter)
 - **Reviewer non-transport failure (return 1):** Label PR `review-incomplete` (fail-closed), return 0
@@ -689,19 +689,19 @@ __REVIEW__
 - QA: Test cases documented in QA-TEST-PLAN.md (TC-2.*). Test harness exists: `BABYSIT_TEST_MODE` + `test-babysit-with-review-cli.sh`.
 
 ## Failure modes & blast radius
-- **Contract violation (malformed Codex review):** Structural validation (ARLO-FEAT-MCP-RESILIENCE) catches this before `count_blocking` runs; returns 1 → `fail_review_cycle`. Blast: PR labeled `review-incomplete`, no false-clean merge.
+- **Contract violation (malformed Codex review):** Structural validation (ASF-FEAT-MCP-RESILIENCE) catches this before `count_blocking` runs; returns 1 → `fail_review_cycle`. Blast: PR labeled `review-incomplete`, no false-clean merge.
 - **Codex backend compatibility failure:** All review cycles in the run fail. Old behaviour (pre-fix): no `fail_review_cycle` call, PR stayed OPEN, outer loop merged unreviewed. New behaviour: `review-codex-outdated` label, babysitter exits 1 after first affected PR.
 - **`fail_review_cycle` gh command failure (gh auth expired, network down):** Old behaviour: WARNING logged, continued. New behaviour: babysitter exits 1; unlabelled PR must be manually quarantined before restart.
 - **Perf regression (Codex/Claude latency spike):** Cycle slows, may hit MAX_REVIEW_CYCLES before converging. Blast: PR labeled `review-incomplete`, developer reviews manually.
 - **Telemetry loss (gh pr comment failure for bail reason):** Bail reason comment not posted; label and draft state are still applied (fail-closed). Blast: PR is safely quarantined; operator sees the label but no comment context.
 - **False positive (BLOCKING for valid code):** Developer wastes time investigating. Mitigated by prescriptive mode requiring concrete fix.
-- **False negative (BLOCKING missed):** Bug merges. Mitigated by retrospective review (ARLO-FEAT-RETROSPECTIVE-REVIEW) for known unreviewed PRs.
+- **False negative (BLOCKING missed):** Bug merges. Mitigated by retrospective review (ASF-FEAT-RETROSPECTIVE-REVIEW) for known unreviewed PRs.
 
 # Bounds
 
 ## Out of scope
 - **Out-of-feature behaviors:**
-  - Codex retry logic (handled by ARLO-FEAT-MCP-RESILIENCE)
+  - Codex retry logic (handled by ASF-FEAT-MCP-RESILIENCE)
   - PR creation (handled by outer loop / Claude)
   - State collection for Claude prompt (handled by outer loop)
 - **Capacity limits:**
@@ -728,8 +728,8 @@ __REVIEW__
 ## Composes with / replaces
 - **Replaces:** Manual code review loop (open PR → human reviews → implementer fixes → re-review)
 - **Composes with:**
-  - ARLO-FEAT-OUTER-LOOP (triggered by HANDOFF_REVIEW sentinel)
-  - ARLO-FEAT-MCP-RESILIENCE (provides Codex retry with backoff)
+  - ASF-FEAT-OUTER-LOOP (triggered by HANDOFF_REVIEW sentinel)
+  - ASF-FEAT-MCP-RESILIENCE (provides Codex retry with backoff)
   - CodeRabbit / human reviewers (external feedback collected via collect_pr_feedback)
 
 # Signals

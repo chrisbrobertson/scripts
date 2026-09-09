@@ -1,10 +1,10 @@
 ---
 spec_type: system
-id: ARLO-SYS-AUTONOMOUS-DEV
+id: ASF-SYS-AUTONOMOUS-DEV
 status: review
 owners: [Chris Robertson]
-depends_on: [ARLO-PROD-BABYSIT-WITH-REVIEW]
-serves_l1: [ARLO-PROD-BABYSIT-WITH-REVIEW]
+depends_on: [ASF-PROD-BABYSIT-WITH-REVIEW]
+serves_l1: [ASF-PROD-BABYSIT-WITH-REVIEW]
 fit_check: passed
 complexity:
   total: 2
@@ -138,7 +138,7 @@ From the existing implementation:
   codex exec --output-last-message "$TMP_REVIEW" -s read-only \
     [--model MODEL] [-c "model_reasoning_effort=\"LEVEL\""] "<prompt>"
   ```
-- **Response shape:** Markdown passing `valid_review_structure` (see ARLO-FEAT-MCP-RESILIENCE for the full awk contract)
+- **Response shape:** Markdown passing `valid_review_structure` (see ASF-FEAT-MCP-RESILIENCE for the full awk contract)
 - **Retry policy:** 3 attempts with 0 / 60s / 300s delays on MCP transport failure
 - **MCP failure telltales:** `Transport send error:`, `tool call failed for \`codex_apps/`, `error sending request for url (https://chatgpt\.com/`
 - **Idempotency:** Idempotent within a review cycle (same PR state → same review)
@@ -250,7 +250,7 @@ Latency budget honors L1 product promise: Tool must complete tasks faster than m
 - **Cell scope:** Single developer workstation, single git repository
 - **Blast radius per failure class:**
   - **Claude API unavailable:** Outer loop halts at current iteration; no data loss (git state preserved)
-  - **Codex MCP transport failure:** Review cycle retries 3× (intra-retry in ARLO-FEAT-MCP-RESILIENCE); if all fail, labels PR `review-mcp-outage` and halts babysitter. Next babysitter run detects the label at the top of each outer iteration and retries `run_review_cycle` automatically.
+  - **Codex MCP transport failure:** Review cycle retries 3× (intra-retry in ASF-FEAT-MCP-RESILIENCE); if all fail, labels PR `review-mcp-outage` and halts babysitter. Next babysitter run detects the label at the top of each outer iteration and retries `run_review_cycle` automatically.
   - **gh CLI auth failure:** Outer loop halts; developer must re-authenticate via `gh auth login`
   - **git CLI failure:** Pre-flight catches most issues; in-flight failures halt iteration
   - **Disk full / log write failure:** Log writes fail silently (stdout to /dev/null behavior); orchestration continues
@@ -259,11 +259,11 @@ Latency budget honors L1 product promise: Tool must complete tasks faster than m
   - **Codex unavailable:** Review cycle skips automatically (logged message), outer loop continues
   - **Helper scripts unavailable:** State collection returns "(unavailable)" placeholder, Claude continues with degraded context
 
-## arlo-infra.yaml dependencies
+## asf-infra.yaml dependencies
 
-N/A — this is a developer workstation tool with no arlo-infra.yaml dependencies.
+N/A — this is a developer workstation tool with no asf-infra.yaml dependencies.
 
-External dependencies (not arlo-infra.yaml):
+External dependencies (not asf-infra.yaml):
 
 - `claude` CLI (Claude Code, installed via `curl` or package manager)
 - `codex` CLI (optional, installed via package manager)

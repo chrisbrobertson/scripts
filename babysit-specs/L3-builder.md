@@ -1,11 +1,11 @@
 ---
 spec_type: feature
-id: ARLO-FEAT-BUILDER
+id: ASF-FEAT-BUILDER
 status: review
 owners: [Chris Robertson]
-depends_on: [ARLO-SYS-AUTONOMOUS-DEV, ARLO-FEAT-REVIEW-CYCLE, ARLO-FEAT-MCP-RESILIENCE, ARLO-FEAT-WORK-PREP]
-parent_l1: ARLO-PROD-BABYSIT-WITH-REVIEW
-parent_l2: ARLO-SYS-AUTONOMOUS-DEV
+depends_on: [ASF-SYS-AUTONOMOUS-DEV, ASF-FEAT-REVIEW-CYCLE, ASF-FEAT-MCP-RESILIENCE, ASF-FEAT-WORK-PREP]
+parent_l1: ASF-PROD-BABYSIT-WITH-REVIEW
+parent_l2: ASF-SYS-AUTONOMOUS-DEV
 fit_check: passed
 complexity:
   total: 3
@@ -72,13 +72,26 @@ STUCK <reason>              # transient/infra failure; ticket left in queue, ret
 (no sentinel)                # transient/infra failure; ticket left in queue, retried next run
 
 # Halt outcomes (run_build_cycle; no gh pr merge in any path)
-BLOCKING=0 converged        # labels build-ready-for-merge, posts summary comment, halts ticket
-max cycles exhausted        # labels build-max-cycles, posts summary comment, halts ticket
+BLOCKING=0 converged        # labels build-ready-for-merge, posts codex-review=success,
+                             # posts summary comment, swaps ticket build-ready → build-done
+max cycles exhausted        # labels build-max-cycles, posts summary comment (no status),
+                             # swaps ticket build-ready → build-done
 SPEC_GAP                    # labels build-needs-clarification, posts gap comment, removes build-ready
 
+# Quarantine labels (PR-side, non-terminal; build-* mirrors of the review-* set)
+build-incomplete            # cycle bailed for a human-action reason; ticket also swapped
+                             # to build-done so it is not rebuilt into a duplicate PR
+build-mcp-outage            # reviewer transport failure; ticket KEEPS build-ready, the
+                             # run halts, and the next run's outage sweep resumes this PR
+build-codex-outdated        # Codex CLI too old; operator upgrades, removes label, re-runs
+build-codex-no-credits      # Codex workspace out of credits; operator tops up, re-runs
+
 # Exit codes
-0   # Completed normally, including a run that builds zero tickets
-1   # Fatal: pre-flight failure, gh/git auth failure, lock file collision, or
+0   # Completed normally, including a run that builds zero tickets and a run that
+    # halts early on a reviewer-backend outage — a quarantined PR plus an automatic
+    # retry next run is a completed run, not a failed one.
+1   # Fatal: pre-flight failure (including the startup reviewer probe), gh/git auth
+    # failure, lock file collision, or
     # missing/malformed Jira env vars when --source jira|both is requested.
     # A live but unreachable Jira endpoint at query time is NOT fatal — it degrades
     # (skips Jira-sourced tickets, continues with GitHub) and exits 0.
@@ -97,7 +110,7 @@ one — any ticket (GitHub or Jira) carrying that label is eligible work.
 # Substance
 
 ## What we know
-Decisions already recorded in ARLO-PROD-BABYSIT-WITH-REVIEW and ARLO-SYS-AUTONOMOUS-DEV
+Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOUS-DEV
 (owner-approved 2026-08-27), plus mechanics directly inherited from the shipped
 `babysit-with-review.sh` v1.1.0 implementation this script mirrors:
 
@@ -113,7 +126,17 @@ Decisions already recorded in ARLO-PROD-BABYSIT-WITH-REVIEW and ARLO-SYS-AUTONOM
 - **Per-ticket worktree, same pattern as the outer loop — verified always-clean.** A
   `git worktree` is created on a fresh, uniquely-named branch off the current default
   branch SHA for every single build attempt; the implementer builds the ticket's spec
-  in it, and the worktree is torn down before the review cycle runs. Confirmed against
+  in it, and the worktree is torn down when the ticket reaches a terminal state.
+  Unlike `babysit-with-review.sh`, the worktree is **not** torn down before the review
+  cycle: that teardown exists there only because `run_review_cycle` calls
+  `gh pr checkout`, which errors while the branch is checked out in a worktree.
+  `run_build_cycle` has no `gh pr checkout` — it already holds a worktree on the PR
+  branch — so it reviews and remediates in place. Two consequences: the operator's own
+  checkout is never mutated (no clean-tree pre-flight is needed, and the builder can
+  run while a human works in the same clone), and the wrapper pushes the worktree HEAD
+  to the PR branch after every remediation pass and again before posting
+  `codex-review=success`, so the status can never go green against a SHA the PR does
+  not carry. Confirmed against
   the shipped implementation: `babysit-with-review.sh` uses `wip/<project>/iter-<N>`
   off `HEAD` (`git worktree add -b "$_wt_branch" "$_wt_dir" HEAD`, line ~1792);
   `babysit-work-prep.sh` uses `work-prep/<slug>-<pid>` off the default branch's SHA
@@ -134,12 +157,23 @@ Decisions already recorded in ARLO-PROD-BABYSIT-WITH-REVIEW and ARLO-SYS-AUTONOM
   simply an orphan a human closes, not a correctness risk. No in-progress marker,
   claim/release mechanism, or staleness check is needed to prevent this.
 - **Convergent review cycle mirrors the existing implementation.** `run_build_cycle`
-  mirrors `run_review_cycle` (`ARLO-FEAT-REVIEW-CYCLE`): reviewer → implementer fixes →
+  mirrors `run_review_cycle` (`ASF-FEAT-REVIEW-CYCLE`): reviewer → implementer fixes →
   convergence tracking → prescriptive mode at cycle 3+ → same `TMP_RESULT`,
   `TMP_REVIEW`, `TMP_REVIEW_RESULT`, `TMP_CODEX_FULL` temp files and
   `valid_review_structure` validation. Same `MAX_REVIEW_CYCLES` default of 6.
 - **MCP resilience is reused unchanged.** The same retry-with-backoff (0/60s/300s) and
-  telltale detection from `ARLO-FEAT-MCP-RESILIENCE` applies when `--reviewer codex`.
+  telltale detection from `ASF-FEAT-MCP-RESILIENCE` applies when `--reviewer codex`.
+  Two run-level additions follow from the queue shape:
+  - **Outage sweep runs before the queue is read.** A PR quarantined
+    `build-mcp-outage` by a previous run is resumed first — its head branch is fetched
+    into a reconstructed worktree, the label is removed, the PR is un-drafted, and the
+    build cycle restarts. Ordering matters: that PR's ticket is still `build-ready`, so
+    reading the queue first would rebuild it into the duplicate PR the sweep exists to
+    avoid.
+  - **Reviewer pre-flight is a run-level fatal, not a per-PR bail.** The Codex
+    compatibility/credits probe runs once at startup and exits 1 on failure, before any
+    implementer time is spent. `babysit-with-review.sh` probes per review cycle because
+    it interleaves with implementation; builder knows its whole queue up front.
 - **No auto-merge, ever.** Unlike `babysit-with-review.sh`, no code path calls
   `gh pr merge`. The halt condition (BLOCKING=0 convergence, or max cycles exhausted)
   ends the ticket's processing with a PR comment summarizing the reviewer's final
@@ -149,8 +183,8 @@ Decisions already recorded in ARLO-PROD-BABYSIT-WITH-REVIEW and ARLO-SYS-AUTONOM
   script, and vice versa — no shared state, no collision risk between the two loops
   running concurrently on the same repo.
 - **Shared infrastructure, independent process.** Same `REPO_BASE` auto-detection,
-  same selectable-implementer/selectable-reviewer plumbing (`ARLO-FEAT-SELECTABLE-IMPLEMENTER`,
-  `ARLO-FEAT-SELECTABLE-REVIEWER`), own stop file
+  same selectable-implementer/selectable-reviewer plumbing (`ASF-FEAT-SELECTABLE-IMPLEMENTER`,
+  `ASF-FEAT-SELECTABLE-REVIEWER`), own stop file
   (`~/sisyphus-logs/<project>-builder.stop`) so it runs concurrently with
   `babysit-with-review.sh` and `babysit-work-prep.sh` without lock contention.
 - **Single-process-per-project locking, not per-ticket claiming.** The shipped
@@ -170,7 +204,7 @@ Decisions already recorded in ARLO-PROD-BABYSIT-WITH-REVIEW and ARLO-SYS-AUTONOM
   and read its frontmatter itself. This only covers GitHub-sourced, work-prep-produced
   tickets; see the multi-source assumption below for how a Jira ticket or a
   hand-labelled GitHub issue conveys the same information.
-- **Jira write-back is label-only, per L1's declared scope.** `ARLO-PROD-BABYSIT-WITH-REVIEW`
+- **Jira write-back is label-only, per L1's declared scope.** `ASF-PROD-BABYSIT-WITH-REVIEW`
   already scopes Jira integration to "label-based handoff only; Jira/GitHub sync is
   operator-configured" and explicitly excludes Jira status transitions. Builder's
   label transitions on a Jira-sourced ticket (removing `build-ready`, adding
@@ -198,7 +232,18 @@ sign-off before `babysit-builder.sh` is built against this spec:
   `build-max-cycles` (max cycles exhausted, unresolved BLOCKING findings remain), and
   `build-needs-clarification` (spec-gap kickback, see below) are mutually exclusive
   terminal labels, applied to the PR for the first two (no PR exists yet for a
-  spec-gap kickback, so that label applies to the ticket itself). Critically, the
+  spec-gap kickback, so that label applies to the ticket itself). Alongside these,
+  four non-terminal quarantine labels mirror `babysit-with-review.sh`'s `review-*`
+  set one-for-one, because invariant 6 forbids reusing those: `build-incomplete`,
+  `build-mcp-outage`, `build-codex-outdated`, `build-codex-no-credits`. A
+  `build-incomplete` bail also swaps the ticket to `build-done` (with an explanatory
+  ticket comment carrying the real semantics) — leaving it `build-ready` would
+  guarantee a duplicate PR on every subsequent run with no progress, which is the one
+  case the accepted-duplicate-PR trade-off does not cover. `build-mcp-outage` is the
+  deliberate exception: the ticket keeps `build-ready` because the outage sweep at the
+  top of the next run resumes that PR before the queue is read.
+  Owner should confirm the `build-incomplete` → `build-done` swap reads correctly, or
+  whether a distinct ticket-side label is preferred. Critically, the
   queue query filters on `build-ready` presence alone, so `build-done` being *added*
   is not sufficient to stop re-selection — the ticket's terminal transition must
   *swap* `build-ready` for `build-done` (remove one, add the other) in the same
@@ -281,7 +326,9 @@ babysit-builder.sh [--repo OWNER/REPO] [--source github|jira|both]
 3. **Terminal states are mutually exclusive.** A PR carries exactly one of
    `build-ready-for-merge` or `build-max-cycles`; a ticket carries at most one of
    `build-done` or `build-needs-clarification`. Never both, never neither, once the
-   ticket reaches a terminal state.
+   ticket reaches a terminal state. The four quarantine labels are a disjoint,
+   non-terminal set: a PR carrying one of them carries neither terminal PR label,
+   because no review verdict was reached.
 4. **Max-tickets cap:** no more than `--max-tickets` (default 5) new tickets are
    started per invocation, regardless of queue size.
 5. **Dry-run is read-only:** `--dry-run` performs `gh`/Jira reads only — no worktree,
@@ -311,7 +358,7 @@ require manual migration of any open build PRs.
   outer-loop-iteration-plus-review-cycle (p50 ~6min, p95 ~25min) — one implementer
   build pass plus a full convergent review cycle (up to `MAX_REVIEW_CYCLES`).
 - **Run of 5 tickets:** on the order of 30min-2hr, dominated by review-cycle
-  convergence rate (no formal SLO — internal tool, see `ARLO-SYS-AUTONOMOUS-DEV` SLOs
+  convergence rate (no formal SLO — internal tool, see `ASF-SYS-AUTONOMOUS-DEV` SLOs
   section).
 
 ## Security model
@@ -392,7 +439,7 @@ Events emitted to stderr:
   fix the spec itself — actually revising the spec belongs to `babysit-work-prep.sh`
   or a human.
 - **Non-GitHub, non-Jira ticket sources.** Linear, Shortcut, etc. are out of scope,
-  matching `ARLO-PROD-BABYSIT-WITH-REVIEW`'s existing out-of-scope list.
+  matching `ASF-PROD-BABYSIT-WITH-REVIEW`'s existing out-of-scope list.
 
 ## Assumptions-that-could-flip
 - **No-per-ticket-claiming assumption.** If flipped (multi-host builder becomes a
@@ -425,14 +472,20 @@ Events emitted to stderr:
     `build-ready`. For work-prep output to be picked up under this contract,
     work-prep needs to add `build-ready` to its sub-ticket creation (in addition to
     or instead of `status:ready-to-build`) — this is a required follow-up change to
-    `babysit-work-prep.sh` / `ARLO-FEAT-WORK-PREP`, not something this spec can
+    `babysit-work-prep.sh` / `ASF-FEAT-WORK-PREP`, not something this spec can
     resolve unilaterally.
   - GitHub Issues and Jira (ticket sources, queried directly by `build-ready` label —
     not exclusively through work-prep's bridging)
   - `babysit-with-review.sh` (mirrors `run_review_cycle`'s convergence/MCP-resilience
-    machinery as `run_build_cycle`; whether this is sourced from a shared function
-    library or independently implemented is an open implementation decision — either
-    way it shares no runtime state or lock file with `babysit-with-review.sh`)
+    machinery as `run_build_cycle`; shares no runtime state or lock file with it).
+    The shared-library-versus-duplication decision is **resolved as duplication**:
+    `babysit-builder.sh` carries its own copies of the review prompt templates,
+    `count_blocking`, `valid_review_structure`, `codex_review_with_retry`,
+    `claude_review`, and the quarantine helpers. This follows the precedent
+    `babysit-work-prep.sh` already set by duplicating `run_claude`/`run_codex`, and
+    keeps each script a self-contained deployable. The cost is real and should be
+    revisited if a third consumer appears: a fix to the review parser or the telltale
+    regex now has to land in two files.
   - `setup-branch-protection.sh` / the `codex-review` status check (see
     branch-protection assumption above)
 - **Distinct from `babysit-with-review.sh`:** never merges; operates on a labelled

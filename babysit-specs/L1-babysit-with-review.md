@@ -1,6 +1,6 @@
 ---
 spec_type: product
-id: ARLO-PROD-BABYSIT-WITH-REVIEW
+id: ASF-PROD-BABYSIT-WITH-REVIEW
 status: review
 owners: [Chris Robertson]
 depends_on: []

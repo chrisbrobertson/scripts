@@ -1,11 +1,11 @@
 ---
 spec_type: feature
-id: ARLO-FEAT-RETROSPECTIVE-REVIEW
+id: ASF-FEAT-RETROSPECTIVE-REVIEW
 status: review
 owners: [Chris Robertson]
-depends_on: [ARLO-FEAT-REVIEW-CYCLE, ARLO-FEAT-MCP-RESILIENCE]
-parent_l1: ARLO-PROD-BABYSIT-WITH-REVIEW
-parent_l2: ARLO-SYS-AUTONOMOUS-DEV
+depends_on: [ASF-FEAT-REVIEW-CYCLE, ASF-FEAT-MCP-RESILIENCE]
+parent_l1: ASF-PROD-BABYSIT-WITH-REVIEW
+parent_l2: ASF-SYS-AUTONOMOUS-DEV
 fit_check: passed
 complexity:
   total: 3
@@ -79,7 +79,7 @@ Design decisions:
 - **One issue per blocking finding** (not one issue per PR). Title format:
   `[retrospective] <one-line finding> (merged PR #N)`. Deduplication: if an issue with
   this exact title already exists (open or closed), it is skipped.
-- **Structural validation (weaker than forward-path).** `run-retrospective-review.sh` uses three bare `grep -qE` header checks (`^## BLOCKING`, `^## RECOMMENDED`, `^## INFORMATION`) — it does NOT use the `valid_review_structure` function from ARLO-FEAT-MCP-RESILIENCE. As a consequence it accepts some output that the forward-path script rejects (e.g., bare headers with no bullets, `- (none)` mixed with other bullets). This is a known divergence.
+- **Structural validation (weaker than forward-path).** `run-retrospective-review.sh` uses three bare `grep -qE` header checks (`^## BLOCKING`, `^## RECOMMENDED`, `^## INFORMATION`) — it does NOT use the `valid_review_structure` function from ASF-FEAT-MCP-RESILIENCE. As a consequence it accepts some output that the forward-path script rejects (e.g., bare headers with no bullets, `- (none)` mixed with other bullets). This is a known divergence.
 - **Codex compat failure skips the PR.** If Codex returns the `compat_re` pattern, the
   PR is logged to stderr as skipped. The operator must first upgrade Codex before
   retrospective review can run.
@@ -215,7 +215,7 @@ Events emitted to stderr:
   - `find-bailed-merged-prs.sh` (detection — pipes PR list)
   - `backfill-codex-reviews.py` (log-based backfill — different use case: posts reviews
     that WERE captured in logs but never posted to GitHub; retrospective runs NEW reviews)
-  - ARLO-FEAT-MCP-RESILIENCE (conceptually related; this script uses a simpler three-header grep rather than `valid_review_structure`)
+  - ASF-FEAT-MCP-RESILIENCE (conceptually related; this script uses a simpler three-header grep rather than `valid_review_structure`)
 - **Distinct from `backfill-codex-reviews.py`:** That script posts review content already
   captured in sisyphus logs. This script runs a new Codex review for PRs where no valid
   review was ever captured.
