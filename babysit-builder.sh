@@ -663,20 +663,31 @@ for line in sys.stdin:
     if not line:
         continue
     try:
-        event = json.loads(line)
+        ev = json.loads(line)
     except Exception:
         continue
-    kind = event.get("type")
-    if kind == "assistant":
-        for block in event.get("message", {}).get("content", []):
-            if block.get("type") == "tool_use":
+    t = ev.get("type")
+    if t == "system" and ev.get("subtype") == "init":
+        sid = (ev.get("session_id") or "?")[:8]
+        print(f"  [init] session {sid}", file=sys.stderr, flush=True)
+    elif t == "assistant":
+        for block in ev.get("message", {}).get("content", []):
+            bt = block.get("type")
+            if bt == "text":
+                txt = (block.get("text") or "").strip()
+                if txt:
+                    print(f"  [text] {txt.splitlines()[0][:200]}", file=sys.stderr, flush=True)
+            elif bt == "tool_use":
+                name = block.get("name", "?")
                 inp = block.get("input") or {}
-                summary = inp.get("command") or inp.get("file_path") or inp.get("pattern") or ""
+                summary = (
+                    inp.get("command") or inp.get("file_path")
+                    or inp.get("pattern") or inp.get("path") or ""
+                )
                 summary = str(summary).splitlines()[0][:120] if summary else ""
-                name = block.get("name") or "?"
-                print(("  [tool] %s %s" % (name, summary)).rstrip(), file=sys.stderr, flush=True)
-    elif kind == "result":
-        final = event.get("result") or ""
+                print(f"  [tool] {name} {summary}".rstrip(), file=sys.stderr, flush=True)
+    elif t == "result":
+        final = ev.get("result") or ""
 sys.stdout.write(final)
 ' > "$out_file"
   return ${PIPESTATUS[0]}

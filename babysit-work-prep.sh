@@ -437,9 +437,35 @@ run_claude() {
 import json, sys
 final = ""
 for line in sys.stdin:
-    try: event = json.loads(line)
-    except Exception: continue
-    if event.get("type") == "result": final = event.get("result") or ""
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        ev = json.loads(line)
+    except Exception:
+        continue
+    t = ev.get("type")
+    if t == "system" and ev.get("subtype") == "init":
+        sid = (ev.get("session_id") or "?")[:8]
+        print(f"  [init] session {sid}", file=sys.stderr, flush=True)
+    elif t == "assistant":
+        for block in ev.get("message", {}).get("content", []):
+            bt = block.get("type")
+            if bt == "text":
+                txt = (block.get("text") or "").strip()
+                if txt:
+                    print(f"  [text] {txt.splitlines()[0][:200]}", file=sys.stderr, flush=True)
+            elif bt == "tool_use":
+                name = block.get("name", "?")
+                inp = block.get("input") or {}
+                summary = (
+                    inp.get("command") or inp.get("file_path")
+                    or inp.get("pattern") or inp.get("path") or ""
+                )
+                summary = str(summary).splitlines()[0][:120] if summary else ""
+                print(f"  [tool] {name} {summary}".rstrip(), file=sys.stderr, flush=True)
+    elif t == "result":
+        final = ev.get("result") or ""
 sys.stdout.write(final)
 ' > "$out_file"
   return ${PIPESTATUS[0]}
