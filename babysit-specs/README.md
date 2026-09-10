@@ -39,11 +39,17 @@ scripts" sections) rather than kept in a separate amendments file — no
 - **L3 builder spec:** `review` — drafted 2026-08-27 from the approved decisions, then
   revised same-day to key off a `build-ready` label across GitHub/Jira tickets (not
   just work-prep sub-tickets) and to kick back gap-having specs for clarification
-  instead of building them as-is. Several implementation mechanics are still flagged
-  `[ASSUMPTION]` pending owner sign-off (see "What we assume" in
-  [L3-builder.md](L3-builder.md)) — most notably the branch-protection interaction
-  (does a converged build PR need a `codex-review=success` status posted without a
-  merge?), the multi-source Jira query mechanics, and the spec-gap kickback mechanics.
+  instead of building them as-is. **Implemented 2026-08-27** as `babysit-builder.sh`
+  v0.1.0; the spec was updated in the same pass to record what implementation settled:
+  the worktree now lives through the build cycle (no `gh pr checkout`, so the
+  operator's checkout is never touched), the four `build-*` quarantine labels are
+  enumerated, the outage sweep runs before the queue is read, the reviewer probe is a
+  startup fatal, and the shared-library question is resolved as duplication.
+  Several mechanics are still flagged `[ASSUMPTION]` pending owner sign-off (see
+  "What we assume" in [L3-builder.md](L3-builder.md)) — most notably the
+  branch-protection interaction (a converged build PR gets a `codex-review=success`
+  status posted without a merge), the multi-source Jira query mechanics, and the
+  `build-incomplete` → `build-done` ticket swap.
   **Coordination note:** the shipped `babysit-work-prep.sh` currently emits
   `status:ready-to-build` + `sub-ticket`, not `build-ready` — it needs to be updated
   to match before builder can consume its output.
