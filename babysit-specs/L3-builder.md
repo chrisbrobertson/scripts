@@ -119,10 +119,10 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
   carrying the `build-ready` label (or its Jira equivalent; see multi-source
   assumption below). There is no freeform `GOAL_DESCRIPTION` argument like
   `babysit-with-review.sh` takes — each outer-loop iteration is scoped to exactly one
-  queued ticket. This departs from the shipped `babysit-work-prep.sh`, which currently
-  emits `status:ready-to-build` + `sub-ticket` on its GitHub sub-tickets — see the
-  coordination note under "Composes with" for what needs to change on the work-prep
-  side for its output to be picked up under this contract.
+  queued ticket. `babysit-work-prep.sh` emits `sub-ticket` + `build-ready` on the
+  sub-tickets it creates, so its output feeds this queue directly; `status:ready-to-build`
+  stays on the *source* ticket, where it means "spec approved, sub-ticket exists" and
+  is not a builder signal.
 - **Per-ticket worktree, same pattern as the outer loop — verified always-clean.** A
   `git worktree` is created on a fresh, uniquely-named branch off the current default
   branch SHA for every single build attempt; the implementer builds the ticket's spec
@@ -466,14 +466,15 @@ Events emitted to stderr:
 
 ## Composes with / replaces
 - **Composes with:**
-  - `babysit-work-prep.sh` — currently the primary (but not exclusive) producer of
-    buildable tickets. **Coordination note:** the shipped `babysit-work-prep.sh`
-    currently labels its sub-tickets `sub-ticket` + `status:ready-to-build`, not
-    `build-ready`. For work-prep output to be picked up under this contract,
-    work-prep needs to add `build-ready` to its sub-ticket creation (in addition to
-    or instead of `status:ready-to-build`) — this is a required follow-up change to
-    `babysit-work-prep.sh` / `ASF-FEAT-WORK-PREP`, not something this spec can
-    resolve unilaterally.
+  - `babysit-work-prep.sh` — the primary (but not exclusive) producer of buildable
+    tickets. **Coordination resolved 2026-09-09:** work-prep labels its sub-tickets
+    `sub-ticket` + `build-ready`, so they land in this queue directly. The two loops
+    also agree on the reverse direction — work-prep's re-draft filter skips any
+    ticket carrying `build-ready`, `build-done`, or `build-needs-clarification`, so
+    it never drafts a second spec for something already in the build pipeline (a
+    hand-labelled `build-ready` issue included). `build-ready`'s label definition is
+    kept byte-identical in both scripts' label-creation helpers so their `--force`
+    calls don't fight over colour and description.
   - GitHub Issues and Jira (ticket sources, queried directly by `build-ready` label —
     not exclusively through work-prep's bridging)
   - `babysit-with-review.sh` (mirrors `run_review_cycle`'s convergence/MCP-resilience

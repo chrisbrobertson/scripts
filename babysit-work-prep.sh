@@ -277,7 +277,12 @@ existing_subticket() {
 
 ensure_builder_labels() {
   gh label create sub-ticket --repo "$REPO" --color 5319e7 --description "Implementation unit created from an approved spec" --force >/dev/null
-  gh label create status:ready-to-build --repo "$REPO" --color 0e8a16 --description "Approved and ready for the builder loop" --force >/dev/null
+  # Marks a SOURCE ticket whose spec was approved and whose sub-ticket exists.
+  gh label create status:ready-to-build --repo "$REPO" --color 0e8a16 --description "Approved; a builder sub-ticket has been created" --force >/dev/null
+  # The builder's queue label. Definition kept byte-identical to the one in
+  # babysit-builder.sh's ensure_build_labels so the two --force calls don't
+  # flip the colour and description back and forth between runs.
+  gh label create build-ready --repo "$REPO" --color 0e8a16 --description "Ticket is ready for the builder loop" --force >/dev/null
 }
 
 approval_sweep() {
@@ -338,7 +343,7 @@ Approved implementation unit produced by babysit-work-prep.
 Implement the merged spec and open a PR for human review. Do not merge automatically.
 EOF
     issue_url=$(gh issue create --repo "$REPO" --title "[build] ${title#\[spec\] }" \
-      --body-file "$issue_body" --label sub-ticket --label status:ready-to-build 2>> "$LOG") || {
+      --body-file "$issue_body" --label sub-ticket --label build-ready 2>> "$LOG") || {
       echo "[approve] PR #$pr_num: sub-ticket creation failed; merged PR will be reconciled next run" >&2
       continue
     }
@@ -361,7 +366,12 @@ def b64(value): return base64.b64encode(str(value or "").encode()).decode()
 with open(sys.argv[1], encoding="utf-8") as fh: issues = json.load(fh)
 for issue in issues:
     labels = {((x.get("name") if isinstance(x, dict) else x) or "").lower() for x in issue.get("labels") or []}
-    if "sub-ticket" in labels or "status:ready-to-build" in labels:
+    # Skip anything already downstream of drafting: our own sub-tickets, source
+    # tickets whose spec is approved, and any ticket already in the builder's
+    # pipeline (hand-labelled build-ready included — it has a spec already, and
+    # drafting a second one while the builder works on it would collide).
+    if labels & {"sub-ticket", "status:ready-to-build", "build-ready",
+                 "build-done", "build-needs-clarification"}:
         continue
     print("\t".join(["github", str(issue.get("number")), b64(issue.get("title")), b64(issue.get("body")), b64(issue.get("url"))]))
 PY

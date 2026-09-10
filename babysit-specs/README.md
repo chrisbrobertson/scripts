@@ -50,9 +50,9 @@ scripts" sections) rather than kept in a separate amendments file — no
   branch-protection interaction (a converged build PR gets a `codex-review=success`
   status posted without a merge), the multi-source Jira query mechanics, and the
   `build-incomplete` → `build-done` ticket swap.
-  **Coordination note:** the shipped `babysit-work-prep.sh` currently emits
-  `status:ready-to-build` + `sub-ticket`, not `build-ready` — it needs to be updated
-  to match before builder can consume its output.
+  **Coordination resolved 2026-09-09:** `babysit-work-prep.sh` now emits
+  `sub-ticket` + `build-ready`, and skips any ticket already in the build pipeline
+  when deciding what to draft, so the two loops compose in both directions.
 - **L4 tasks:** `ready` (both selectable-implementer and selectable-reviewer)
 - **Complexity:** 2/30 (trivial band per TIF rubric)
 - **Fit check:** Passed (specs are appropriate artifact)
@@ -70,7 +70,7 @@ scripts" sections) rather than kept in a separate amendments file — no
 4. **MCP resilience:** 3 retries with 0/60s/300s backoff on transport failures
 5. **Merge gate:** PRs merge only after `codex-review=success` status POSTed by `run_review_cycle` (enforced by `setup-branch-protection.sh`); BLOCKING=0 alone does not merge
 6. **Four quarantine labels:** `review-incomplete` (human action, no retry), `review-mcp-outage` (auto-retry), `review-codex-outdated` (upgrade CLI), `review-codex-no-credits` (add credits)
-7. **Work-prep approval gate:** Human posts unambiguous approval comment (case-insensitive `\bapproved\b`) on spec PR → work-prep merges spec, labels source ticket `status:ready-to-build`, creates sub-ticket for builder
+7. **Work-prep approval gate:** Human posts unambiguous approval comment (case-insensitive `\bapproved\b`) on spec PR → work-prep merges spec, labels the *source* ticket `status:ready-to-build` (meaning "spec approved, sub-ticket exists"), and creates a `sub-ticket` + `build-ready` sub-ticket that the builder picks up
 8. **Builder halt (no auto-merge):** Builder halts when reviewer returns BLOCKING=0 OR max cycles exhausted; posts reviewer summary PR comment; human does final merge
 9. **Parallel label namespaces:** Builder uses `build-*` labels; babysit-with-review.sh uses `review-*` labels; no overlap
 

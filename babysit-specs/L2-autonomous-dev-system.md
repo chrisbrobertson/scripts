@@ -225,11 +225,27 @@ From the existing implementation:
 
 ### babysit-builder.sh → GitHub CLI
 
-- `gh issue list --label status:ready-to-build,sub-ticket --json` (build queue)
-- `gh issue edit --add-label/--remove-label` (sub-ticket label transitions)
+- `gh issue list --state open --label build-ready --json` (build queue — any ticket
+  carrying the label, not only work-prep sub-tickets)
+- `gh issue edit --remove-label build-ready --add-label <terminal>` (ticket label
+  transitions; the swap is one call so a terminal ticket is never re-queued)
+- `gh issue comment` (kickback and completion notes on the ticket)
+- `gh api -X POST repos/OWNER/REPO/statuses/<sha>` (`codex-review=success` on
+  convergence, so branch protection permits the human's merge)
 - `gh pr create`, `gh pr view`, `gh pr comment` (build PR lifecycle)
 - Same `gh pr edit`, `gh pr ready`, `gh label create` as `babysit-with-review.sh`
 - Note: `gh pr merge` is NOT used (human merge gate)
+
+### babysit-builder.sh → Jira REST API (when `--source jira|both`)
+
+- **Queue:** `$JIRA_BASE_URL/rest/api/3/search?jql=project=$JIRA_PROJECT+AND+labels=build-ready`
+- **Label transitions:** `PUT /rest/api/3/issue/<key>` with an
+  `update.labels` remove/add pair — label writes only, never a workflow/status
+  transition, per the Jira scope `ASF-PROD-BABYSIT-WITH-REVIEW` declares
+- **Comments:** `POST /rest/api/3/issue/<key>/comment` (ADF body)
+- **Auth:** Bearer token from `JIRA_TOKEN` — read AND write, unlike work-prep's
+  read-only use
+- **Failure mode:** Jira API unavailable → skip Jira tickets, continue with GitHub
 
 ## SLOs and latency budgets
 
