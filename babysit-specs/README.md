@@ -53,6 +53,19 @@ scripts" sections) rather than kept in a separate amendments file — no
   **Coordination resolved 2026-09-09:** `babysit-work-prep.sh` now emits
   `sub-ticket` + `build-ready`, and skips any ticket already in the build pipeline
   when deciding what to draft, so the two loops compose in both directions.
+- **Spec review gate (work-prep v0.2.0, 2026-09-10):** work-prep was the only loop
+  in the family with no adversarial reviewer — its sole gate was a structural
+  check (one file, under the spec dir, frontmatter present) that never opened the
+  rest of the corpus, so a spec contradicting an existing one passed. It now runs
+  a convergent reviewer/implementer cycle (`run_spec_review_cycle`,
+  `MAX_SPEC_REVIEW_CYCLES` default 4, prescriptive from cycle 3) judging the draft
+  against every other spec in the corpus, the schema in `spec-guide.md`, and the
+  code it describes. Spec PRs open as drafts and leave draft only at 0 BLOCKING.
+  Adjudication mode (cycles 5-6 in `babysit-with-review.sh`) is deliberately
+  omitted — the disagree-and-escalate protocol is for code, and a recurring
+  finding on a spec should become a flagged `[ASSUMPTION]`, not an argument.
+  **Note:** `L3-work-prep.md` still sits on unmerged PR #8 and predates all of
+  this — it documents neither the review gate nor the `build-ready` output.
 - **L4 tasks:** `ready` (both selectable-implementer and selectable-reviewer)
 - **Complexity:** 2/30 (trivial band per TIF rubric)
 - **Fit check:** Passed (specs are appropriate artifact)
