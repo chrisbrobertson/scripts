@@ -1,9 +1,9 @@
 # scripts
 
-Personal helper scripts for working with Claude Code and the home-lab fleet:
-autonomous Claude loop (`babysit-with-review.sh`), `gh` CLI wrappers (`prs`, `issues`,
-`specs`), and one-off empirical tests (`test-*`). No formal test suite, no build
-step, no CI.
+Personal helper scripts for working with Claude Code and the home-lab fleet: the
+autonomous loop family (`babysit-work-prep.sh` → `babysit-builder.sh` →
+`babysit-with-review.sh`), `gh` CLI wrappers (`prs`, `issues`, `specs`), and one-off
+empirical tests (`test-*`). No formal test suite, no build step, no CI.
 
 ## Conventions
 
@@ -13,6 +13,13 @@ step, no CI.
   operate on whichever repo the caller is in. Don't add cwd-specific assumptions
   to them.
 - **New scripts** need a shebang and the executable bit (`chmod +x`).
+- **Specs follow `spec-guide.md`.** That file is the schema for every
+  `<project>-specs/` corpus here — read it before drafting or editing a spec, and
+  follow its frontmatter, section layout, and ID scheme. Two standing rules from it:
+  never infer a design decision into a spec (surface it and get an explicit answer),
+  and only the owner moves a spec to `status: ready`. When a spec and the shipped
+  code disagree, that's a lint finding to raise — not licence to edit the code to
+  match the spec.
 - **Tests are exploratory.** Document outcomes in commit messages or in specs
   under `~/repos/home-lab-monitor/specs/`; don't add them as assertions here.
 
@@ -23,6 +30,8 @@ step, no CI.
 | `new-fleet.sh` | Provision a staff-team fleet (staff-swe/sre/pm) for a service; see `docs/STAFF-FLEET.md` |
 | `claude-code-proxy.py` | OpenAI-compatible HTTP proxy routing to `claude -p`; used by new-fleet.sh |
 | `babysit-with-review.sh` | Autonomous implementation loop with independently selectable Claude/Codex implementer and reviewer harnesses, stop-file lock, and convergent PR-review cycle; see `--help` for role-specific model/effort switches. Pass `--repo-base PATH` (or `REPO_BASE` env var) if helper scripts live outside `~/repos/scripts` — auto-detects `~/repos` then `~/repo`. Versioned via semver (`--version`); current: 1.1.0. |
+| `babysit-work-prep.sh` | Ticket-to-spec intake loop. Drafts one TIF spec per GitHub/Jira ticket in an isolated worktree, opens a marked PR, then merges approved spec PRs and creates idempotent `status:ready-to-build` sub-tickets. Approval defaults to the authenticated GitHub user; see `--help` for source, model, dry-run, and approver settings. |
+| `babysit-builder.sh` | Spec-to-PR build loop. Pulls any GitHub/Jira ticket labelled `build-ready`, implements its referenced spec in a per-ticket worktree, then runs the same convergent review cycle as `babysit-with-review.sh` — but **never merges**: it halts with the PR labelled for a human. Specs with gaps are kicked back (`SPEC_GAP` → `build-needs-clarification`) rather than built as-is. Own `build-*` label namespace and own stop file, so it runs concurrently with the other two loops. See `babysit-specs/L3-builder.md` and `--help`. Current: 0.1.0. |
 | `setup-branch-protection.sh` | Enable the `codex-review` required status check on a repo's default branch; run once per repo after deploying the updated wrapper |
 | `backfill-codex-reviews.py` | Post historical Codex reviews to closed PRs |
 | `run-retrospective-review.sh` | One-shot Codex review for PRs that merged without automated review; posts findings as PR comments and opens issues for each BLOCKING finding |
@@ -33,7 +42,8 @@ step, no CI.
 | `prs` | `gh pr list` with CI rollup and review state |
 | `issues` | `gh issue list` sorted by priority labels |
 | `specs` | List spec files with frontmatter status and components; searches any `specs/` or `*-specs/` directory |
-| `babysit-specs/` | TIF specs for `babysit-with-review.sh` (L1–L4 + QA + security plans); see `babysit-specs/README.md` |
+| `spec-guide.md` | **Schema document for spec-driven work in this repo — read it before creating or editing any spec.** Defines the TIF L1–L4 format (frontmatter, section layout by layer, ID scheme), the raw-sources/wiki/schema architecture, and the ingest/query/lint workflows. |
+| `babysit-specs/` | TIF specs for the babysit script family (L1–L4 + QA + security plans); see `babysit-specs/README.md` |
 
 ## Staff-fleet agents
 
