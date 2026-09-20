@@ -16,7 +16,8 @@
 #            <!-- bzr-issue-worker ... -->  <!-- bzr-sub-issue ... -->  <!-- bzr-build ... -->  (workers)
 #
 # Role hooks (functions the controller script defines before bzr_init):
-#   role_parse_arg "$1" "${2:-}"   -> echo number of args consumed (0 = not mine)
+#   role_parse_arg "$1" "${2:-}"   -> set BZR_ROLE_CONSUMED to the number of args consumed (0 = not mine);
+#                                    runs in the caller's shell so it may set role globals
 #   role_usage_extra                -> extra --help lines
 #   role_claim_label                -> echo label held while a worker runs
 #   role_queue_label                -> echo label a candidate carries ("" = intake: no bzr-* label)
@@ -126,10 +127,12 @@ bzr_init() {
       --stop) STOP_REQ=1; shift ;;
       --) shift; [ "$#" -eq 0 ] || bzr_die_usage "unexpected positional arguments: $*" ;;
       *)
-        n=0
-        if declare -F role_parse_arg >/dev/null; then n=$(role_parse_arg "$1" "${2:-}") || exit 2; fi
-        [ "${n:-0}" -gt 0 ] || bzr_die_usage "unknown argument: $1"
-        shift "$n" ;;
+        # role_parse_arg runs in THIS shell (no command substitution) so it can set
+        # its own globals; it reports how many args it consumed in BZR_ROLE_CONSUMED.
+        BZR_ROLE_CONSUMED=0
+        if declare -F role_parse_arg >/dev/null; then role_parse_arg "$1" "${2:-}" || exit 2; fi
+        [ "${BZR_ROLE_CONSUMED:-0}" -gt 0 ] || bzr_die_usage "unknown argument: $1"
+        shift "$BZR_ROLE_CONSUMED" ;;
     esac
   done
   case "$IMPLEMENTER" in claude|codex) ;; *) bzr_die_usage "invalid --implementer '$IMPLEMENTER'" ;; esac
@@ -505,9 +508,10 @@ bzr_tick() {
     # re-read labels immediately before claiming (invariant 4)
     local live; live=$(bzr_issue_labels "$pick" | grep '^bzr-' || true)
     local q; q=$(role_queue_label)
-    if { [ -z "$q" ] && [ -n "$live" ]; } || { [ -n "$q" ] && [ "$live" != "$q" ]; }; then
+    if [ "${BZR_SKIP_LABEL_CHECK:-0}" -ne 1 ] && { { [ -z "$q" ] && [ -n "$live" ]; } || { [ -n "$q" ] && [ "$live" != "$q" ]; }; }; then
       bzr_log "skip #$pick labels-changed ($(printf '%s' "$live" | tr '\n' ','))"; continue
     fi
+    [ "${BZR_SKIP_LABEL_CHECK:-0}" -eq 1 ] && q=$(printf '%s' "$live" | head -n 1)   # --force: drop whatever bzr label it has
     if ! bzr_transition "$pick" "$(role_claim_label)" "$q"; then
       bzr_log "claim-failed #$pick"; gh issue edit "$pick" --repo "$REPO" --remove-label "$(role_claim_label)" >>"$LOG" 2>&1 || true; continue
     fi

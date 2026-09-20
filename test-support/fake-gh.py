@@ -68,7 +68,7 @@ if cmd == ["api", "graphql"]:
 
 if cmd == ["issue", "view"]:
     n = args[2]; i = s["issues"][n]
-    print(json.dumps({"number": i["number"], "title": i["title"], "body": i.get("body", ""), "state": i["state"],
+    print(json.dumps({"number": i["number"], "id": i["id"], "title": i["title"], "body": i.get("body", ""), "state": i["state"],
                       "labels": [{"name": l} for l in i["labels"]],
                       "comments": [{"author": {"login": c["author"]}, "body": c["body"], "createdAt": c["createdAt"]} for c in i["comments"]]}))
     sys.exit(0)
@@ -130,7 +130,7 @@ if args[0] == "api":
     if path.endswith("/sub_issues") and method == "GET":
         n = path.split("/issues/")[1].split("/")[0]
         print(json.dumps([{"number": s["issues"][str(c)]["number"], "id": s["issues"][str(c)]["id"], "title": s["issues"][str(c)]["title"],
-                           "state": s["issues"][str(c)]["state"].lower(), "body": s["issues"][str(c)].get("body", "")} for c in s["issues"][n].get("sub_issues", [])])); sys.exit(0)
+                           "state": s["issues"][str(c)]["state"].lower(), "body": s["issues"][str(c)].get("body", ""), "labels": [{"name": l} for l in s["issues"][str(c)]["labels"]]} for c in s["issues"][n].get("sub_issues", [])])); sys.exit(0)
     if path.endswith("/sub_issues") and method == "POST":
         n = path.split("/issues/")[1].split("/")[0]
         sid = None
