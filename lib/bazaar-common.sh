@@ -339,7 +339,7 @@ bzr_fetch_issues() {
       repository(owner:$owner,name:$name){
         issues(first:100, states:OPEN, after:$endCursor, orderBy:{field:CREATED_AT,direction:ASC}){
           pageInfo{hasNextPage endCursor}
-          nodes{ number title createdAt labels(first:50){nodes{name}} parent{number} }
+          nodes{ number title createdAt body labels(first:50){nodes{name}} parent{number} }
         } } }' > "$raw" 2>>"$LOG" || { : > "$BZR_ISSUES_JSON"; return 1; }
   python3 - "$raw" > "$BZR_ISSUES_JSON" <<'PY2' 2>>"$LOG" || { : > "$BZR_ISSUES_JSON"; return 1; }
 import json, sys
@@ -352,7 +352,8 @@ while i < len(buf):
     for n in obj["data"]["repository"]["issues"]["nodes"]:
         out.append({"number": n["number"], "title": n["title"], "createdAt": n["createdAt"],
                     "labels": [l["name"] for l in n["labels"]["nodes"]],
-                    "parent": (n.get("parent") or {}).get("number")})
+                    "parent": (n.get("parent") or {}).get("number"),
+                    "sub_marker": "<!-- bzr-sub-issue" in (n.get("body") or "")})
 json.dump(out, sys.stdout)
 PY2
 }

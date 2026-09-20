@@ -59,7 +59,7 @@ if cmd == ["label", "create"]:
     s.setdefault("labels_created", []).append(args[2]); save(s); sys.exit(0)
 
 if cmd == ["api", "graphql"]:
-    nodes = [{"number": i["number"], "title": i["title"], "createdAt": i["createdAt"],
+    nodes = [{"number": i["number"], "title": i["title"], "createdAt": i["createdAt"], "body": i.get("body", ""),
               "labels": {"nodes": [{"name": l} for l in i["labels"]]},
               "parent": ({"number": i["parent"]} if i.get("parent") else None)}
              for i in sorted(s["issues"].values(), key=lambda x: x["createdAt"]) if i["state"] == "OPEN"]

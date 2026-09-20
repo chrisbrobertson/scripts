@@ -88,10 +88,10 @@ git -C "$ROOT" worktree prune >>"$LOG" 2>&1 || true
 rm -rf "$WT"
 RESUMED=0
 if git -C "$ROOT" fetch --quiet origin "$BRANCH" >>"$LOG" 2>&1; then
-  git -C "$ROOT" worktree add --quiet -B "$BRANCH" "$WT" FETCH_HEAD >>"$LOG" 2>&1 || { sentinel STUCK "worktree add (resume) failed"; exit 1; }
+  git -C "$ROOT" worktree add --quiet --detach "$WT" FETCH_HEAD >>"$LOG" 2>&1 || { sentinel STUCK "worktree add (resume) failed"; exit 1; }
   RESUMED=1; bzr_log "#$ISSUE resuming existing branch $BRANCH"
 else
-  git -C "$ROOT" worktree add --quiet -B "$BRANCH" "$WT" "$BASE_SHA" >>"$LOG" 2>&1 || { sentinel STUCK "worktree add failed"; exit 1; }
+  git -C "$ROOT" worktree add --quiet --detach "$WT" "$BASE_SHA" >>"$LOG" 2>&1 || { sentinel STUCK "worktree add failed"; exit 1; }
 fi
 git -C "$WT" config user.name "bazaar-issue-worker" >/dev/null; git -C "$WT" config user.email "bazaar@localhost" >/dev/null
 

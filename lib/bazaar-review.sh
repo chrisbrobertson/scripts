@@ -318,33 +318,32 @@ reviewer_preflight() {
 # All existing PR feedback minus this pipeline's own comments.
 collect_pr_feedback() {
   _bzr_require REPO
-  local pr_num="$1" out=""
-  local reviews comments inline
-  reviews=$(gh pr view "$pr_num" --repo "$REPO" --json reviews \
-    --jq '.reviews[]
-          | select(.body != "")
-          | select(.body | startswith("**Codex review") | not)
-          | select(.body | startswith("**Claude review") | not)
-          | select(.body | startswith("**bazaar") | not)
-          | select(.body | startswith("**babysit-builder:") | not)
-          | "### Review by \(.author.login) [\(.state)]\n\(.body)\n"' \
-    2>/dev/null || true)
-  [ -n "$reviews" ] && out="${out}${reviews}"$'\n'
-  comments=$(gh pr view "$pr_num" --repo "$REPO" --json comments \
-    --jq '.comments[]
-          | select(.body | startswith("**Codex review") | not)
-          | select(.body | startswith("**Claude review") | not)
-          | select(.body | startswith("**bazaar") | not)
-          | select(.body | startswith("**babysit-builder:") | not)
-          | "### Comment by \(.author.login)\n\(.body)\n"' \
-    2>/dev/null || true)
-  [ -n "$comments" ] && out="${out}${comments}"$'\n'
-  inline=$(gh api "repos/${REPO}/pulls/${pr_num}/comments" \
-    --jq '.[] | "### Inline comment by \(.user.login) on \(.path):\(.line // .original_line // "?")\n\(.body)\n"' \
-    2>/dev/null || true)
-  [ -n "$inline" ] && out="${out}${inline}"$'\n'
-  [ -z "$out" ] && out="(none)"
-  printf '%s' "$out"
+  local pr_num="$1"
+  # No --jq (hosts lack jq and the test stub serves plain JSON); pipeline-authored
+  # comments (bzr markers, Codex/Claude review posts, babysit summaries) are excluded
+  # so prior reviews are not fed back as "existing feedback" on top of the history block.
+  {
+    gh pr view "$pr_num" --repo "$REPO" --json reviews,comments 2>/dev/null || echo '{}'
+    echo '@@INLINE@@'
+    gh api "repos/${REPO}/pulls/${pr_num}/comments" 2>/dev/null || echo '[]'
+  } | python3 -c '
+import json, sys
+raw = sys.stdin.read().split("@@INLINE@@", 1)
+try: p = json.loads(raw[0] or "{}")
+except Exception: p = {}
+try: inline = json.loads(raw[1] if len(raw) > 1 and raw[1].strip() else "[]")
+except Exception: inline = []
+def ours(b): return b.lstrip().startswith(("<!-- bzr-", "**Codex review", "**Claude review", "**bazaar", "**babysit-builder:"))
+out = []
+for r in p.get("reviews", []) or []:
+    b = r.get("body") or ""
+    if b and not ours(b): out.append("### Review by %s [%s]\n%s\n" % ((r.get("author") or {}).get("login", "?"), r.get("state", ""), b))
+for c in p.get("comments", []) or []:
+    b = c.get("body") or ""
+    if not ours(b): out.append("### Comment by %s\n%s\n" % ((c.get("author") or {}).get("login", "?"), b))
+for c in inline or []:
+    out.append("### Inline comment by %s on %s:%s\n%s\n" % ((c.get("user") or {}).get("login", "?"), c.get("path", "?"), c.get("line") or c.get("original_line") or "?", c.get("body") or ""))
+sys.stdout.write("\n".join(out) if out else "(none)")'
 }
 
 post_reviewer_review() {

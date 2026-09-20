@@ -53,6 +53,7 @@ cat > "$TMP/bin/gh" <<'S'
 printf 'CALL=gh %s\n' "$*" >> "$RECORD"
 case "$*" in
   *"pr comment"*) cat >/dev/null; exit 0 ;;
+  *"--json reviews,comments"*) printf '%s' "${STUB_PR_JSON:-{\}}"; exit 0 ;;
   *"--json comments"*|*"--json reviews"*) echo ""; exit 0 ;;
   *"api "*"/comments"*) echo "[]"; exit 0 ;;
   *) exit 0 ;;
@@ -213,6 +214,12 @@ assert_not_grep "AT3 lib never posts commit status" "CALL=gh api -X POST repos/o
 assert_not_grep "AT3 lib never labels" "CALL=gh pr edit" "$RECORD"
 assert_not_grep "AT3 lib never toggles draft" "CALL=gh pr ready" "$RECORD"
 assert_not_grep "AT3 lib never merges" "CALL=gh pr merge" "$RECORD"
+
+new_case fb; stub codex.1 "$ONE_BLOCKING"; stub codex.2 "$CLEAN"; printf '@@COMMIT\nDONE_REVIEW\n' > "$STUB_DIR/claude.1"
+STUB_PR_JSON='{"reviews":[],"comments":[{"author":{"login":"me"},"body":"<!-- bzr-review reviewer=codex cycle=1 of=6 -->\n**Codex review — PR #7 cycle 1 of 6**\nOLD_REVIEW_TEXT"},{"author":{"login":"human"},"body":"please also rename foo"}]}' \
+  run_cycle --mode code --pr 7 --worktree "$CASE/wt" --branch feat >/dev/null 2>&1
+assert_not_grep "prior reviewer comment not fed back as PR feedback" "Comment by me" "$RECORD"
+assert_grep "human PR comment is fed back" "please also rename foo" "$RECORD"
 
 new_case at5; stub codex.default "$ONE_BLOCKING"; printf '@@COMMIT\nDONE_REVIEW\n' > "$STUB_DIR/claude.default"
 rc=0; run_cycle --mode code --pr 7 --worktree "$CASE/wt" --branch feat --max-cycles 2 >/dev/null 2>&1 || rc=$?

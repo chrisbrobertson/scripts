@@ -25,7 +25,9 @@ role_claim_label() { echo bzr-drafting; }
 role_queue_label() { echo ""; }
 role_release_label() { echo ""; }
 role_worker_cmd() { echo "${BZR_WORKER_OVERRIDE:-$SCRIPTS_DIR/bazaar-issue-worker.sh} $1"; }
-role_candidates() { bzr_candidates 'not any(l.startswith("bzr-") for l in i["labels"])'; }
+# Intake: no bzr-* label, and not a draft-time sub-issue whose parent link has not
+# landed yet (gh issue create returns before the sub_issues POST attaches it).
+role_candidates() { bzr_candidates 'not i["sub_marker"] and not any(l.startswith("bzr-") for l in i["labels"])'; }
 
 # After a merge the head branch may be gone (auto-delete); read the merged files
 # from origin/$DEFAULT_BRANCH instead. Writes $BZR_TMP/l4-<issue>.tsv.
@@ -33,10 +35,11 @@ collect_l4s_from_default() {  # <issue> <pr>
   local issue="$1" pr="$2" root f
   root=$(bzr_project_root) || return 1
   git -C "$root" fetch --quiet origin "$DEFAULT_BRANCH" >>"$LOG" 2>&1 || return 1
-  : > "$BZR_TMP/l4-$issue.tsv"
+  : > "$BZR_TMP/l4-$issue.tsv"; : > "$BZR_TMP/specs-$issue.txt"
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     git -C "$root" show "origin/$DEFAULT_BRANCH:$f" > "$BZR_TMP/l4src" 2>/dev/null || continue
+    grep -q '^spec_type:' "$BZR_TMP/l4src" && echo "$f" >> "$BZR_TMP/specs-$issue.txt"
     bzr_l4_from_file "$BZR_TMP/l4src" "$f" "$BZR_TMP/l4-$issue.tsv"
   done <<< "$(pr_files "$pr")"
 }
@@ -82,9 +85,10 @@ flip_spec_status() {  # <issue> <pr> → head sha
   git -C "$root" fetch --quiet origin "$branch" >>"$LOG" 2>&1 || return 1
   rm -rf "$wt"; git -C "$root" worktree prune >>"$LOG" 2>&1 || true
   git -C "$root" worktree add --quiet --detach "$wt" FETCH_HEAD >>"$LOG" 2>&1 || return 1
-  : > "$BZR_TMP/l4-$issue.tsv"
+  : > "$BZR_TMP/l4-$issue.tsv"; : > "$BZR_TMP/specs-$issue.txt"
   while IFS= read -r f; do
     [ -f "$wt/$f" ] || continue
+    grep -q '^spec_type:' "$wt/$f" && echo "$f" >> "$BZR_TMP/specs-$issue.txt"   # index.md / log.md are not specs
     bzr_l4_from_file "$wt/$f" "$f" "$BZR_TMP/l4-$issue.tsv"
     bzr_flip_status_ready "$wt/$f" && changed=1
   done <<< "$(pr_files "$pr")"
@@ -96,11 +100,12 @@ flip_spec_status() {  # <issue> <pr> → head sha
   git -C "$root" worktree remove --force "$wt" >>"$LOG" 2>&1 || rm -rf "$wt"
 }
 
-# Rewrite the parent's "Specs:" line (ISSUE-TEMPLATE.md) to the merged spec set.
-update_specs_line() {  # <parent> <pr>
-  local parent="$1" pr="$2" specs="" f body   # bash expands all words before `local` assigns: no self-reference on one line
+# Rewrite the parent's "Specs:" line (ISSUE-TEMPLATE.md) to the merged spec files
+# (only files with spec frontmatter; index.md/log.md changes are not specs).
+update_specs_line() {  # <parent> <specs-list-file>
+  local parent="$1" list="$2" specs="" f body   # bash expands all words before `local` assigns: no self-reference on one line
   body="$BZR_TMP/body-$parent.md"
-  while IFS= read -r f; do specs="$specs $f"; done <<< "$(pr_files "$pr")"
+  while IFS= read -r f; do [ -n "$f" ] && specs="$specs $f"; done < "$list"
   gh issue view "$parent" --repo "$REPO" --json body 2>>"$LOG" | python3 -c '
 import json, sys, re
 b = json.load(sys.stdin).get("body") or ""
@@ -127,7 +132,7 @@ approve_issue() {  # <issue> <pr> <state> <mergedAt>
     collect_l4s_from_default "$issue" "$pr" || { bzr_log "approval #$issue: could not read merged specs from origin/$DEFAULT_BRANCH; leaving sub-issues untouched"; return 1; }
   fi
   subs=$(bzr_reconcile_sub_issues "$issue" "$BZR_TMP/l4-$issue.tsv" | tr '\n' ' ')
-  update_specs_line "$issue" "$pr"
+  update_specs_line "$issue" "$BZR_TMP/specs-$issue.txt"
   bzr_transition "$issue" bzr-ready bzr-spec-review
   bzr_marker_comment "$issue" "<!-- bzr-spec-merged pr=$pr ts=$(bzr_now) -->" \
     "bazaar-issues: spec PR #$pr merged. Sub-issues: ${subs:-none}. This issue is now ready for the build loop."

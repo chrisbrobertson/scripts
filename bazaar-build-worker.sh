@@ -72,7 +72,8 @@ for p in paths:
     r = subprocess.run(["git", "-C", root, "show", "origin/%s:%s" % (base, p)], capture_output=True, text=True)
     if r.returncode != 0: gaps.append("spec %s does not exist on origin/%s" % (p, base)); continue
     fm = re.match(r"^---\n(.*?)\n---\n", r.stdout, re.S)
-    if not fm: gaps.append("spec %s has no frontmatter" % p); continue
+    if not fm or not re.search(r"^spec_type:", fm.group(1), re.M):
+        print("precheck: %s has no spec frontmatter; ignored" % p, file=sys.stderr); continue
     f = fm.group(1)
     g = lambda k: (re.search(r"^%s:\s*(\S+)" % k, f, re.M) or [None, ""])[1]
     st, sid, status = g("spec_type"), g("id"), g("status")
@@ -130,10 +131,10 @@ if [ -n "$BRANCH_EXISTING" ]; then BRANCH="$BRANCH_EXISTING"; else BRANCH="bzr/$
 WT="$BZR_REPO_DIR/wt/$ISSUE"
 git -C "$ROOT" worktree prune >>"$LOG" 2>&1 || true; rm -rf "$WT"
 if git -C "$ROOT" fetch --quiet origin "$BRANCH" >>"$LOG" 2>&1; then
-  git -C "$ROOT" worktree add --quiet -B "$BRANCH" "$WT" FETCH_HEAD >>"$LOG" 2>&1 || { sentinel STUCK "worktree add (resume) failed"; exit 1; }
+  git -C "$ROOT" worktree add --quiet --detach "$WT" FETCH_HEAD >>"$LOG" 2>&1 || { sentinel STUCK "worktree add (resume) failed"; exit 1; }
   bzr_log "#$ISSUE round=$ROUND resuming branch $BRANCH (PR ${PR:-none})"
 else
-  git -C "$ROOT" worktree add --quiet -B "$BRANCH" "$WT" "$BASE_SHA" >>"$LOG" 2>&1 || { sentinel STUCK "worktree add failed"; exit 1; }
+  git -C "$ROOT" worktree add --quiet --detach "$WT" "$BASE_SHA" >>"$LOG" 2>&1 || { sentinel STUCK "worktree add failed"; exit 1; }
   bzr_log "#$ISSUE round=$ROUND new branch $BRANCH"
 fi
 git -C "$WT" config user.name "bazaar-build-worker" >/dev/null; git -C "$WT" config user.email "bazaar@localhost" >/dev/null

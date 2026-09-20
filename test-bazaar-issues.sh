@@ -40,6 +40,7 @@ spec_branch() {  # <issue> <n_l4>  — creates bzr/spec-<issue> with one L3 + n 
   git -C "$CASE/clone" checkout -q -b "bzr/spec-$issue" main; mkdir -p "$CASE/clone/specs"
   printf -- '---\nspec_type: feature\nid: X-FEAT-THING\nstatus: review\n---\n\n## TL;DR\nA thing.\n' > "$CASE/clone/specs/L3-thing.md"
   for i in $(seq 1 "$n"); do printf -- '---\nspec_type: task\nid: X-TASK-P%s\nstatus: review\nparent_feature: X-FEAT-THING\n---\n\n## TL;DR\nPart %s does the %s-th thing. More detail.\n' "$i" "$i" "$i" > "$CASE/clone/specs/L4-part$i.md"; done
+  printf '# index\n' > "$CASE/clone/specs/index.md"
   git -C "$CASE/clone" add -A; git -C "$CASE/clone" -c user.name=t -c user.email=t@t commit -q -m "spec draft"; git -C "$CASE/clone" push -q origin "bzr/spec-$issue" 2>/dev/null
   git -C "$CASE/clone" checkout -q main
 }
@@ -63,6 +64,10 @@ new_case s5 '{"1":{}}'; STUB_SENTINEL="STUCK model down" run --once >/dev/null 2
 assert_eq "STUCK → intake again (claim removed)" "$(labels 1)" ""
 assert_grep "STUCK counted as attempt" "bzr-attempt role=issues n=1" <(comments 1)
 
+new_case s6 '{"1":{"body":"<!-- bzr-sub-issue parent=9 spec=X-TASK-A -->\nRefs #9"}}'
+run --once >/dev/null 2>&1
+assert_eq "sub-issue body marker with no parent link yet → never intake" "$(labels 1)" ""
+
 # ---- bounce ----
 new_case b1 '{"1":{"labels":["bzr-needs-info"],"comments":[{"author":"me","body":"<!-- bzr-issue-worker phase=questions ts=x -->\n1. what?","createdAt":"2026-02-01T00:00:00Z"},{"author":"me","body":"answer: this","createdAt":"2026-02-02T00:00:00Z"}]}}'
 run --once >/dev/null 2>&1
@@ -72,7 +77,7 @@ run --once >/dev/null 2>&1
 assert_eq "no newer human comment → stays bzr-needs-info" "$(labels 1)" "bzr-needs-info"
 
 # ---- approval sweep: full path ----
-new_case a1 '{"7":{"labels":["bzr-spec-review"]}}' '{"12":{"headRefName":"bzr/spec-7","body":"Refs #7","files":["specs/L3-thing.md","specs/L4-part1.md","specs/L4-part2.md"],"comments":[{"author":"me","body":"Looks good, approved","createdAt":"t"}]}}'
+new_case a1 '{"7":{"labels":["bzr-spec-review"]}}' '{"12":{"headRefName":"bzr/spec-7","body":"Refs #7","files":["specs/L3-thing.md","specs/L4-part1.md","specs/L4-part2.md","specs/index.md"],"comments":[{"author":"me","body":"Looks good, approved","createdAt":"t"}]}}'
 spec_branch 7 2
 run --once >/dev/null 2>&1
 assert_eq "AT6 approved → bzr-ready" "$(labels 7)" "bzr-ready"
@@ -84,6 +89,7 @@ assert_eq "AT6 two sub-issues created with markers" "$(python3 -c 'import json,s
 assert_eq "AT6 sub-issues attached to the parent" "$(field issues/7/sub_issues)" "[8, 9]"
 assert_grep "AT6 sub-issue title from the L4 TL;DR" "Part 1 does the 1-th thing." <(field issues/8/title)
 assert_grep "AT6 parent Specs: line rewritten" 'Specs: `specs/L3-thing.md`, `specs/L4-part1.md`, `specs/L4-part2.md`' <(field issues/7/body)
+assert_not_grep "AT6 Specs: line excludes index.md (no frontmatter)" "index.md" <(field issues/7/body | grep '^Specs:')
 assert_grep "AT6 approval marker comment" "<!-- bzr-spec-merged pr=12" <(comments 7)
 assert_not_grep "AT6 agent never says the approval word" "CALL=gh issue comment 7" <(grep -i "approved" "$RECORD" | grep -v "would\|bzr-spec-merged" || true)
 
