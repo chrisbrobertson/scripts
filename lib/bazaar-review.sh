@@ -934,7 +934,8 @@ How to resolve each kind of finding:
 - **False claim about current behavior:** verify against the code and correct the spec to describe what the code actually does.
 
 Constraints — these are hard:
-- Edit ONLY the spec file __SPEC_PATH__. Do NOT change code, tests, configuration, or any other file. The wrapper verifies this after every cycle and will bail the review if you touch anything else.
+- Edit ONLY files under the spec directory ./__SPEC_DIR__: the spec(s) under review (__SPEC_PATH__), and the corpus's `index.md` and `log.md`. Do NOT change code, tests, configuration, or any file outside that directory. The wrapper verifies this after every cycle and will bail the review if you touch anything else.
+- If the corpus has a `log.md`, append one entry per revision cycle recording what the review flagged and what you changed (the schema requires it, and reviewers block on a stale log). Keep `index.md` rows in step with any status, id, or description change.
 - Commit your revisions with a message explaining what the review flagged and what you changed.
 - Do NOT push, do NOT open or edit a PR, do NOT comment on GitHub, do NOT edit issues or labels. The wrapper owns every lifecycle action.
 - Do NOT mark the spec `status: ready`. Only the owner does that.

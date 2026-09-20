@@ -192,7 +192,10 @@ p=$( source "$LIB"; review_prompt code 5 ); case "$p" in *"## ADJUDICATION"*) pa
 rc=0; ( source "$LIB"; review_prompt bogus 1 ) >/dev/null 2>&1 || rc=$?; assert_eq "unknown prompt key fails loudly" "$rc" "2"
 assert_eq "remediation model staged" "$( source "$LIB"; echo "$(remediation_model code 3)/$(remediation_model code 4)" )" "claude-sonnet-5/claude-opus-4-8"
 # prompt text byte-identical to sources
-for pair in "BZR_CODE_REVIEW_C1:REVIEW_PROMPT_CYCLE1:babysit-builder.sh" "BZR_CODE_REM_C5_6:REMEDIATION_PROMPT_CYCLE5_6:babysit-builder.sh" "BZR_SPEC_REVIEW_C3:SPEC_REVIEW_PROMPT_CYCLE3:babysit-work-prep.sh" "BZR_SPEC_REM:SPEC_REVISION_PROMPT:babysit-work-prep.sh"; do
+# BZR_SPEC_REM deliberately diverges from work-prep since 2026-09-20: it may edit index.md/log.md (pilot #745 hit the cap on a stale log).
+p=$( source "$LIB"; remediation_prompt spec 2 ); case "$p" in *"index.md"*"log.md"*) pass "spec remediation prompt allows index.md and log.md" ;; *) fail "spec remediation prompt allows index.md and log.md" ;; esac
+case "$p" in *"Edit ONLY the spec file"*) fail "spec remediation prompt no longer restricts to one file" ;; *) pass "spec remediation prompt no longer restricts to one file" ;; esac
+for pair in "BZR_CODE_REVIEW_C1:REVIEW_PROMPT_CYCLE1:babysit-builder.sh" "BZR_CODE_REM_C5_6:REMEDIATION_PROMPT_CYCLE5_6:babysit-builder.sh" "BZR_SPEC_REVIEW_C3:SPEC_REVIEW_PROMPT_CYCLE3:babysit-work-prep.sh"; do
   IFS=: read -r ours theirs src <<< "$pair"
   a=$(sed -n "/^IFS= read -r -d .. $ours /,/^PROMPT_EOF$/p" "$LIB" | sed 1d | md5)
   b=$(sed -n "/^IFS= read -r -d .. $theirs /,/^PROMPT_EOF$/p" "$ROOT/$src" | sed 1d | md5)

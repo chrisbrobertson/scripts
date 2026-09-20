@@ -94,7 +94,7 @@ Return codes as listed. `run_review_cycle` writes the final reviewer output path
 
 ### Invariants
 1. Sourcing the lib has no side effects (no `set -e` changes, no traps, no temp files until a function is called).
-2. `valid_review_structure` and the telltale regexes are byte-identical to `babysit-builder.sh` at extraction time; any later change is a logged spec amendment.
+2. `valid_review_structure` and the telltale regexes are byte-identical to `babysit-builder.sh` at extraction time; any later change is a logged spec amendment. **Amended 2026-09-20:** the spec-mode remediation prompt now permits edits to the corpus `index.md` and `log.md` and requires a log entry per cycle; the first pilot hit the cycle cap because the work-prep wording confined the implementer to one file while the reviewer (correctly, per spec-guide) blocked on a stale log.
 3. The lib never adds or removes labels, never marks a PR draft/ready, never merges, never posts the commit status on its own.
 4. `--mode spec` never enters adjudication.
 5. Prompt text is stored once and referenced by key; no worker holds its own copy of a review prompt.
