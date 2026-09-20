@@ -481,6 +481,108 @@ for i in json.load(open(sys.argv[1])):
   return 0
 }
 
+
+# ---------- repo checkout, spec files, sub-issues (shared by controllers and workers) ----------
+
+# The git repo we run in, else a clone kept under BZR_REPO_DIR.
+bzr_project_root() {
+  local top; top=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -n "$top" ]; then echo "$top"; return 0; fi
+  local clone="$BZR_REPO_DIR/clone"
+  [ -d "$clone/.git" ] || gh repo clone "$REPO" "$clone" -- --quiet >>"$LOG" 2>&1 || return 1
+  echo "$clone"
+}
+
+# Repo-relative spec directory at a git ref: WORK_PREP_SPEC_DIR, else specs/, else the
+# first *-specs/ directory. Prints nothing (rc 1) when the repo has no corpus.
+bzr_spec_dir_at() {  # <repo-root> <ref>
+  local root="$1" ref="$2" d
+  if [ -n "${WORK_PREP_SPEC_DIR:-}" ]; then echo "${WORK_PREP_SPEC_DIR%/}"; return 0; fi
+  if git -C "$root" cat-file -e "$ref:specs" 2>/dev/null; then echo specs; return 0; fi
+  d=$(git -C "$root" ls-tree --name-only "$ref" 2>/dev/null | grep -- '-specs$' | head -n 1)
+  [ -n "$d" ] && { echo "$d"; return 0; }
+  return 1
+}
+
+# Append "id<TAB>relpath<TAB>title" to <tsv> when <file> is a spec_type: task spec.
+bzr_l4_from_file() {  # <file> <relpath> <tsv>
+  python3 - "$1" "$2" "$3" <<'PY' 2>/dev/null || true
+import re, sys
+s = open(sys.argv[1]).read(); rel, l4out = sys.argv[2], sys.argv[3]
+m = re.match(r"^---\n(.*?)\n---\n", s, re.S)
+if not m: sys.exit(0)
+fm = m.group(1)
+st = re.search(r"^spec_type:\s*(\S+)", fm, re.M)
+if not st or st.group(1) != "task": sys.exit(0)
+sid = (re.search(r"^id:\s*(\S+)", fm, re.M) or [None, ""])[1]
+t = re.search(r"^## TL;DR\s*\n+(.+)", s, re.M)
+title = re.split(r"(?<=[.!?])\s", t.group(1).strip())[0][:120] if t else rel
+open(l4out, "a").write("%s\t%s\t%s\n" % (sid, rel, title))
+PY
+}
+
+# status: review → status: ready in a spec file's frontmatter. rc 0 changed, 1 not.
+bzr_flip_status_ready() {  # <file>
+  python3 - "$1" <<'PY'
+import re, sys
+s = open(sys.argv[1]).read()
+m = re.match(r"^---\n(.*?)\n---\n", s, re.S)
+if not m or not re.search(r"^spec_type:", m.group(1), re.M): sys.exit(1)
+new = re.sub(r"^status:\s*review\s*$", "status: ready", m.group(1), count=1, flags=re.M)
+if new == m.group(1): sys.exit(1)
+open(sys.argv[1], "w").write(s[:m.start(1)] + new + s[m.end(1):])
+PY
+}
+
+bzr_sub_issue_markers() {  # <parent> → lines "number state spec-id"
+  gh api "repos/$REPO/issues/$1/sub_issues" 2>>"$LOG" | python3 -c '
+import json, sys, re
+for c in json.load(sys.stdin):
+    m = re.search(r"<!-- bzr-sub-issue parent=\d+ spec=(\S+) -->", c.get("body") or "")
+    print(c["number"], c.get("state", "open").upper(), m.group(1) if m else "-")'
+}
+
+bzr_create_sub_issue() {  # <parent> <spec-id> <path> <title> → number
+  local parent="$1" sid="$2" path="$3" title="$4" url num id body
+  body="$BZR_TMP/sub-$parent-$RANDOM.md"
+  printf '<!-- bzr-sub-issue parent=%s spec=%s -->\nImplements %s (`%s`), part of #%s.\n\nRefs #%s\n' "$parent" "$sid" "$sid" "$path" "$parent" "$parent" > "$body"
+  url=$(gh issue create --repo "$REPO" --title "$title" --body-file "$body" 2>>"$LOG") || return 1
+  num="${url##*/}"
+  id=$(gh issue view "$num" --repo "$REPO" --json id 2>>"$LOG" | bzr_json id)
+  gh api -X POST "repos/$REPO/issues/$parent/sub_issues" -F "sub_issue_id=$id" >>"$LOG" 2>&1 \
+    || bzr_log "WARNING: created #$num but could not attach it as a sub-issue of #$parent"
+  echo "$num"
+}
+
+# Reconcile marker sub-issues with an L4 list (tsv: id, path, title): create
+# missing, close dropped. Zero or one L4 → no sub-issues wanted. A missing tsv
+# means "unknown", never "empty": nothing is touched. Prints kept/created numbers.
+bzr_reconcile_sub_issues() {  # <parent> <tsv>
+  local parent="$1" tsv="$2" sid path title num st want="" n_l4 existing
+  [ -f "$tsv" ] || { bzr_log "reconcile #$parent: no L4 list available; leaving sub-issues untouched"; return 0; }
+  n_l4=$(grep -c . "$tsv" || true)
+  if [ "$n_l4" -ge 2 ]; then while IFS=$'\t' read -r sid path title; do [ -n "$sid" ] && want="$want $sid"; done < "$tsv"; fi
+  existing=$(bzr_sub_issue_markers "$parent")
+  if [ -n "$want" ]; then
+    while IFS=$'\t' read -r sid path title; do
+      [ -n "$sid" ] || continue
+      if printf '%s\n' "$existing" | awk -v s="$sid" '$2=="OPEN" && $3==s {f=1} END{exit !f}'; then
+        printf '%s\n' "$existing" | awk -v s="$sid" '$2=="OPEN" && $3==s {print $1}'
+      else
+        num=$(bzr_create_sub_issue "$parent" "$sid" "$path" "$title") && { bzr_log "sub-issue #$num created for $sid"; echo "$num"; }
+      fi
+    done < "$tsv"
+  fi
+  while read -r num st sid; do
+    [ -n "$num" ] && [ "$st" = OPEN ] || continue
+    case " $want " in *" $sid "*) ;; *)
+      bzr_log "sub-issue #$num ($sid) not in the current spec set → closing"
+      printf 'bazaar: the current spec set no longer contains %s; closing this sub-issue.\n' "$sid" > "$BZR_TMP/close-$num.md"
+      bzr_comment issue "$num" "$BZR_TMP/close-$num.md"; gh issue close "$num" --repo "$REPO" >>"$LOG" 2>&1 || true ;;
+    esac
+  done <<< "$existing"
+}
+
 # ---------- main loop ----------
 
 bzr_tick() {

@@ -27,14 +27,18 @@ role_release_label() { echo ""; }
 role_worker_cmd() { echo "${BZR_WORKER_OVERRIDE:-$SCRIPTS_DIR/bazaar-issue-worker.sh} $1"; }
 role_candidates() { bzr_candidates 'not any(l.startswith("bzr-") for l in i["labels"])'; }
 
-# ---------- local checkout for the approval sweep ----------
-# Prefer the git repo we are running in; otherwise keep a clone under BZR_REPO_DIR.
-project_root() {
-  local top; top=$(git rev-parse --show-toplevel 2>/dev/null || true)
-  if [ -n "$top" ]; then echo "$top"; return 0; fi
-  local clone="$BZR_REPO_DIR/clone"
-  [ -d "$clone/.git" ] || gh repo clone "$REPO" "$clone" -- --quiet >>"$LOG" 2>&1 || return 1
-  echo "$clone"
+# After a merge the head branch may be gone (auto-delete); read the merged files
+# from origin/$DEFAULT_BRANCH instead. Writes $BZR_TMP/l4-<issue>.tsv.
+collect_l4s_from_default() {  # <issue> <pr>
+  local issue="$1" pr="$2" root f
+  root=$(bzr_project_root) || return 1
+  git -C "$root" fetch --quiet origin "$DEFAULT_BRANCH" >>"$LOG" 2>&1 || return 1
+  : > "$BZR_TMP/l4-$issue.tsv"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    git -C "$root" show "origin/$DEFAULT_BRANCH:$f" > "$BZR_TMP/l4src" 2>/dev/null || continue
+    bzr_l4_from_file "$BZR_TMP/l4src" "$f" "$BZR_TMP/l4-$issue.tsv"
+  done <<< "$(pr_files "$pr")"
 }
 
 spec_pr_for() {  # <issue> → "number state isDraft mergedAt headRefOid" or nothing
@@ -73,7 +77,7 @@ pr_files() { gh pr view "$1" --repo "$REPO" --json files 2>>"$LOG" | python3 -c 
 # $BZR_TMP/l4-<issue>.tsv (id<TAB>path<TAB>title) read from the branch.
 flip_spec_status() {  # <issue> <pr> → head sha
   local issue="$1" pr="$2" root wt branch="bzr/spec-$1" f changed=0
-  root=$(project_root) || return 1
+  root=$(bzr_project_root) || return 1
   wt="$BZR_TMP/approve-$issue"
   git -C "$root" fetch --quiet origin "$branch" >>"$LOG" 2>&1 || return 1
   rm -rf "$wt"; git -C "$root" worktree prune >>"$LOG" 2>&1 || true
@@ -81,26 +85,8 @@ flip_spec_status() {  # <issue> <pr> → head sha
   : > "$BZR_TMP/l4-$issue.tsv"
   while IFS= read -r f; do
     [ -f "$wt/$f" ] || continue
-    python3 - "$wt/$f" "$BZR_TMP/l4-$issue.tsv" "$f" <<'PY' && changed=1
-import re, sys
-path, l4out, rel = sys.argv[1], sys.argv[2], sys.argv[3]
-s = open(path).read()
-m = re.match(r"^---\n(.*?)\n---\n", s, re.S)
-if not m: sys.exit(1)
-fm = m.group(1)
-if not re.search(r"^spec_type:", fm, re.M): sys.exit(1)
-st = re.search(r"^spec_type:\s*(\S+)", fm, re.M).group(1)
-sid = (re.search(r"^id:\s*(\S+)", fm, re.M) or [None, ""])[1]
-if st == "task":
-    title = ""
-    t = re.search(r"^## TL;DR\s*\n+(.+)", s, re.M)
-    if t: title = re.split(r"(?<=[.!?])\s", t.group(1).strip())[0][:120]
-    open(l4out, "a").write("%s\t%s\t%s\n" % (sid, rel, title or rel))
-new = re.sub(r"^status:\s*review\s*$", "status: ready", fm, count=1, flags=re.M)
-if new == fm: sys.exit(1)
-open(path, "w").write(s[:m.start(1)] + new + s[m.end(1):])
-sys.exit(0)
-PY
+    bzr_l4_from_file "$wt/$f" "$f" "$BZR_TMP/l4-$issue.tsv"
+    bzr_flip_status_ready "$wt/$f" && changed=1
   done <<< "$(pr_files "$pr")"
   if [ "$changed" -eq 1 ]; then
     git -C "$wt" -c user.name="bazaar-issues" -c user.email="bazaar@localhost" commit --quiet -am "spec: mark ready per approval on #$issue" >>"$LOG" 2>&1 || return 1
@@ -108,79 +94,6 @@ PY
   fi
   git -C "$wt" rev-parse HEAD
   git -C "$root" worktree remove --force "$wt" >>"$LOG" 2>&1 || rm -rf "$wt"
-}
-
-# After a merge the head branch may be gone (auto-delete); read the merged files
-# from origin/$DEFAULT_BRANCH instead. Writes $BZR_TMP/l4-<issue>.tsv.
-collect_l4s_from_default() {  # <issue> <pr>
-  local issue="$1" pr="$2" root f
-  root=$(project_root) || return 1
-  git -C "$root" fetch --quiet origin "$DEFAULT_BRANCH" >>"$LOG" 2>&1 || return 1
-  : > "$BZR_TMP/l4-$issue.tsv"
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    # (python3 - reads its program from stdin, so the file content goes via a temp file)
-    git -C "$root" show "origin/$DEFAULT_BRANCH:$f" > "$BZR_TMP/l4src" 2>/dev/null || continue
-    python3 - "$BZR_TMP/l4-$issue.tsv" "$f" "$BZR_TMP/l4src" <<'PY' || true
-import re, sys
-s = open(sys.argv[3]).read(); l4out, rel = sys.argv[1], sys.argv[2]
-m = re.match(r"^---\n(.*?)\n---\n", s, re.S)
-if not m: sys.exit(0)
-fm = m.group(1)
-st = re.search(r"^spec_type:\s*(\S+)", fm, re.M)
-if not st or st.group(1) != "task": sys.exit(0)
-sid = (re.search(r"^id:\s*(\S+)", fm, re.M) or [None, ""])[1]
-t = re.search(r"^## TL;DR\s*\n+(.+)", s, re.M)
-title = re.split(r"(?<=[.!?])\s", t.group(1).strip())[0][:120] if t else rel
-open(l4out, "a").write("%s\t%s\t%s\n" % (sid, rel, title))
-PY
-  done <<< "$(pr_files "$pr")"
-}
-
-sub_issue_markers() {  # <parent> → lines "number state spec-id"
-  gh api "repos/$REPO/issues/$1/sub_issues" 2>>"$LOG" | python3 -c '
-import json, sys, re
-for c in json.load(sys.stdin):
-    m = re.search(r"<!-- bzr-sub-issue parent=\d+ spec=(\S+) -->", c.get("body") or "")
-    print(c["number"], c.get("state", "open").upper(), m.group(1) if m else "-")'
-}
-
-create_sub_issue() {  # <parent> <spec-id> <path> <title>
-  local parent="$1" sid="$2" path="$3" title="$4" url num id body
-  body="$BZR_TMP/sub-$parent-$RANDOM.md"
-  printf '<!-- bzr-sub-issue parent=%s spec=%s -->\nImplements %s (`%s`), part of #%s.\n\nRefs #%s\n' "$parent" "$sid" "$sid" "$path" "$parent" "$parent" > "$body"
-  url=$(gh issue create --repo "$REPO" --title "$title" --body-file "$body" 2>>"$LOG") || return 1
-  num="${url##*/}"
-  id=$(gh issue view "$num" --repo "$REPO" --json id 2>>"$LOG" | bzr_json id)
-  gh api -X POST "repos/$REPO/issues/$parent/sub_issues" -F "sub_issue_id=$id" >>"$LOG" 2>&1 \
-    || bzr_log "WARNING: created #$num but could not attach it as a sub-issue of #$parent"
-  echo "$num"
-}
-
-# Reconcile draft-time sub-issues with the merged L4 list: create missing, close dropped.
-reconcile_sub_issues() {  # <parent> ; reads $BZR_TMP/l4-<parent>.tsv ; prints created/kept numbers
-  local parent="$1" sid path title num st have want=""
-  [ -f "$BZR_TMP/l4-$parent.tsv" ] || { bzr_log "reconcile #$parent: no L4 list available; leaving sub-issues untouched"; return 0; }
-  while IFS=$'\t' read -r sid path title; do [ -n "$sid" ] && want="$want $sid"; done < "$BZR_TMP/l4-$parent.tsv"
-  local n_l4; n_l4=$(grep -c . "$BZR_TMP/l4-$parent.tsv" || true)
-  [ "$n_l4" -ge 2 ] || want=""                      # zero or one L4 → no sub-issues
-  local existing; existing=$(sub_issue_markers "$parent")
-  while IFS=$'\t' read -r sid path title; do
-    [ -n "$sid" ] || continue; [ -n "$want" ] || break
-    if printf '%s\n' "$existing" | awk -v s="$sid" '$2=="OPEN" && $3==s {f=1} END{exit !f}'; then
-      printf '%s\n' "$existing" | awk -v s="$sid" '$2=="OPEN" && $3==s {print $1}'
-    else
-      num=$(create_sub_issue "$parent" "$sid" "$path" "$title") && { bzr_log "sub-issue #$num created for $sid"; echo "$num"; }
-    fi
-  done < "$BZR_TMP/l4-$parent.tsv"
-  while read -r num st sid; do
-    [ -n "$num" ] && [ "$st" = OPEN ] || continue
-    case " $want " in *" $sid "*) ;; *)
-      bzr_log "sub-issue #$num ($sid) no longer in the approved spec set → closing"
-      printf 'bazaar-issues: the approved spec no longer contains %s; closing this sub-issue.\n' "$sid" > "$BZR_TMP/close-$num.md"
-      bzr_comment issue "$num" "$BZR_TMP/close-$num.md"; gh issue close "$num" --repo "$REPO" >>"$LOG" 2>&1 || true ;;
-    esac
-  done <<< "$existing"
 }
 
 # Rewrite the parent's "Specs:" line (ISSUE-TEMPLATE.md) to the merged spec set.
@@ -213,7 +126,7 @@ approve_issue() {  # <issue> <pr> <state> <mergedAt>
     bzr_log "approval #$issue: PR #$pr already merged; resuming at sub-issue reconciliation"
     collect_l4s_from_default "$issue" "$pr" || { bzr_log "approval #$issue: could not read merged specs from origin/$DEFAULT_BRANCH; leaving sub-issues untouched"; return 1; }
   fi
-  subs=$(reconcile_sub_issues "$issue" | tr '\n' ' ')
+  subs=$(bzr_reconcile_sub_issues "$issue" "$BZR_TMP/l4-$issue.tsv" | tr '\n' ' ')
   update_specs_line "$issue" "$pr"
   bzr_transition "$issue" bzr-ready bzr-spec-review
   bzr_marker_comment "$issue" "<!-- bzr-spec-merged pr=$pr ts=$(bzr_now) -->" \
@@ -226,7 +139,7 @@ reject_issue() {  # <issue> <pr>
     [ -n "$num" ] && [ "$st" = OPEN ] || continue
     printf 'bazaar-issues: spec PR #%s was closed without merging; closing this draft-time sub-issue.\n' "$pr" > "$BZR_TMP/rj-$num.md"
     bzr_comment issue "$num" "$BZR_TMP/rj-$num.md"; gh issue close "$num" --repo "$REPO" >>"$LOG" 2>&1 || true
-  done <<< "$(sub_issue_markers "$issue")"
+  done <<< "$(bzr_sub_issue_markers "$issue")"
   bzr_escalate "$issue" "spec PR #$pr was closed without merging (rejected). Its draft-time sub-issues were closed."
 }
 
