@@ -26,7 +26,7 @@ Like a job dispatcher reading a work-queue table, where the table is GitHub labe
 Implementing agent: build `lib/bazaar-common.sh` and the two scripts per the surface below. Chris Robertson: confirm the attempt-counter mechanics.
 
 ## API surface fragment
-*Proposed; nothing is implemented yet.*
+*Implemented 2026-09-19: `lib/bazaar-common.sh` v0.1.0, `bazaar-issues.sh` v0.1.0, `bazaar-build.sh` v0.1.0. Harnesses `test-bazaar-common.sh` (33), `test-bazaar-build.sh` (16), `test-bazaar-issues.sh` (33), all green over `test-support/fake-gh.py`.*
 ```bash
 bazaar-issues.sh [OPTIONS]        # issue controller: intake → spec → approval
 bazaar-build.sh  [OPTIONS]        # build controller: bzr-ready → PR
@@ -64,6 +64,16 @@ Marker comments (agent-authored, first line):
   <!-- bzr-escalated role=issue|build attempts=K -->
 ```
 
+### Implementation notes (2026-09-19)
+- **Controllers own every parent-issue label transition.** Workers write only sentinels (last line of `$BZR_SENTINEL`), comments, PRs, and `bzr-blocked` on skipped sub-issues. The worker L3s' "wrapper moves the label" wording is superseded by this: the wrapper is the controller's `role_on_worker_exit`.
+- **Role hooks** a controller script defines over the common lib: `role_parse_arg` (runs in the caller's shell, sets `BZR_ROLE_CONSUMED`), `role_claim_label`, `role_queue_label`, `role_release_label`, `role_candidates`, `role_worker_cmd`, `role_sweeps`, `role_on_worker_exit`, optional `role_dry_sweeps` and `role_audit`.
+- **No jq, bash 3.2.** All JSON goes through python3; `gh --jq` is avoided so the test stub can serve plain JSON; the child registry is a directory of pid files; the worker subshell gets its pid from `bash -c 'echo $PPID'` (no `BASHPID`).
+- **Dry-run** runs no sweeps with side effects; `role_dry_sweeps` reports would-approve / would-escalate.
+- **`--force`** on `bazaar-build.sh --issue N` bypasses the pre-claim label check (`BZR_SKIP_LABEL_CHECK`) but never the worker's precheck.
+- **Escalation** replaces every `bzr-*` state label with `bzr-blocked`, so a rejected `bzr-spec-review` issue ends with exactly one label.
+- **Approval marker** is `<!-- bzr-spec-merged pr=N -->`; the comment guard refuses any agent body containing the approval word, including marker names.
+- **Local checkout for the approval sweep:** the git repo the controller runs in, else a clone under `~/.bazaar/<owner>-<repo>/clone`.
+
 ## Consumer
 Operator shell, cron, or the staff-fleet dispatcher. Spawns [BZR-FEAT-ISSUE-WORKER](L3-issue-worker.md) or [BZR-FEAT-BUILD-WORKER](L3-build-worker.md).
 
@@ -76,7 +86,7 @@ Operator shell, cron, or the staff-fleet dispatcher. Spawns [BZR-FEAT-ISSUE-WORK
 - Stop-file pattern: PID-checked stop file as in the babysit family.
 
 ## What we assume
-- [ASSUMPTION] Liveness is by process. A claim marker names `host` and `pid`. A controller releases a claim when the host is its own and the pid is dead, and releases all of its own host's claims for its role at startup (no worker can have survived it). Claims naming another host are never touched. Flips if: controllers run on several hosts for one repo, in which case the home-lab-monitor lock becomes the lease.
+- [ASSUMPTION] Liveness is by process. A claim marker names `host`, `pid`, and the process start time (`ps -o lstart=`), so a recycled pid is not mistaken for the worker. A controller releases a claim when the host is its own and the pid is dead, and releases all of its own host's claims for its role at startup (no worker can have survived it). Claims naming another host are never touched. Flips if: controllers run on several hosts for one repo, in which case the home-lab-monitor lock becomes the lease.
 - [ASSUMPTION] The attempt counter is the number of `bzr-attempt` markers for this role posted after the newest `bzr-escalated` marker (or ever, if none). Reaching `MAX_ATTEMPTS` escalates: `bzr-blocked` plus a `bzr-escalated` marker. A human clears `bzr-blocked`; the next failures count from zero because they follow the escalation marker. Flips if: comment volume becomes a nuisance, then the counter moves into the claim marker.
 - [ASSUMPTION] Tie-break by model only when two or more candidates share the top priority label. Flips if: the owner wants the model to weigh content.
 - [ASSUMPTION] The approval and bounce sweeps live in `bazaar-issues.sh`; the merged-PR sweep lives in `bazaar-build.sh`. Flips if: the owner wants approvals to land while the issue controller is off.

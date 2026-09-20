@@ -77,7 +77,7 @@ Parent in exactly one of `bzr-pr-ready`, `bzr-blocked`, or back in `bzr-ready`; 
 1. **plan** (implementer, short): posts the ordered plan as an issue comment, `PLAN_POSTED`. Skipped when there are no sub-issues.
 2. **implement sub-issue k** (implementer): reads its L4, implements, tests, commits with `Refs #<sub>`, pushes, `SUBISSUE_DONE k` (or `HANDOFF_REVIEW <pr>` on k=1, after opening the draft PR).
 3. **review** (lib, `--mode code`): convergent cycle per k. Converged → update marker block, next k. Not converged (cap or bail) → skip per the assumption above, next eligible k.
-4. **finish**: after the last k, if at least one converged: post `codex-review=success`, mark PR ready, comment a summary (converged and skipped lists) on the parent, `bzr-building` → `bzr-pr-ready`. If every sub-issue was skipped: close the PR, `bzr-building` → `bzr-blocked` on the parent.
+4. **finish**: after the last k, if at least one converged: post `codex-review=success`, mark PR ready, comment a summary (converged and skipped lists) on the parent, write `PR_READY <pr>` to `$BZR_SENTINEL` (the controller moves `bzr-building` → `bzr-pr-ready`). If every sub-issue was skipped: close the PR and write `BLOCKED <reason>` (controller escalates). The PR body carries `<!-- bzr-build issue=N round=R -->` so the controller's merged-PR sweep can find it.
 
 ### Invariants
 1. No `gh pr merge`, no push to main, in any code path.

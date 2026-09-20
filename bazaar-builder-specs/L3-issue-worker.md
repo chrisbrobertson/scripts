@@ -74,7 +74,7 @@ One sentinel; the issue in exactly one of `bzr-needs-info`, `bzr-spec-review`, `
 2. **normalise** — rewrite the body into the template (`ISSUE-TEMPLATE.md`), original preserved.
 3. **classify** — bug vs feature per the mapping; record the decision and evidence in the spec PR body.
 4. **draft** — in the worktree, write or amend specs per `spec-guide.md`; every unknown is `[ASSUMPTION]` with a flip clause or `[OPEN]` with owner; update `index.md` and append `log.md`. Commit, push, open draft PR. Then create or reconcile sub-issues from the L4 list (marker body, attached via the sub-issues API, listed in the PR body). `SPEC_PR`.
-5. **review** (wrapper) — `run_review_cycle --mode spec` from the lib. At 0 BLOCKING: mark PR ready, comment on the issue with the PR link and the one-line summary of what will be built, move `bzr-drafting` → `bzr-spec-review`. On cap or bail: `bzr-blocked` with the reviewer summary.
+5. **review** (wrapper) — `run_review_cycle --mode spec` from the lib. At 0 BLOCKING: mark PR ready, comment on the issue with the PR link and the one-line summary of what will be built, write `SPEC_REVIEW <pr>` to `$BZR_SENTINEL` (the controller moves `bzr-drafting` → `bzr-spec-review`; see the controller L3's implementation notes, 2026-09-19). On cap or bail: `BLOCKED <reason>` with the reviewer summary posted on the PR.
 
 ### Invariants
 1. The worker never writes `status: ready` and never merges.

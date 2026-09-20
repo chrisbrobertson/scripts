@@ -47,6 +47,10 @@ empirical tests (`test-*`). No formal test suite, no build step, no CI.
 | `bazaar-builder-specs/` | TIF specs + implementation plan for **Bazaar Builder**, the two-controller successor to work-prep/builder (prefix `BZR`); read `index.md` first |
 | `lib/bazaar-review.sh` | Sourced library: convergent implementer/reviewer cycle (`run_review_cycle --mode code\|spec`), extracted from the builder and work-prep for Bazaar. Never labels, toggles draft, posts status, or merges. `babysit-with-review.sh` keeps its own copy. |
 | `test-bazaar-review-lib.sh` | Recording-stub harness for `lib/bazaar-review.sh` (claude/codex/gh/sleep stubs on PATH, throwaway git origin); run before touching the lib |
+| `lib/bazaar-common.sh` | Shared controller loop for the two Bazaar controllers: label queue, pid-held claims (no time lease), three-attempt escalation, comment guard, role hooks. bash 3.2 + python3, no jq. |
+| `bazaar-issues.sh` | Bazaar issue controller: intake (open issue with no `bzr-*` label) → `bazaar-issue-worker.sh`; sweeps for human replies, spec-PR approval (status flip, `codex-review` status, merge, sub-issue reconcile), and rejected spec PRs. `--help`. |
+| `bazaar-build.sh` | Bazaar build controller: `bzr-ready` → `bazaar-build-worker.sh`; merged-PR sweep closes the parent or queues the next round. `--issue N [--force]`. Never merges. |
+| `test-support/fake-gh.py` | Stateful `gh` stand-in over a JSON file used by `test-bazaar-common.sh`, `test-bazaar-build.sh`, `test-bazaar-issues.sh` |
 
 ## Staff-fleet agents
 
