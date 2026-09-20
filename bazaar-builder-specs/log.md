@@ -23,3 +23,7 @@ Extracted `lib/bazaar-review.sh` v0.1.0 from `babysit-builder.sh` (control flow,
 ## [2026-09-20] status | Phase 3 implemented: bazaar-issue-worker.sh
 
 Worker built over the common and review libs: pass A (verify / questions / normalise+classify), wrapper-owned body rewrite with the original in a details block, pass B (draft), spec-only validation, draft PR with `<!-- bzr-spec issue=N -->`, draft-time sub-issues via the shared reconcile, `run_review_cycle --mode spec`, sentinels `SPEC_REVIEW | NEEDS_INFO | NOT_ACTIONABLE | BLOCKED | STUCK`, EXIT-trap safety. Review before the phase found two approval-sweep defects (reviewer comments could self-approve; resume after a deleted head branch closed every sub-issue) and both are fixed with harness cases. Shared helpers moved into `lib/bazaar-common.sh`. 39 worker cases green; 36 + 34 + 16 + 59 for the rest.
+
+## [2026-09-20] status | Phase 4 implemented: bazaar-build-worker.sh
+
+Build worker: bash precheck (no model), round detection and resume from the PR-body state block, deterministic plan with an optional implementer reorder, per-unit implement + `run_review_cycle --mode code`, skip-and-revert with the sub-issue labelled `bzr-blocked`, dependent skipping, revert-conflict halt, finish with `codex-review` status and `PR_READY`. Implementation notes recorded in the L3. All six harnesses green: 59 + 34 + 16 + 36 + 39 + 45 = 229 cases. Phases 1-4 of the plan are complete; phase 5 (pilot on a real repo, operator guide, retire `babysit-builder.sh` / `babysit-work-prep.sh`, close babysit-specs PR #8) remains.

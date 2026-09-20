@@ -51,6 +51,8 @@ empirical tests (`test-*`). No formal test suite, no build step, no CI.
 | `bazaar-issues.sh` | Bazaar issue controller: intake (open issue with no `bzr-*` label) → `bazaar-issue-worker.sh`; sweeps for human replies, spec-PR approval (status flip, `codex-review` status, merge, sub-issue reconcile), and rejected spec PRs. `--help`. |
 | `bazaar-build.sh` | Bazaar build controller: `bzr-ready` → `bazaar-build-worker.sh`; merged-PR sweep closes the parent or queues the next round. `--issue N [--force]`. Never merges. |
 | `bazaar-issue-worker.sh` | Bazaar issue worker (spawned by `bazaar-issues.sh`): verify → questions or normalise → draft specs on `bzr/spec-N` → draft-time sub-issues → spec review cycle → sentinel |
+| `bazaar-build-worker.sh` | Bazaar build worker (spawned by `bazaar-build.sh`): precheck → plan → implement each sub-issue on one branch with a review cycle per unit, skip-and-revert on non-convergence → PR ready. Never merges. |
+| `test-bazaar-*.sh` | Harnesses for the Bazaar libs, controllers, and workers (six scripts, all offline: fake gh + throwaway git origin + scripted claude/codex stubs); run them all before committing Bazaar changes |
 | `test-support/fake-gh.py` | Stateful `gh` stand-in over a JSON file used by `test-bazaar-common.sh`, `test-bazaar-build.sh`, `test-bazaar-issues.sh` |
 
 ## Staff-fleet agents

@@ -10,7 +10,7 @@ TIF specs for **Bazaar Builder**: a two-controller, two-worker replacement for t
 | **L2** | [**L2-bazaar-system.md**](L2-bazaar-system.md) | review | System: two controllers, two workers, shared review lib, GitHub labels as the only durable state, claim protocol |
 | **L3** | [**L3-controller.md**](L3-controller.md) | review | **Implemented 2026-09-19** (82 harness cases green). `bazaar-issues.sh` / `bazaar-build.sh` over `lib/bazaar-common.sh`: intake = no `bzr-*` label, pid-held claims (no TTL), three-attempt escalation, sweeps (dead-pid, bounce, approval, rejected spec, merged PR), optional Haiku tie-break |
 | **L3** | [**L3-issue-worker.md**](L3-issue-worker.md) | review | **Implemented 2026-09-20** (39 cases green). Verify → ask/normalise → classify → draft specs and draft-time sub-issues → corpus-wide spec review → park for approval; no corpus = not actionable |
-| **L3** | [**L3-build-worker.md**](L3-build-worker.md) | review | Precheck → fetch sub-issues → plan → implement sequentially on `bzr/<issue>-<slug>` → review per sub-issue, skip and revert non-converging ones → `bzr-pr-ready`, never merge |
+| **L3** | [**L3-build-worker.md**](L3-build-worker.md) | review | **Implemented 2026-09-20** (45 cases green). Precheck → fetch sub-issues → plan → implement sequentially on `bzr/<issue>-<slug>` → review per sub-issue, skip and revert non-converging ones → `bzr-pr-ready`, never merge |
 | **L3** | [**L3-review-lib.md**](L3-review-lib.md) | review | `lib/bazaar-review.sh` v0.1.0 (**implemented 2026-09-19**, harness green): extraction of the convergent review cycle from builder/work-prep; `babysit-with-review.sh` untouched |
 
 ## Plans & Amendments
@@ -24,6 +24,7 @@ TIF specs for **Bazaar Builder**: a two-controller, two-worker replacement for t
 
 - All specs `review`, drafted 2026-09-19 from the owner's decisions in conversation. Nothing is implemented; API surface fragments are marked *proposed*.
 - **Phase 1 done 2026-09-19:** `lib/bazaar-review.sh` extracted, `test-bazaar-review-lib.sh` 59/59 green.
+- **Phase 4 done 2026-09-20:** `bazaar-build-worker.sh`; 45 harness cases green. All six harnesses: 229 cases green. Phase 5 (pilot, docs, retirement of builder/work-prep) is next.
 - **Phase 3 done 2026-09-20:** `bazaar-issue-worker.sh`; 39 harness cases green. Two approval-sweep holes found and fixed in review (reviewer self-approval; resume-after-merge closing sub-issues when the head branch was deleted).
 - **Phase 2 done 2026-09-19:** `lib/bazaar-common.sh`, `bazaar-issues.sh`, `bazaar-build.sh`, `test-support/fake-gh.py`; 82 controller harness cases green. Workers (phases 3-4) are next; until they land, `role_worker_cmd` points at `bazaar-issue-worker.sh` / `bazaar-build-worker.sh`, which do not exist yet.
 - **Blockers to `ready`:** owner sign-off on the remaining assumptions below and on the implementation as it lands.
@@ -61,6 +62,6 @@ All eleven open decisions from the first draft were answered the same day and fo
 
 1. Owner glances at the six remaining assumptions above; none blocks phase 1.
 2. ~~Phase 1: extract the lib with the harness green.~~ Done 2026-09-19.
-3. ~~Phase 2: controllers.~~ ~~Phase 3: issue worker.~~ Done. Phase 4 (build worker) next; each lands with its L3's acceptance tests as harness cases.
+3. ~~Phases 2-4: controllers and both workers.~~ Done 2026-09-20.
 4. Pilot on one repo; write the operator guide; update `CLAUDE.md`.
 5. Update status to `ready` once blockers clear.

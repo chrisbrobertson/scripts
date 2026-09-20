@@ -39,7 +39,7 @@ Gates: none; decisions taken 2026-09-19.
 
 Gates: body-rewrite format (assumed: template plus verbatim original in a details block).
 
-## Phase 4 — build worker (BZR-FEAT-BUILD-WORKER)
+## Phase 4 — build worker (BZR-FEAT-BUILD-WORKER) — DONE 2026-09-20
 
 1. Precheck in bash (spec exists on `origin/main`, `status: ready`, L4 per sub-issue, branch state).
 2. Sub-issue fetch and plan pass; ordered plan comment.
@@ -65,7 +65,7 @@ Gates: revert-on-skip and second-round mechanics (assumed; see the build-worker 
 | 1 | 1,188 lib + 230 harness (actual) | mostly moved code; 12 prompts verbatim |
 | 2 | 470 common + 90 build + 250 issues + 170 fake-gh + 3 harnesses (actual) | new |
 | 3 | 290 worker + 200 harness (actual) | prompts adapted from work-prep |
-| 4 | ~500 wrapper + prompts | prompts partly reused from builder |
+| 4 | 345 worker + 190 harness (actual) | prompts adapted from the builder |
 | 5 | docs | |
 
 Estimates are for scoping only; they are not commitments and will be revised in `log.md` as phases land.

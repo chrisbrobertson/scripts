@@ -26,7 +26,7 @@ Like a senior engineer picking up an epic: reads the stories, orders them, ships
 Implementing agent: build the worker in `bazaar-build.sh` on top of the lib. Chris Robertson: confirm the revert-on-skip and second-round mechanics.
 
 ## API surface fragment
-*Proposed.*
+*Implemented 2026-09-20: `bazaar-build-worker.sh` v0.1.0; `test-bazaar-build-worker.sh` 45 cases green.*
 ```bash
 bazaar-worker-build <issue>       # env from controller; branch bzr/<issue>-<slug>, worktree $BZR_HOME/<repo>/wt/<issue>
 
@@ -43,6 +43,14 @@ HANDOFF_REVIEW <pr>               # first pass only, PR opened (draft) after the
 SPEC_GAP <reason>                 # spec not implementable; whole issue → bzr-blocked
 STUCK <reason>                    # environmental; controller counts an attempt, issue → bzr-ready
 ```
+
+### Implementation notes (2026-09-20)
+- Worker sentinels are `UNIT_DONE | SPEC_GAP | STUCK` per implementer pass and `PR_READY <pr> | SPEC_GAP | BLOCKED | STUCK` to the controller; `PLAN_POSTED` ends the plan pass. The wrapper opens the PR after the first unit's push and owns its body (markers, state block, `Closes` lines).
+- State lives in the PR body as `<!-- bzr-build-state {"converged":{unit:range},"skipped":{unit:reason}} -->`; resume reads it and never re-implements a converged unit. The plan comment is posted once per round (`<!-- bzr-build-plan issue= round= -->`).
+- Order is deterministic first (`Blocked by #n`, L4 `depends_on`, number); the plan pass may reorder only with a permutation of the unit set, else the deterministic order stands.
+- Skip = one `git revert --no-commit` over the unit's range plus one commit (a plain `revert` refuses empty commits), `bzr-blocked` on the sub-issue with the last review, dependents skipped without a model call; a revert conflict is the single whole-issue halt.
+- Rounds: an open build PR is resumed on its branch; otherwise round = highest merged round + 1 and the branch carries `-rN`.
+- `Closes #<parent>` is written only when no unit was skipped, so a partial merge leaves the parent open for the controller's merged-PR sweep.
 
 ## Consumer
 [BZR-FEAT-CONTROLLER](L3-controller.md) (role build). Output consumed by the human merger.
