@@ -47,3 +47,7 @@ Third run (fixed remediation prompt, `--force`, Claude reviewer) ran four more c
 ## [2026-09-20] amend | Owner decisions after pilot run 3: spec cap 6, resume at review
 
 `MAX_SPEC_REVIEW_CYCLES` default raised from 4 to 6 (lib, common lib, worker, usage text). The issue worker now resumes straight at the review cycle when the `bzr/spec-N` branch and an open spec PR both exist: no re-verify, no re-draft, no body rewrite; classification read from the PR marker. Scope validation now diffs against the merge-base with the default branch so a branch behind `main` is not flagged for files it never touched. Issue-worker L3 assumption flipped and implementation notes updated. Harness: issue-worker 44 (new cases: resume-at-review, branch-only resume, moved main), review-lib 62, e2e 18. Pilot run 4 on #745 started with these changes.
+
+## [2026-09-20] status | Pilot run 4 on #745 converged: PR #761 ready for approval
+
+With the cap at 6 and resume-at-review, run 4 skipped verify and draft (zero implementer passes before the review), resumed PR #761, and converged in two cycles (2 → 0 BLOCKING). PR #761 is out of draft, #745 is `bzr-spec-review`, and the worker's comment tells the owner how to approve. The issue loop has now been exercised end to end on a real repo through to the human approval gate. Next: owner approves or rejects PR #761; on approval the controller merges, flips the three specs to ready, writes the `Specs:` line, and `bazaar-build.sh` picks #745 up for its first real build.
