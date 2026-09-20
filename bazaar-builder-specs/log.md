@@ -1,0 +1,17 @@
+# Log
+
+## [2026-09-19] ingest | Corpus created from owner design session
+
+Owner set the direction (two controllers + two workers, human approval as the only gate, agent may edit issue bodies, GitHub only, leave `babysit-with-review.sh` alone and extract the loop into a library, concurrency as a cost dial with unique worktrees/branches, defaults accepted for sub-issues, granularity, bounce channel, routing, and controller model). Drafted L1, L2, L3 controller / issue-worker / build-worker / review-lib, the implementation plan, the issue template, and this index. Probed GitHub: native sub-issue REST and GraphQL fields work for this account; agent and human share one login. Eleven open decisions listed in `index.md`. All specs `review`.
+
+## [2026-09-19] amend | Post-draft consistency fixes
+
+Split `bzr-outage` into `bzr-spec-outage` / `bzr-build-outage` so a spec-review outage never enters the build queue (L1, L2, controller, both workers, index). Added the controller's "Approval sweep" contract: status flip on the PR branch, `codex-review=success` on the new head before merge (work-prep merges bare today), L4 derivation from merged `spec_type: task` files, sub-issue body marker, parent `Specs:` line rewrite; build precheck now cites it. Carved the status flip out of controller invariant 1. Moved the sub-issue POST payload from known to `[ASSUMPTION]` (only GET was probed). Closed the non-thinking `[OPEN]`: the CLI has `--effort low` and no thinking switch. Added claim-refresh invariants to both workers.
+
+## [2026-09-19] amend | Owner answered all eleven open decisions
+
+Answers: (1) every open issue without a `bzr-*` label is intake; (2) approval comment authorises the status flip; (3) sub-issues at draft time; (4) whole-PR review per sub-issue; (5) skip and continue on a failed sub-issue; (6) no time-based lease, fully asynchronous; (7) no outage labels, retry next run, `bzr-blocked` only for human escalation or after three attempts; (8) two scripts; (9) no spec corpus → not actionable; (10) retire builder and work-prep as part of this work; (11) `--effort low`. Rewrote the controller L3 (pid-held claims, attempt markers, seven labels, `bazaar-issues.sh` / `bazaar-build.sh` over `lib/bazaar-common.sh`, rejected-spec and merged-PR sweeps). Patched L1, L2, both worker L3s, the review-lib L3, the plan, and the index. New assumptions introduced by the answers (skip = revert + label + skip dependents; round-N branches; reconciliation of draft-time sub-issues; attempt counter mechanics) are listed in the index for a final look.
+
+## [2026-09-19] status | Phase 1 implemented: lib/bazaar-review.sh + harness
+
+Extracted `lib/bazaar-review.sh` v0.1.0 from `babysit-builder.sh` (control flow, code prompts, reviewer/implementer harnesses) and `babysit-work-prep.sh` (spec prompts). Parser functions and all twelve prompt bodies are md5-identical to their sources; reviewer functions differ only by the `REVIEW_WORKDIR` rename, a sleep shim for tests, and `set -u` guards. `run_review_cycle --mode code|spec` returns 0/10/20/2/3/4 and never labels, toggles draft, posts a status, or merges. `test-bazaar-review-lib.sh` covers the L3's acceptance tests 1-7 and the ASF TC-3.1 to TC-3.14 reviewer cases: 59/59 green. Testing found that `REVIEW_LAST_FILE` pointed at a file later attempts zero; it is now a per-cycle copy. Updated the review-lib L3 (surface now "implemented"), index, plan, and `CLAUDE.md`.
