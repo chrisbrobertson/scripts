@@ -204,7 +204,7 @@ git -C "$WT" push --quiet -u origin "HEAD:refs/heads/$BRANCH" >>"$LOG" 2>&1 || {
 
 # ---------- PR (reuse an open one on this branch) ----------
 PR=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number 2>>"$LOG" | python3 -c 'import json,sys; p=json.load(sys.stdin); print(p[0]["number"] if p else "")')
-SPEC_PATHS=$(grep -v 'index\.md$\|log\.md$' "$BZR_TMP/paths" | tr '\n' ' ')
+SPEC_PATHS=$(grep -vE 'index\.md$|log\.md$' "$BZR_TMP/paths" | tr '\n' ' ')   # -E: BSD grep has no \| in BRE
 if [ -z "$PR" ]; then
   cat > "$BZR_TMP/prbody.md" <<EOP
 <!-- bzr-spec issue=$ISSUE class=$CLASS -->

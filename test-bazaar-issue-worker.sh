@@ -89,6 +89,7 @@ draft_stub() {  # <n_l4> [extra-shell]
   printf 'printf -- "---\\nspec_type: feature\\nid: X-FEAT-THING\\nstatus: review\\n---\\n\\n## TL;DR\\nA thing. https://github.com/o/r/issues/7\\n" > specs/L3-thing.md\n'
   for i in $(seq 1 "$n"); do printf 'printf -- "---\\nspec_type: task\\nid: X-TASK-P%s\\nstatus: review\\nparent_feature: X-FEAT-THING\\n---\\n\\n## TL;DR\\nPart %s does the thing. More.\\n" > specs/L4-part%s.md\n' "$i" "$i" "$i"; done
   printf '%s\n' "$extra"
+  printf 'printf "# index\\n- thing\\n" > specs/index.md\n'
   printf 'git add -A specs && git commit -q -m "draft"\n@@END\nDrafted.\nDRAFT_DONE\n'
 }
 
@@ -143,6 +144,7 @@ assert_grep "AT9 original text present" "plz make thing work, see #3" <(field is
 assert_eq "PR opened draft on bzr/spec-7 then made ready" "$(field prs/101/headRefName)/$(field prs/101/isDraft)" "bzr/spec-7/false"
 assert_grep "PR body carries the marker" "<!-- bzr-spec issue=7 class=feature -->" <(field prs/101/body)
 assert_grep "PR body carries Refs, not Closes" "Refs #7" <(field prs/101/body)
+assert_not_grep "PR body spec list excludes index.md" "index.md" <(field prs/101/body | grep '^Specs:')
 assert_eq "AT4 two draft-time sub-issues attached" "$(field issues/7/sub_issues)" "[8, 9]"
 assert_grep "AT4 sub-issue marker" "<!-- bzr-sub-issue parent=7 spec=X-TASK-P1 -->" <(field issues/8/body)
 assert_eq "AT5 two review cycles ran" "$(grep -c CALL=codex "$RECORD")" "2"
