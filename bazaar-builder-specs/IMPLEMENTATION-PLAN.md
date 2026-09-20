@@ -31,7 +31,7 @@ Gate: none beyond decision 8 (already made).
 
 Gates: none; decisions taken 2026-09-19.
 
-## Phase 3 — issue worker (BZR-FEAT-ISSUE-WORKER)
+## Phase 3 — issue worker (BZR-FEAT-ISSUE-WORKER) — DONE 2026-09-20
 
 1. Prompts: verify checklist, questions, normalise (template in `ISSUE-TEMPLATE.md`), classify, draft (reuse work-prep drafting prompt and `spec-guide.md` handoff), resume-from-marker.
 2. Wrapper: worktree `bzr/spec-<n>`, sentinel parsing, marker comments, draft-time sub-issue create/reconcile, `run_review_cycle --mode spec`, label transitions, `NOT_ACTIONABLE` on missing corpus.
@@ -64,7 +64,7 @@ Gates: revert-on-skip and second-round mechanics (assumed; see the build-worker 
 |---|---|---|
 | 1 | 1,188 lib + 230 harness (actual) | mostly moved code; 12 prompts verbatim |
 | 2 | 470 common + 90 build + 250 issues + 170 fake-gh + 3 harnesses (actual) | new |
-| 3 | ~400 wrapper + prompts | prompts partly reused from work-prep |
+| 3 | 290 worker + 200 harness (actual) | prompts adapted from work-prep |
 | 4 | ~500 wrapper + prompts | prompts partly reused from builder |
 | 5 | docs | |
 

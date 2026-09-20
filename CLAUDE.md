@@ -50,6 +50,7 @@ empirical tests (`test-*`). No formal test suite, no build step, no CI.
 | `lib/bazaar-common.sh` | Shared controller loop for the two Bazaar controllers: label queue, pid-held claims (no time lease), three-attempt escalation, comment guard, role hooks. bash 3.2 + python3, no jq. |
 | `bazaar-issues.sh` | Bazaar issue controller: intake (open issue with no `bzr-*` label) → `bazaar-issue-worker.sh`; sweeps for human replies, spec-PR approval (status flip, `codex-review` status, merge, sub-issue reconcile), and rejected spec PRs. `--help`. |
 | `bazaar-build.sh` | Bazaar build controller: `bzr-ready` → `bazaar-build-worker.sh`; merged-PR sweep closes the parent or queues the next round. `--issue N [--force]`. Never merges. |
+| `bazaar-issue-worker.sh` | Bazaar issue worker (spawned by `bazaar-issues.sh`): verify → questions or normalise → draft specs on `bzr/spec-N` → draft-time sub-issues → spec review cycle → sentinel |
 | `test-support/fake-gh.py` | Stateful `gh` stand-in over a JSON file used by `test-bazaar-common.sh`, `test-bazaar-build.sh`, `test-bazaar-issues.sh` |
 
 ## Staff-fleet agents

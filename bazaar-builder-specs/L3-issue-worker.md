@@ -26,7 +26,7 @@ Like a product analyst refining a ticket into a PRD and a task list, then handin
 Implementing agent: build the worker prompt set and its bash wrapper in `bazaar-issues.sh`. Chris Robertson: confirm the template.
 
 ## API surface fragment
-*Proposed.*
+*Implemented 2026-09-20: `bazaar-issue-worker.sh` v0.1.0; `test-bazaar-issue-worker.sh` 39 cases green.*
 ```bash
 # Invoked by the controller; not a user-facing command.
 bazaar-worker-issue <issue>       # env from controller: BZR_REPO BZR_WORKTREE BZR_BRANCH BZR_LOG
@@ -41,6 +41,14 @@ STUCK <reason>                    # environmental; controller counts an attempt,
 # Agent comment marker (every comment the agent posts starts with this line):
 <!-- bzr-issue-worker phase=verify|questions|spec|review ts=<iso8601> -->
 ```
+
+### Implementation notes (2026-09-20)
+- Two implementer passes, not four: pass A verifies, asks, or normalises and classifies in one go (writes to a scratch dir, edits nothing in the repo); pass B drafts. The wrapper does every GitHub write.
+- The body rewrite is wrapper-owned: agent sections plus the original report verbatim in a details block (the original is recovered from an existing details block on re-entry), so invariant 8 holds by construction.
+- Resume signal before a PR exists is the `bzr/spec-<n>` branch on origin; an open PR on that branch is reused, never duplicated.
+- Spec-only contract is enforced by the wrapper after drafting and after every remediation (`--validate-cmd` bound to the worktree path): any non-spec-dir change → `BLOCKED`, no PR.
+- Draft-time sub-issues go through the shared `bzr_reconcile_sub_issues` before and after the review cycle, so the set always matches the current L4 set.
+- The EXIT trap safety-pushes the branch, removes the worktree, and writes `STUCK` if no sentinel was reached.
 
 ## Consumer
 [BZR-FEAT-CONTROLLER](L3-controller.md) (role issue). Output consumed by the controller's approval sweep and then by [BZR-FEAT-BUILD-WORKER](L3-build-worker.md).
