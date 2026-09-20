@@ -17,7 +17,7 @@ ISSUE="${1:-${BZR_ISSUE:-}}"; [ -n "$ISSUE" ] || { echo "usage: bazaar-issue-wor
 BZR_ROLE=issues; REPO="${BZR_REPO:?}"; LOG="${BZR_LOG:?}"; DRY_RUN=0
 BZR_REPO_DIR="${BZR_REPO_DIR:?}"; DEFAULT_BRANCH="${DEFAULT_BRANCH:?}"; BZR_SENTINEL="${BZR_SENTINEL:?}"
 IMPLEMENTER="${IMPLEMENTER:-claude}"; REVIEWER="${REVIEWER:-codex}"
-MAX_SPEC_REVIEW_CYCLES="${MAX_SPEC_REVIEW_CYCLES:-4}"
+MAX_SPEC_REVIEW_CYCLES="${MAX_SPEC_REVIEW_CYCLES:-6}"
 # shellcheck source=lib/bazaar-common.sh
 . "$SCRIPTS_DIR/lib/bazaar-common.sh"
 # shellcheck source=lib/bazaar-review.sh
@@ -94,6 +94,43 @@ else
   git -C "$ROOT" worktree add --quiet --detach "$WT" "$BASE_SHA" >>"$LOG" 2>&1 || { sentinel STUCK "worktree add failed"; exit 1; }
 fi
 git -C "$WT" config user.name "bazaar-issue-worker" >/dev/null; git -C "$WT" config user.email "bazaar@localhost" >/dev/null
+# Scope checks diff against the branch point, not the moving default branch.
+BASE_SHA=$(git -C "$WT" merge-base "origin/$DEFAULT_BRANCH" HEAD 2>/dev/null || echo "$BASE_SHA")
+
+# Only spec-dir Markdown may change (invariant 6); at least one spec with frontmatter.
+validate_spec_paths() {  # <worktree> <base-sha>
+  local wt="$1" base="$2" p n=0
+  { git -C "$wt" diff --name-only "$base"; git -C "$wt" ls-files --others --exclude-standard; } | sort -u > "$BZR_TMP/paths"
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    case "$p" in "$SPEC_DIR"/*.md) ;; *) echo "out-of-scope change: $p" >&2; return 1 ;; esac
+    [ -f "$wt/$p" ] && grep -q '^spec_type:' "$wt/$p" && n=$((n+1))
+  done < "$BZR_TMP/paths"
+  [ "$n" -ge 1 ] || { echo "no spec file with frontmatter changed" >&2; return 1; }
+}
+
+# Resume straight to the review when an earlier run already opened the spec PR
+# (owner decision 2026-09-20): no re-verify, no re-draft, no body rewrite.
+PR=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number,body 2>>"$LOG" | python3 -c '
+import json, sys, re
+p = json.load(sys.stdin)
+if p:
+    m = re.search(r"<!-- bzr-spec issue=\d+ class=(\w+) -->", p[0].get("body") or "")
+    print(p[0]["number"], m.group(1) if m else "feature")')
+if [ "$RESUMED" -eq 1 ] && [ -n "$PR" ]; then
+  read -r PR CLASS <<< "$PR"
+  bzr_log "#$ISSUE open spec PR #$PR found; resuming at the review cycle"
+  if ! validate_spec_paths "$WT" "$BASE_SHA" 2>"$BZR_TMP/verr"; then
+    sentinel BLOCKED "resumed branch violates the spec-only contract: $(tr '\n' ' ' < "$BZR_TMP/verr")"; exit 0
+  fi
+  # the normalised body is whatever the issue carries now, minus the original-report block
+  python3 -c 'import re,sys; b=open(sys.argv[1]).read(); print(re.sub(r"\n*<details><summary>Original report</summary>.*?</details>\n?", "", b, flags=re.S))' "$RUN_DIR/body.md" > "$RUN_DIR/normalised.md"
+  RESUME_AT_REVIEW=1
+else
+  PR=""; RESUME_AT_REVIEW=0
+fi
+
+if [ "$RESUME_AT_REVIEW" -eq 0 ]; then
 
 # ---------- pass A: verify, normalise, classify ----------
 cat > "$BZR_TMP/promptA.txt" <<EOP
@@ -183,17 +220,6 @@ if ! run_implementer "$(cat "$BZR_TMP/promptB.txt")" "$BZR_TMP/resultB" "$WT"; t
 LAST=$(sed -e 's/[[:space:]]*$//' "$BZR_TMP/resultB" | grep -v '^$' | tail -n 1)
 case "$LAST" in DRAFT_DONE) ;; STUCK*) sentinel STUCK "drafting: ${LAST#STUCK }"; exit 1 ;; *) sentinel STUCK "drafting ended without a sentinel"; exit 1 ;; esac
 
-# Only spec-dir Markdown may change (invariant 6); at least one spec with frontmatter.
-validate_spec_paths() {  # <worktree> <base-sha>
-  local wt="$1" base="$2" p n=0
-  { git -C "$wt" diff --name-only "$base"; git -C "$wt" ls-files --others --exclude-standard; } | sort -u > "$BZR_TMP/paths"
-  while IFS= read -r p; do
-    [ -n "$p" ] || continue
-    case "$p" in "$SPEC_DIR"/*.md) ;; *) echo "out-of-scope change: $p" >&2; return 1 ;; esac
-    [ -f "$wt/$p" ] && grep -q '^spec_type:' "$wt/$p" && n=$((n+1))
-  done < "$BZR_TMP/paths"
-  [ "$n" -ge 1 ] || { echo "no spec file with frontmatter changed" >&2; return 1; }
-}
 git -C "$WT" add -A -- "$SPEC_DIR" >>"$LOG" 2>&1 || true
 git -C "$WT" diff --cached --quiet || git -C "$WT" commit --quiet -m "docs(spec): draft for #$ISSUE" >>"$LOG" 2>&1
 if ! validate_spec_paths "$WT" "$BASE_SHA" 2>"$BZR_TMP/verr"; then
@@ -201,9 +227,9 @@ if ! validate_spec_paths "$WT" "$BASE_SHA" 2>"$BZR_TMP/verr"; then
 fi
 [ "$(git -C "$WT" rev-parse HEAD)" != "$BASE_SHA" ] || { sentinel STUCK "no committed spec change"; exit 1; }
 git -C "$WT" push --quiet -u origin "HEAD:refs/heads/$BRANCH" >>"$LOG" 2>&1 || { sentinel STUCK "push of $BRANCH failed"; exit 1; }
+fi   # end of the verify+draft passes (skipped on resume-at-review)
 
 # ---------- PR (reuse an open one on this branch) ----------
-PR=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number 2>>"$LOG" | python3 -c 'import json,sys; p=json.load(sys.stdin); print(p[0]["number"] if p else "")')
 SPEC_PATHS=$(grep -vE 'index\.md$|log\.md$' "$BZR_TMP/paths" | tr '\n' ' ')   # -E: BSD grep has no \| in BRE
 if [ -z "$PR" ]; then
   cat > "$BZR_TMP/prbody.md" <<EOP

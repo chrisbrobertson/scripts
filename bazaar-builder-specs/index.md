@@ -24,6 +24,7 @@ TIF specs for **Bazaar Builder**: a two-controller, two-worker replacement for t
 
 - All specs `review`, drafted 2026-09-19 from the owner's decisions in conversation. Nothing is implemented; API surface fragments are marked *proposed*.
 - **Phase 1 done 2026-09-19:** `lib/bazaar-review.sh` extracted, `test-bazaar-review-lib.sh` 59/59 green.
+- **Phase 5 pilot 2026-09-20:** three issue-loop runs on bazaar-chat/bazaar#745 (PR #761); every hand-off worked on the real repo; escalated at the spec-review cap. Owner decisions taken same day: spec cap 6; re-runs resume at the review. See `log.md`.
 - **Phase 4 done 2026-09-20:** `bazaar-build-worker.sh`; 45 harness cases green. All six harnesses: 229 cases green. Phase 5 (pilot, docs, retirement of builder/work-prep) is next.
 - **Phase 3 done 2026-09-20:** `bazaar-issue-worker.sh`; 39 harness cases green. Two approval-sweep holes found and fixed in review (reviewer self-approval; resume-after-merge closing sub-issues when the head branch was deleted).
 - **Phase 2 done 2026-09-19:** `lib/bazaar-common.sh`, `bazaar-issues.sh`, `bazaar-build.sh`, `test-support/fake-gh.py`; 82 controller harness cases green. Workers (phases 3-4) are next; until they land, `role_worker_cmd` points at `bazaar-issue-worker.sh` / `bazaar-build-worker.sh`, which do not exist yet.

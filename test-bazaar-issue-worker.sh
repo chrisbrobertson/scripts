@@ -210,11 +210,28 @@ assert_grep "cap explained on the PR" "spec review stopped" <(python3 -c 'import
 # ---- AT10: re-entry with an existing branch and open PR → no second PR ----
 new_case resume 'body' '[]' '{"101":{"headRefName":"bzr/spec-7","body":"<!-- bzr-spec issue=7 class=feature -->\nRefs #7"}}'
 git -C "$CASE/clone" checkout -q -b bzr/spec-7; printf -- '---\nspec_type: feature\nid: X-FEAT-THING\nstatus: review\n---\n\n## TL;DR\nold draft\n' > "$CASE/clone/specs/L3-thing.md"; git -C "$CASE/clone" add -A; git -C "$CASE/clone" -c user.name=t -c user.email=t@t commit -q -m old; git -C "$CASE/clone" push -q origin bzr/spec-7 2>/dev/null; git -C "$CASE/clone" checkout -q main
+stub codex.1 "$CLEAN"
+rc=$(run_worker)
+assert_eq "AT10 resume with open PR: straight to review, SPEC_REVIEW on the existing PR" "$(sentinel)" "SPEC_REVIEW 101"
+assert_eq "AT10 no second PR" "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["prs"]))' "$FAKE_GH_STATE")" "1"
+assert_eq "AT10 no verify/draft passes on resume" "$(grep -c CALL=claude "$RECORD")" "0"
+assert_grep "AT10 resume-at-review logged" "resuming at the review cycle" "$BZR_LOG"
+assert_eq "AT10 body not rewritten on resume" "$(field issues/7/body)" "body"
+
+# ---- resume with a branch but no PR (crash before the PR opened) → verify + draft again, 'continue' hint ----
+new_case resume2 'body'
+git -C "$CASE/clone" checkout -q -b bzr/spec-7; printf -- '---\nspec_type: feature\nid: X-FEAT-THING\nstatus: review\n---\n\n## TL;DR\nold draft\n' > "$CASE/clone/specs/L3-thing.md"; git -C "$CASE/clone" add -A; git -C "$CASE/clone" -c user.name=t -c user.email=t@t commit -q -m old; git -C "$CASE/clone" push -q origin bzr/spec-7 2>/dev/null; git -C "$CASE/clone" checkout -q main
 stub claude.1 "$VERIFY_OK_STUB"; stub claude.2 "$(draft_stub 1)"; stub codex.1 "$CLEAN"
 rc=$(run_worker)
-assert_eq "AT10 resume: sentinel SPEC_REVIEW on the existing PR" "$(sentinel)" "SPEC_REVIEW 101"
-assert_eq "AT10 no second PR" "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["prs"]))' "$FAKE_GH_STATE")" "1"
-assert_grep "AT10 resume logged" "resuming existing branch" "$BZR_LOG"
-assert_grep "AT10 draft prompt says continue" "already contains an earlier draft attempt" "$RECORD"
+assert_eq "branch-only resume: sentinel SPEC_REVIEW" "$(sentinel)" "SPEC_REVIEW 101"
+assert_grep "branch-only resume: draft prompt says continue" "already contains an earlier draft attempt" "$RECORD"
+
+# ---- main moved since the branch point: scope check uses the merge-base ----
+new_case moved 'body' '[]' '{"101":{"headRefName":"bzr/spec-7","body":"<!-- bzr-spec issue=7 class=feature -->\nRefs #7"}}'
+git -C "$CASE/clone" checkout -q -b bzr/spec-7; printf -- '---\nspec_type: feature\nid: X-FEAT-THING\nstatus: review\n---\n\n## TL;DR\nold draft\n' > "$CASE/clone/specs/L3-thing.md"; git -C "$CASE/clone" add -A; git -C "$CASE/clone" -c user.name=t -c user.email=t@t commit -q -m old; git -C "$CASE/clone" push -q origin bzr/spec-7 2>/dev/null; git -C "$CASE/clone" checkout -q main
+echo code > "$CASE/clone/app.py"; git -C "$CASE/clone" add -A; git -C "$CASE/clone" -c user.name=t -c user.email=t@t commit -q -m "unrelated code on main"; git -C "$CASE/clone" push -q origin main 2>/dev/null
+stub codex.1 "$CLEAN"
+rc=$(run_worker)
+assert_eq "main moved: resume is not flagged out-of-scope" "$(sentinel)" "SPEC_REVIEW 101"
 
 echo; echo "passed=$PASS failed=$FAIL"; [ "$FAIL" -eq 0 ]

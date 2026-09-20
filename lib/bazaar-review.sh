@@ -1041,7 +1041,7 @@ run_review_cycle() {
   case "$mode" in code|spec) ;; *) echo "bazaar-review: --mode must be code|spec" >&2; return 2 ;; esac
   [ -n "$pr_num" ] && [ -n "$worktree" ] && [ -n "$branch" ] || { echo "bazaar-review: --pr, --worktree, --branch are required" >&2; return 2; }
   if [ -z "$max_cycles" ]; then
-    if [ "$mode" = code ]; then max_cycles="${MAX_REVIEW_CYCLES:-6}"; else max_cycles="${MAX_SPEC_REVIEW_CYCLES:-4}"; fi
+    if [ "$mode" = code ]; then max_cycles="${MAX_REVIEW_CYCLES:-6}"; else max_cycles="${MAX_SPEC_REVIEW_CYCLES:-6}"; fi
   fi
   [ "$REVIEWER" = codex ] && _bzr_require TMP_CODEX_FULL
 

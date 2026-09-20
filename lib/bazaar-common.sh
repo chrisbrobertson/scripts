@@ -81,7 +81,7 @@ Environment:
   BZR_APPROVERS  Comma-separated GitHub logins allowed to approve spec PRs.
                  Default: the authenticated gh user.
   MAX_ATTEMPTS   Automatic attempts before escalation to bzr-blocked. Default: 3.
-  MAX_REVIEW_CYCLES (6), MAX_SPEC_REVIEW_CYCLES (4)  passed to workers.
+  MAX_REVIEW_CYCLES (6), MAX_SPEC_REVIEW_CYCLES (6)  passed to workers.
 
 Labels: $BZR_LABELS
 Exit codes: 0 clean stop, 1 fatal, 2 usage.
@@ -444,7 +444,7 @@ bzr_spawn() {  # <issue>
     export BZR_ROLE BZR_ISSUE="$issue" BZR_REPO="$REPO" BZR_REPO_DIR BZR_HOME BZR_HOST BZR_LOG="$log" DEFAULT_BRANCH \
            BZR_SENTINEL="$BZR_REPO_DIR/run/$issue.sentinel" SCRIPTS_DIR BZR_APPROVERS \
            IMPLEMENTER IMPLEMENTER_MODEL IMPLEMENTER_EFFORT REVIEWER REVIEWER_MODEL REVIEWER_EFFORT \
-           MAX_REVIEW_CYCLES="${MAX_REVIEW_CYCLES:-6}" MAX_SPEC_REVIEW_CYCLES="${MAX_SPEC_REVIEW_CYCLES:-4}"
+           MAX_REVIEW_CYCLES="${MAX_REVIEW_CYCLES:-6}" MAX_SPEC_REVIEW_CYCLES="${MAX_SPEC_REVIEW_CYCLES:-6}"
     bzr_post_claim "$issue" "$(bash -c 'echo $PPID')" || true   # bash 3.2 has no BASHPID
     exec $cmd >> "$log" 2>&1
   ) &
