@@ -28,6 +28,7 @@
 #   role_on_worker_exit <issue> <rc> <sentinel-word> <sentinel-rest>  -> handle a non-transient outcome;
 #                                    return 0 handled, 1 = treat as transient attempt
 #   role_audit                      -> extra --audit checks
+#   role_dry_sweeps                 -> (optional) print what role_sweeps would do; no writes
 #
 # Globals set by bzr_init: BZR_ROLE REPO OWNER NAME DEFAULT_BRANCH BZR_HOME BZR_REPO_DIR
 #   LOG LOCK_FILE STOP_FILE WORKERS ONCE INTERVAL CONTROLLER_MODEL DRY_RUN AUDIT
@@ -314,10 +315,11 @@ bzr_record_attempt() {  # <issue> <reason>
   echo "$n"
 }
 
-bzr_escalate() {  # <issue> <reason>   → bzr-blocked (removes the claim label), escalation marker
-  local issue="$1" reason="$2" requeue
+bzr_escalate() {  # <issue> <reason>   → bzr-blocked replaces every other bzr-* state label; escalation marker
+  local issue="$1" reason="$2" requeue l
   requeue="$(role_release_label)"; [ -n "$requeue" ] || requeue="no bzr-* label (intake)"
-  bzr_transition "$issue" bzr-blocked "$(role_claim_label)"
+  bzr_transition "$issue" bzr-blocked ""
+  for l in $(bzr_issue_labels "$issue" | grep '^bzr-' | grep -vx bzr-blocked || true); do bzr_transition "$issue" "" "$l"; done
   bzr_marker_comment "$issue" "<!-- bzr-escalated role=$BZR_ROLE attempts=$(bzr_attempt_count "$issue") ts=$(bzr_now) -->" \
     "bazaar-${BZR_ROLE}: escalated to a human. $reason
 
@@ -489,7 +491,8 @@ bzr_tick() {
   fi
   BZR_GH_FAILS=0
   if [ "$AUDIT" -eq 1 ]; then bzr_audit_common; return 0; fi
-  [ "$DRY_RUN" -eq 1 ] || { bzr_sweep_dead_claims; role_sweeps; bzr_fetch_issues || return 0; }
+  if [ "$DRY_RUN" -eq 1 ]; then declare -F role_dry_sweeps >/dev/null && role_dry_sweeps
+  else bzr_sweep_dead_claims; role_sweeps; bzr_fetch_issues || return 0; fi
   [ -f "$STOP_FILE" ] && { bzr_log "stop file present; no dispatch"; return 0; }
 
   local free; free=$(( WORKERS - $(bzr_live_workers) ))

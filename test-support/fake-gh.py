@@ -126,7 +126,8 @@ if args[0] == "api":
     path = args[1] if args[1] != "-X" else args[3]
     method = opt("-X", "GET")
     if "/statuses/" in path and method == "POST":
-        s.setdefault("statuses", []).append({"sha": path.rsplit("/", 1)[1], "context": opt("-f") and None or [a.split("=",1)[1] for a in args if a.startswith("context=")]}); save(s); print("{}"); sys.exit(0)
+        kv = dict(a.split("=", 1) for a in args if "=" in a and not a.startswith("-"))
+        s.setdefault("statuses", []).append({"sha": path.rsplit("/", 1)[1], "context": kv.get("context"), "state": kv.get("state")}); save(s); print("{}"); sys.exit(0)
     if path.endswith("/sub_issues") and method == "GET":
         n = path.split("/issues/")[1].split("/")[0]
         print(json.dumps([{"number": s["issues"][str(c)]["number"], "id": s["issues"][str(c)]["id"], "title": s["issues"][str(c)]["title"],
