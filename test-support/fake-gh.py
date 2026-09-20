@@ -13,7 +13,7 @@ State shape:
                   "body":..,"comments":[..],"reviews":[..],"files":[..],"headRefOid":..}},
    "statuses": [], "labels_created": [], "merged": [], "next_id": 1}
 """
-import json, os, sys, datetime
+import json, os, sys, datetime, re
 
 STATE = os.environ["FAKE_GH_STATE"]
 RECORD = os.environ.get("RECORD")
@@ -68,7 +68,8 @@ if cmd == ["api", "graphql"]:
 
 if cmd == ["issue", "view"]:
     n = args[2]; i = s["issues"][n]
-    print(json.dumps({"number": i["number"], "id": i["id"], "title": i["title"], "body": i.get("body", ""), "state": i["state"],
+    # like real gh: --json id is the GraphQL node id, NOT the numeric id the sub-issue attach needs
+    print(json.dumps({"number": i["number"], "id": "I_kwNODE%d" % i["id"], "title": i["title"], "body": i.get("body", ""), "state": i["state"],
                       "labels": [{"name": l} for l in i["labels"]],
                       "comments": [{"author": {"login": c["author"]}, "body": c["body"], "createdAt": c["createdAt"]} for c in i["comments"]]}))
     sys.exit(0)
@@ -140,6 +141,9 @@ if args[0] == "api":
         child = next(k for k, v in s["issues"].items() if v["id"] == sid)
         s["issues"][n].setdefault("sub_issues", []).append(int(child)); s["issues"][child]["parent"] = int(n); save(s); print("{}"); sys.exit(0)
     if "/pulls/" in path and path.endswith("/comments"): print("[]"); sys.exit(0)
+    m = re.fullmatch(r"repos/[^/]+/[^/]+/issues/(\d+)", path)
+    if m and method == "GET":
+        i = s["issues"][m.group(1)]; print(json.dumps({"number": i["number"], "id": i["id"], "node_id": "I_kwNODE%d" % i["id"], "title": i["title"], "state": i["state"].lower()})); sys.exit(0)
     print("{}"); sys.exit(0)
 
 sys.exit(0)

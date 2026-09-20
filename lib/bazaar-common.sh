@@ -549,7 +549,9 @@ bzr_create_sub_issue() {  # <parent> <spec-id> <path> <title> → number
   printf '<!-- bzr-sub-issue parent=%s spec=%s -->\nImplements %s (`%s`), part of #%s.\n\nRefs #%s\n' "$parent" "$sid" "$sid" "$path" "$parent" "$parent" > "$body"
   url=$(gh issue create --repo "$REPO" --title "$title" --body-file "$body" 2>>"$LOG") || return 1
   num="${url##*/}"
-  id=$(gh issue view "$num" --repo "$REPO" --json id 2>>"$LOG" | bzr_json id)
+  # The attach call needs the numeric REST id; `gh issue view --json id` returns the
+  # GraphQL node id (I_kw…) and GitHub answers 422. Verified 2026-09-20.
+  id=$(gh api "repos/$REPO/issues/$num" 2>>"$LOG" | bzr_json id)
   gh api -X POST "repos/$REPO/issues/$parent/sub_issues" -F "sub_issue_id=$id" >>"$LOG" 2>&1 \
     || bzr_log "WARNING: created #$num but could not attach it as a sub-issue of #$parent"
   echo "$num"

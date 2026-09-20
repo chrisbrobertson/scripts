@@ -68,6 +68,14 @@ new_case s6 '{"1":{"body":"<!-- bzr-sub-issue parent=9 spec=X-TASK-A -->\nRefs #
 run --once >/dev/null 2>&1
 assert_eq "sub-issue body marker with no parent link yet → never intake" "$(labels 1)" ""
 
+new_case s7 '{"1":{},"2":{},"3":{"labels":["bzr-ready"]}}'
+run --issue 2 >/dev/null 2>&1
+assert_eq "--issue N dispatches only that issue" "$(labels 1)/$(labels 2)" "/bzr-spec-review"
+rc=0; run --issue 3 >/dev/null 2>&1 || rc=$?
+assert_eq "--issue on a bzr-labelled issue → exit 2 without --force" "$rc/$(labels 3)" "2/bzr-ready"
+run --issue 3 --force >/dev/null 2>&1
+assert_eq "--issue --force redrafts (label replaced)" "$(labels 3)" "bzr-spec-review"
+
 # ---- bounce ----
 new_case b1 '{"1":{"labels":["bzr-needs-info"],"comments":[{"author":"me","body":"<!-- bzr-issue-worker phase=questions ts=x -->\n1. what?","createdAt":"2026-02-01T00:00:00Z"},{"author":"me","body":"answer: this","createdAt":"2026-02-02T00:00:00Z"}]}}'
 run --once >/dev/null 2>&1

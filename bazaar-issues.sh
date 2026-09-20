@@ -21,13 +21,32 @@ SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 # shellcheck source=lib/bazaar-review.sh
 . "$SCRIPTS_DIR/lib/bazaar-review.sh"   # for post_codex_review_status only
 
+ONLY_ISSUE=""; FORCE=0
+role_usage_extra() {
+  cat <<U
+bazaar-issues.sh only:
+  --issue N                  Dispatch this issue once and exit; it must carry no bzr-* label unless --force.
+  --force                    Dispatch even if the issue carries a bzr-* label (it is replaced by bzr-drafting).
+U
+}
+role_parse_arg() {
+  case "$1" in
+    --issue) [ -n "${2:-}" ] && [[ "$2" =~ ^[0-9]+$ ]] || bzr_die_usage "--issue requires a number"; ONLY_ISSUE="$2"; BZR_ROLE_CONSUMED=2 ;;
+    --issue=*) ONLY_ISSUE="${1#*=}"; [[ "$ONLY_ISSUE" =~ ^[0-9]+$ ]] || bzr_die_usage "--issue requires a number"; BZR_ROLE_CONSUMED=1 ;;
+    --force) FORCE=1; BZR_ROLE_CONSUMED=1 ;;
+    *) BZR_ROLE_CONSUMED=0 ;;
+  esac
+}
 role_claim_label() { echo bzr-drafting; }
 role_queue_label() { echo ""; }
 role_release_label() { echo ""; }
 role_worker_cmd() { echo "${BZR_WORKER_OVERRIDE:-$SCRIPTS_DIR/bazaar-issue-worker.sh} $1"; }
 # Intake: no bzr-* label, and not a draft-time sub-issue whose parent link has not
 # landed yet (gh issue create returns before the sub_issues POST attaches it).
-role_candidates() { bzr_candidates 'not i["sub_marker"] and not any(l.startswith("bzr-") for l in i["labels"])'; }
+role_candidates() {
+  if [ -n "$ONLY_ISSUE" ]; then echo "$ONLY_ISSUE"; return 0; fi   # validated in main, below
+  bzr_candidates 'not i["sub_marker"] and not any(l.startswith("bzr-") for l in i["labels"])'
+}
 
 # After a merge the head branch may be gone (auto-delete); read the merged files
 # from origin/$DEFAULT_BRANCH instead. Writes $BZR_TMP/l4-<issue>.tsv.
@@ -219,4 +238,11 @@ role_audit() {
 }
 
 bzr_init issues "$@"
+if [ -n "$ONLY_ISSUE" ]; then
+  ONCE=1
+  if [ "$FORCE" -eq 1 ]; then BZR_SKIP_LABEL_CHECK=1
+  elif bzr_issue_labels "$ONLY_ISSUE" | grep -q '^bzr-'; then
+    echo "ERROR: issue #$ONLY_ISSUE already carries a bzr-* label ($(bzr_issue_labels "$ONLY_ISSUE" | grep '^bzr-' | tr '\n' ' ')); use --force to redraft" >&2; exit 2
+  fi
+fi
 bzr_controller_main
