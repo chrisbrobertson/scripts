@@ -222,11 +222,12 @@ bzr_child_issues() { ls "$BZR_CHILDREN" 2>/dev/null; }
 
 # ---------- comments and markers ----------
 
-# bzr_comment issue|pr <number> <body-file>. Refuses any agent-authored body that
-# contains the approval word (controller invariant: only humans say it).
+# bzr_comment issue|pr <number> <body-file>. Refuses an agent-authored body that
+# contains the approval word unless the body carries a <!-- bzr- marker (marker
+# comments are excluded from approval detection, so they may explain how to approve).
 bzr_comment() {
   local kind="$1" num="$2" file="$3"
-  if grep -qiE '(^|[^a-z])approved([^a-z]|$)' "$file"; then
+  if ! grep -qF '<!-- bzr-' "$file" && grep -qiE '(^|[^a-z])approved([^a-z]|$)' "$file"; then
     bzr_log "REFUSED comment on $kind #$num: agent comments may not contain the approval word"; return 2
   fi
   [ "$DRY_RUN" -eq 1 ] && { bzr_log "dry-run: would comment on $kind #$num"; return 0; }

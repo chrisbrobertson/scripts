@@ -353,7 +353,8 @@ post_reviewer_review() {
   [ -s "$review_file" ] || return 0
   local reviewer_name body
   case "$REVIEWER" in codex) reviewer_name="Codex" ;; claude) reviewer_name="Claude" ;; *) reviewer_name="$REVIEWER" ;; esac
-  body="**${reviewer_name} review — PR #${pr_num} cycle ${cycle} of ${max}**
+  body="<!-- bzr-review reviewer=$REVIEWER cycle=$cycle of=$max -->
+**${reviewer_name} review — PR #${pr_num} cycle ${cycle} of ${max}**
 
 \`\`\`
 $(cat "$review_file")

@@ -166,6 +166,9 @@ new_case guard '{"1":{"labels":[]}}'
 printf 'This looks approved to me\n' > "$TMP/bad.md"
 rc=0; ( source "$ROOT/lib/bazaar-common.sh"; source "$TMP/role.sh"; bzr_init build --repo o/r --once; bzr_comment issue 1 "$TMP/bad.md" ) >/dev/null 2>&1 || rc=$?
 assert_eq "agent comment containing the approval word is refused" "$(comments 1 | wc -l | tr -d ' ')" "0"
+printf '<!-- bzr-issue-worker phase=review ts=t -->\nTo accept, comment a line containing the word approved.\n' > "$TMP/ok.md"
+( source "$ROOT/lib/bazaar-common.sh"; source "$TMP/role.sh"; bzr_init build --repo o/r --once; bzr_comment issue 1 "$TMP/ok.md" ) >/dev/null 2>&1
+assert_eq "marker comment may explain how to approve" "$(comments 1 | wc -l | tr -d ' ')" "1"
 
 # ---- usage ----
 rc=0; run_ctl u --workers 9 >/dev/null 2>&1 || rc=$?; assert_eq "--workers 9 → usage exit 2" "$rc" "2"

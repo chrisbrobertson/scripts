@@ -60,7 +60,8 @@ neg = re.compile(r"\b(not|isn.t|un|never|before|until)\W{0,3}approved\b|\bunappr
 pos = re.compile(r"\bapproved\b", re.I)
 for c in p.get("comments", []):
     b = c.get("body") or ""
-    if "<!-- bzr-" in b or not ok((c.get("author") or {}).get("login", "")): continue
+    if "<!-- bzr-" in b or b.lstrip().startswith(("**Codex review", "**Claude review", "**bazaar", "**babysit")): continue
+    if not ok((c.get("author") or {}).get("login", "")): continue
     if pos.search(b) and not neg.search(b): sys.exit(0)
 sys.exit(1)' "$BZR_APPROVERS"
 }
@@ -109,6 +110,33 @@ PY
   git -C "$root" worktree remove --force "$wt" >>"$LOG" 2>&1 || rm -rf "$wt"
 }
 
+# After a merge the head branch may be gone (auto-delete); read the merged files
+# from origin/$DEFAULT_BRANCH instead. Writes $BZR_TMP/l4-<issue>.tsv.
+collect_l4s_from_default() {  # <issue> <pr>
+  local issue="$1" pr="$2" root f
+  root=$(project_root) || return 1
+  git -C "$root" fetch --quiet origin "$DEFAULT_BRANCH" >>"$LOG" 2>&1 || return 1
+  : > "$BZR_TMP/l4-$issue.tsv"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    # (python3 - reads its program from stdin, so the file content goes via a temp file)
+    git -C "$root" show "origin/$DEFAULT_BRANCH:$f" > "$BZR_TMP/l4src" 2>/dev/null || continue
+    python3 - "$BZR_TMP/l4-$issue.tsv" "$f" "$BZR_TMP/l4src" <<'PY' || true
+import re, sys
+s = open(sys.argv[3]).read(); l4out, rel = sys.argv[1], sys.argv[2]
+m = re.match(r"^---\n(.*?)\n---\n", s, re.S)
+if not m: sys.exit(0)
+fm = m.group(1)
+st = re.search(r"^spec_type:\s*(\S+)", fm, re.M)
+if not st or st.group(1) != "task": sys.exit(0)
+sid = (re.search(r"^id:\s*(\S+)", fm, re.M) or [None, ""])[1]
+t = re.search(r"^## TL;DR\s*\n+(.+)", s, re.M)
+title = re.split(r"(?<=[.!?])\s", t.group(1).strip())[0][:120] if t else rel
+open(l4out, "a").write("%s\t%s\t%s\n" % (sid, rel, title))
+PY
+  done <<< "$(pr_files "$pr")"
+}
+
 sub_issue_markers() {  # <parent> → lines "number state spec-id"
   gh api "repos/$REPO/issues/$1/sub_issues" 2>>"$LOG" | python3 -c '
 import json, sys, re
@@ -132,6 +160,7 @@ create_sub_issue() {  # <parent> <spec-id> <path> <title>
 # Reconcile draft-time sub-issues with the merged L4 list: create missing, close dropped.
 reconcile_sub_issues() {  # <parent> ; reads $BZR_TMP/l4-<parent>.tsv ; prints created/kept numbers
   local parent="$1" sid path title num st have want=""
+  [ -f "$BZR_TMP/l4-$parent.tsv" ] || { bzr_log "reconcile #$parent: no L4 list available; leaving sub-issues untouched"; return 0; }
   while IFS=$'\t' read -r sid path title; do [ -n "$sid" ] && want="$want $sid"; done < "$BZR_TMP/l4-$parent.tsv"
   local n_l4; n_l4=$(grep -c . "$BZR_TMP/l4-$parent.tsv" || true)
   [ "$n_l4" -ge 2 ] || want=""                      # zero or one L4 → no sub-issues
@@ -182,7 +211,7 @@ approve_issue() {  # <issue> <pr> <state> <mergedAt>
     bzr_log "approved #$issue pr=$pr merged head=${sha:0:8}"
   else
     bzr_log "approval #$issue: PR #$pr already merged; resuming at sub-issue reconciliation"
-    flip_spec_status "$issue" "$pr" >/dev/null 2>&1 || true   # (re)collects the L4 list from the branch
+    collect_l4s_from_default "$issue" "$pr" || { bzr_log "approval #$issue: could not read merged specs from origin/$DEFAULT_BRANCH; leaving sub-issues untouched"; return 1; }
   fi
   subs=$(reconcile_sub_issues "$issue" | tr '\n' ' ')
   update_specs_line "$issue" "$pr"

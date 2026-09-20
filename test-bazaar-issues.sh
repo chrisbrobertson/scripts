@@ -104,16 +104,31 @@ new_case a6 '{"7":{"labels":["bzr-spec-review"]}}' '{"12":{"headRefName":"bzr/sp
 spec_branch 7 1; run --once >/dev/null 2>&1
 assert_eq "one L4 → no sub-issues" "$(field issues/7/sub_issues)" "[]"
 
+# ---- approval: reviewer comment containing the word never approves ----
+new_case a2b '{"7":{"labels":["bzr-spec-review"]}}' '{"12":{"headRefName":"bzr/spec-7","files":["specs/L3-thing.md"],"comments":[{"author":"me","body":"**Codex review — PR #12 cycle 1 of 4**\n- clarify which changes are approved by the owner","createdAt":"t"},{"author":"me","body":"<!-- bzr-review reviewer=codex cycle=2 of=4 -->\napproved wording is fine","createdAt":"t2"}]}}'
+spec_branch 7 0; run --once >/dev/null 2>&1
+assert_eq "reviewer/pipeline comments containing 'approved' never approve" "$(labels 7)/$(field prs/12/state)" "bzr-spec-review/OPEN"
+
 # ---- approval: merge fails → stays, comment; resume after merge ----
 new_case a7 '{"7":{"labels":["bzr-spec-review"]}}' '{"12":{"headRefName":"bzr/spec-7","files":["specs/L3-thing.md"],"comments":[{"author":"me","body":"approved","createdAt":"t"}]}}'
 spec_branch 7 0; FAKE_GH_MERGE_FAIL=1 run --once >/dev/null 2>&1
 assert_eq "merge failure → stays bzr-spec-review" "$(labels 7)" "bzr-spec-review"
 assert_grep "merge failure commented" "merge failed" <(comments 7)
 new_case a8 '{"7":{"labels":["bzr-spec-review"],"sub_issues":[8]},"8":{"parent":7,"body":"<!-- bzr-sub-issue parent=7 spec=X-TASK-P1 -->"}}' '{"12":{"headRefName":"bzr/spec-7","state":"MERGED","mergedAt":"t","files":["specs/L3-thing.md","specs/L4-part1.md","specs/L4-part2.md"]}}'
-spec_branch 7 2; run --once >/dev/null 2>&1
+spec_branch 7 2; git -C "$CASE/clone" push -q origin "bzr/spec-7:main" 2>/dev/null   # merged state: main holds the specs
+run --once >/dev/null 2>&1
 assert_eq "AT7 already-merged PR → resume: parent bzr-ready" "$(labels 7)" "bzr-ready"
 assert_eq "AT7 resume creates only the missing sub-issue" "$(field issues/7/sub_issues)" "[8, 9]"
 assert_eq "AT7 no duplicate for the existing one" "$(python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); print(sum(1 for i in s["issues"].values() if "spec=X-TASK-P1" in i["body"]))' "$FAKE_GH_STATE")" "1"
+# resume after merge with the head branch already deleted: sub-issues must survive
+new_case a8b '{"7":{"labels":["bzr-spec-review"],"sub_issues":[8,9]},"8":{"parent":7,"body":"<!-- bzr-sub-issue parent=7 spec=X-TASK-P1 -->"},"9":{"parent":7,"body":"<!-- bzr-sub-issue parent=7 spec=X-TASK-P2 -->"}}' '{"12":{"headRefName":"bzr/spec-7","state":"MERGED","mergedAt":"t","files":["specs/L3-thing.md","specs/L4-part1.md","specs/L4-part2.md"]}}'
+spec_branch 7 2; git -C "$CASE/clone" push -q origin "bzr/spec-7:main" 2>/dev/null; git -C "$CASE/clone" push -q origin --delete "bzr/spec-7" 2>/dev/null
+run --once >/dev/null 2>&1
+assert_eq "resume with deleted head branch: L4s read from main, both sub-issues kept" "$(field issues/8/state)/$(field issues/9/state)/$(labels 7)" "OPEN/OPEN/bzr-ready"
+new_case a8c '{"7":{"labels":["bzr-spec-review"],"sub_issues":[8]},"8":{"parent":7,"body":"<!-- bzr-sub-issue parent=7 spec=X-TASK-P1 -->"}}' '{"12":{"headRefName":"bzr/spec-7","state":"MERGED","mergedAt":"t","files":["specs/L3-thing.md","specs/L4-part1.md","specs/L4-part2.md"]}}'
+git -C "$CASE/clone" remote set-url origin /nonexistent; run --once >/dev/null 2>&1
+assert_eq "resume with unreachable origin: nothing closed, issue untouched" "$(field issues/8/state)/$(labels 7)" "OPEN/bzr-spec-review"
+
 # dropped L4 → its sub-issue closed
 new_case a9 '{"7":{"labels":["bzr-spec-review"],"sub_issues":[8,9]},"8":{"parent":7,"body":"<!-- bzr-sub-issue parent=7 spec=X-TASK-P1 -->"},"9":{"parent":7,"body":"<!-- bzr-sub-issue parent=7 spec=X-TASK-GONE -->"}}' '{"12":{"headRefName":"bzr/spec-7","files":["specs/L3-thing.md","specs/L4-part1.md","specs/L4-part2.md"],"comments":[{"author":"me","body":"approved","createdAt":"t"}]}}'
 spec_branch 7 2; run --once >/dev/null 2>&1
