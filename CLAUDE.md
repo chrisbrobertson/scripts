@@ -45,6 +45,7 @@ empirical tests (`test-*`). No formal test suite, no build step, no CI.
 | `spec-guide.md` | **Schema document for spec-driven work in this repo — read it before creating or editing any spec.** Defines the TIF L1–L4 format (frontmatter, section layout by layer, ID scheme), the raw-sources/wiki/schema architecture, and the ingest/query/lint workflows. |
 | `babysit-specs/` | TIF specs for the babysit script family (L1–L4 + QA + security plans); see `babysit-specs/README.md` |
 | `bazaar-builder-specs/` | TIF specs + implementation plan for **Bazaar Builder**, the two-controller successor to work-prep/builder (prefix `BZR`); read `index.md` first |
+| `docs/BAZAAR-BUILDER.md` | **Operator guide for Bazaar Builder**: quickstart, prerequisites, label state machine, debugging, recovery recipes, config reference. Read this before running the controllers. |
 | `lib/bazaar-review.sh` | Sourced library: convergent implementer/reviewer cycle (`run_review_cycle --mode code\|spec`), extracted from the builder and work-prep for Bazaar. Never labels, toggles draft, posts status, or merges. `babysit-with-review.sh` keeps its own copy. |
 | `test-bazaar-review-lib.sh` | Recording-stub harness for `lib/bazaar-review.sh` (claude/codex/gh/sleep stubs on PATH, throwaway git origin); run before touching the lib |
 | `lib/bazaar-common.sh` | Shared controller loop for the two Bazaar controllers: label queue, pid-held claims (no time lease), three-attempt escalation, comment guard, role hooks. bash 3.2 + python3, no jq. |
