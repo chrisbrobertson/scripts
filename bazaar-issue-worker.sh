@@ -97,14 +97,16 @@ git -C "$WT" config user.name "bazaar-issue-worker" >/dev/null; git -C "$WT" con
 # Scope checks diff against the branch point, not the moving default branch.
 BASE_SHA=$(git -C "$WT" merge-base "origin/$DEFAULT_BRANCH" HEAD 2>/dev/null || echo "$BASE_SHA")
 
-# Only spec-dir Markdown may change (invariant 6); at least one spec with frontmatter.
+# Only files under the spec directory may change, at any depth and of any type
+# (invariant 6): specs, index/log, _evidence/, _decisions/, plans/ … ; at least one
+# spec with frontmatter must be among them.
 validate_spec_paths() {  # <worktree> <base-sha>
   local wt="$1" base="$2" p n=0
   { git -C "$wt" diff --name-only "$base"; git -C "$wt" ls-files --others --exclude-standard; } | sort -u > "$BZR_TMP/paths"
   while IFS= read -r p; do
     [ -n "$p" ] || continue
-    case "$p" in "$SPEC_DIR"/*.md) ;; *) echo "out-of-scope change: $p" >&2; return 1 ;; esac
-    [ -f "$wt/$p" ] && grep -q '^spec_type:' "$wt/$p" && n=$((n+1))
+    case "$p" in "$SPEC_DIR"/*) ;; *) echo "out-of-scope change: $p" >&2; return 1 ;; esac
+    case "$p" in *.md) [ -f "$wt/$p" ] && grep -q '^spec_type:' "$wt/$p" && n=$((n+1)) ;; esac
   done < "$BZR_TMP/paths"
   [ "$n" -ge 1 ] || { echo "no spec file with frontmatter changed" >&2; return 1; }
 }
@@ -207,7 +209,7 @@ $(cat "$RUN_DIR/normalised.md")
 
 Requirements:
 1. bug → one L4 task spec whose parent_feature is the existing L3 that owns the behaviour (create that L3 too only if none exists). feature → a new or amended L3 plus one L4 per PR-sized unit of work. Two or more L4s become GitHub sub-issues automatically; keep each L4 genuinely PR-sized.
-2. Every file you add or change must be under ./$SPEC_DIR (specs, index.md, log.md). Do not change code, tests, or configuration. Do not run gh, push, open a PR, or edit issues; the wrapper owns lifecycle.
+2. Every file you add or change must be under ./$SPEC_DIR — specs, index.md, log.md, and any corpus support files the schema calls for (evidence, decisions, plans). Do not change code, tests, or configuration. Do not run gh, push, open a PR, or edit issues; the wrapper owns lifecycle.
 3. Frontmatter per the schema, status: review, ids per the corpus prefix. Cite the issue URL https://github.com/$REPO/issues/$ISSUE in each new spec.
 4. Never infer a design decision: unknowns become [ASSUMPTION] with "Flips if:" or [OPEN: … — owner: …]. Do not mark anything status: ready.
 5. Update ./$SPEC_DIR/index.md and append to ./$SPEC_DIR/log.md if they exist.
@@ -230,7 +232,7 @@ git -C "$WT" push --quiet -u origin "HEAD:refs/heads/$BRANCH" >>"$LOG" 2>&1 || {
 fi   # end of the verify+draft passes (skipped on resume-at-review)
 
 # ---------- PR (reuse an open one on this branch) ----------
-SPEC_PATHS=$(grep -vE 'index\.md$|log\.md$' "$BZR_TMP/paths" | tr '\n' ' ')   # -E: BSD grep has no \| in BRE
+SPEC_PATHS=$(while IFS= read -r p; do [ -f "$WT/$p" ] && grep -q '^spec_type:' "$WT/$p" && echo "$p"; done < "$BZR_TMP/paths" | tr '\n' ' ')   # spec files only
 if [ -z "$PR" ]; then
   cat > "$BZR_TMP/prbody.md" <<EOP
 <!-- bzr-spec issue=$ISSUE class=$CLASS -->

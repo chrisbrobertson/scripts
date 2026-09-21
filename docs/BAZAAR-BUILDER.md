@@ -215,7 +215,7 @@ grep -v '^{"type"' ~/.bazaar/<owner>-<repo>/logs/issues-123-*.log | tail -40
 | `STUCK reviewer unavailable: Codex CLI too old` | `codex` needs upgrading for the configured model | `codex update` |
 | Issue escalated with `n automatic attempts failed` | three transient failures in a row | read the attempt markers on the issue, fix the cause, remove `bzr-blocked` |
 | `BLOCKED spec review: 6 cycles did not clear every BLOCKING finding` | reviewer kept finding real gaps | read the last review on the PR; fix by hand and comment `approved`, or close the PR; then remove `bzr-blocked` |
-| `BLOCKED draft violated the spec-only contract: out-of-scope change: …` | the drafting model touched code | usually a prompt/CLAUDE.md conflict; check the worker log, then `--force` to retry |
+| `BLOCKED draft violated the spec-only contract: out-of-scope change: …` | the drafting model touched a file outside the spec directory (anything under it, at any depth, is allowed) | usually a prompt/CLAUDE.md conflict; check the worker log, then `--force` to retry |
 | `SPEC_GAP … is status: review, not ready` | the spec PR was merged by hand without the approval sweep | let the sweep run (`bazaar-issues.sh --once`) or set `status: ready` yourself |
 | `SPEC_GAP the issue body has no Specs: line` | same as above, or the body was edited | as above |
 | `ERROR: bazaar-issues already running (pid …)` | a controller is up, or its lock is stale | `kill -0 <pid>`; if dead, delete the lock file |

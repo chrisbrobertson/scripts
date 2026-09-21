@@ -51,3 +51,7 @@ Third run (fixed remediation prompt, `--force`, Claude reviewer) ran four more c
 ## [2026-09-20] status | Pilot run 4 on #745 converged: PR #761 ready for approval
 
 With the cap at 6 and resume-at-review, run 4 skipped verify and draft (zero implementer passes before the review), resumed PR #761, and converged in two cycles (2 → 0 BLOCKING). PR #761 is out of draft, #745 is `bzr-spec-review`, and the worker's comment tells the owner how to approve. The issue loop has now been exercised end to end on a real repo through to the human approval gate. Next: owner approves or rejects PR #761; on approval the controller merges, flips the three specs to ready, writes the `Specs:` line, and `bazaar-build.sh` picks #745 up for its first real build.
+
+## [2026-09-20] amend | Spec-only contract covers the whole spec directory
+
+A pilot draft was blocked for updating a corpus evidence file: the issue worker's scope check allowed only top-level `*.md` under the spec directory, while `bazaar-specs/` keeps `_evidence/`, `_decisions/`, and `plans/` with mixed file types. The check now allows any path under the spec directory (still nothing outside it), the draft and remediation prompts say so, and the PR's spec list is derived from frontmatter rather than filename. Issue-worker L3 invariant 6 clarified. Harness: issue-worker 46, review-lib 62, e2e 18.

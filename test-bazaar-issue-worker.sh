@@ -199,6 +199,13 @@ rc=$(run_worker)
 assert_grep "out-of-scope change → BLOCKED" "BLOCKED draft violated the spec-only contract" "$BZR_SENTINEL"
 assert_eq "no PR when contract violated" "$(field prs)" "{}"
 
+# ---- support files under the spec dir (subdirs, non-.md) are in scope ----
+new_case evidence 'body'
+stub claude.1 "$VERIFY_OK_STUB"; stub claude.2 "$(draft_stub 1 'mkdir -p specs/_evidence specs/_decisions; echo "bz --help" > specs/_evidence/cli-help.txt; printf "# open\n" > specs/_decisions/OPEN.md')"; stub codex.1 "$CLEAN"
+rc=$(run_worker)
+assert_eq "evidence/decision files under the spec dir are allowed" "$(sentinel)" "SPEC_REVIEW 101"
+assert_grep "PR spec list still lists only spec files" 'Specs: `specs/L3-thing.md` `specs/L4-part1.md`' <(field prs/101/body)
+
 # ---- review cap → BLOCKED, PR comment ----
 new_case cap 'body'
 stub claude.1 "$VERIFY_OK_STUB"; stub claude.2 "$(draft_stub 1)"; stub codex.default "$ONE_BLOCKING"; stub claude.default $'@@COMMIT\nDONE_REVIEW'

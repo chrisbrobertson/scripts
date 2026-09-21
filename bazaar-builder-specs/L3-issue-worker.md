@@ -90,7 +90,7 @@ One sentinel; the issue in exactly one of `bzr-needs-info`, `bzr-spec-review`, `
 3. Every agent comment begins with the marker line.
 4. Questions are numbered and each names what decision it unblocks.
 5. A re-entry never re-asks a question the human has answered.
-6. The spec PR touches only files under the spec directory.
+6. The spec PR touches only files under the spec directory (any depth, any type: specs, `index.md`, `log.md`, `_evidence/`, `_decisions/`, `plans/` …). **Clarified 2026-09-20** after a pilot draft was blocked for updating an evidence file; the check had allowed only top-level `*.md`.
 7. The issue leaves `bzr-drafting` on every exit path, including crash (the controller's dead-pid release covers crash).
 8. Original issue text is never lost.
 9. The set of open sub-issues carrying this parent's marker always equals the L4 set in the current spec PR head.
