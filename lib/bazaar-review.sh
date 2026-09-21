@@ -790,7 +790,7 @@ Before judging, READ:
 2. EVERY OTHER SPEC in ./__SPEC_DIR__/ — you cannot assess consistency or duplication without knowing what the corpus already says. This is the most important step and the one most easily skipped.
 3. ./CLAUDE.md for project conventions.
 4. The schema this corpus follows: __SPEC_GUIDE__ (read it if the path exists and is readable; if it is not, apply the criteria below on their own).
-5. The actual code the spec describes, enough to tell whether its claims about current behavior are true.
+5. The actual code, enough to tell whether the spec's claims about the SHIPPED system are true. For target values and unbuilt behavior, the ground is the ticket and the decision record, not the code.
 
 Judge the spec on these criteria. A finding is BLOCKING if it would make the spec wrong to approve:
 
@@ -800,7 +800,9 @@ Judge the spec on these criteria. A finding is BLOCKING if it would make the spe
 - **Schema violation.** Missing or malformed frontmatter keys for its layer, wrong ID scheme, missing required sections, wrong layer for what it actually describes.
 - **Not implementable.** No acceptance criteria or equivalent definition of done; requirements too vague to build against; contract (inputs, outputs, error cases) left undefined.
 - **Invented design decisions.** The spec states a design decision as settled that the ticket, the code, and the corpus do not establish — the author inferred it. This is the single most damaging failure mode in a spec corpus and it is easy to miss because invented decisions read as confident prose. An unconfirmed decision must be flagged `[ASSUMPTION]` with what would flip it, not asserted.
-- **Claims about current behavior that are false.** The spec describes the code as doing something it does not do. Verify against the code, do not trust the prose.
+- **Claims about the shipped system that are false.** The spec says the code does something it does not do. Verify against the code. Cite file:line. BLOCKING.
+- **Claims about decided, unbuilt behavior that contradict the record.** The spec states a target value or behavior that the ticket, its comments, a linked decision, or a constraint the spec itself carries forward (a test floor, an invariant) rules out. Verify against the record and the carried-forward constraint, NOT against the code: the code does not have it yet, and "the code does not do this" is not a finding against a target. BLOCKING when the contradiction is with a recorded decision or a carried-forward constraint; otherwise it is an invented decision (above).
+- **Hand-counted inventories.** When the spec maps shipped consumers onto new behavior, judge the CLASSIFICATION RULE, not the list. A rule is acceptable when every consumer you sample lands in exactly one class and the spec names the command that generates the inventory at build time (the L4 `## Validation steps` slot). A literal count ("exactly three", "73 consumers"), a closed list, or a negative-existence claim ("there is no fourth case") is itself ONE BLOCKING finding whose fix is: delete the count, keep the rule, name the generator. Do NOT search for the missing member and do NOT ask the spec to append it. One finding per rule or list; a second counterexample to the same list is the same finding, marked [RECURRENCE], never [NEW].
 
 Output your review using EXACTLY this format:
 
@@ -847,7 +849,9 @@ Judge the spec on the same criteria as before. A finding is BLOCKING if it would
 - Schema violation for its layer (frontmatter, ID scheme, required sections)
 - Not implementable: no acceptance criteria, undefined contract, requirements too vague
 - Invented design decisions asserted as settled rather than flagged `[ASSUMPTION]`
-- False claims about what the code currently does
+- **Claims about the shipped system that are false.** The spec says the code does something it does not do. Verify against the code. Cite file:line. BLOCKING.
+- **Claims about decided, unbuilt behavior that contradict the record.** The spec states a target value or behavior that the ticket, its comments, a linked decision, or a constraint the spec itself carries forward (a test floor, an invariant) rules out. Verify against the record and the carried-forward constraint, NOT against the code: the code does not have it yet, and "the code does not do this" is not a finding against a target. BLOCKING when the contradiction is with a recorded decision or a carried-forward constraint; otherwise it is an invented decision (above).
+- **Hand-counted inventories.** When the spec maps shipped consumers onto new behavior, judge the CLASSIFICATION RULE, not the list. A rule is acceptable when every consumer you sample lands in exactly one class and the spec names the command that generates the inventory at build time (the L4 `## Validation steps` slot). A literal count ("exactly three", "73 consumers"), a closed list, or a negative-existence claim ("there is no fourth case") is itself ONE BLOCKING finding whose fix is: delete the count, keep the rule, name the generator. Do NOT search for the missing member and do NOT ask the spec to append it. One finding per rule or list; a second counterexample to the same list is the same finding, marked [RECURRENCE], never [NEW].
 
 Watch specifically for regressions: a fix for one finding that introduced a new contradiction, or a requirement quietly deleted rather than resolved.
 
@@ -893,9 +897,13 @@ __HISTORY_BLOCK__
 
 Re-read the spec as it stands now, plus EVERY OTHER SPEC in ./__SPEC_DIR__/, ./CLAUDE.md, and __SPEC_GUIDE__ if readable.
 
-Same criteria as previous cycles (contradiction, undeclared duplication, dangling references, schema violation, not implementable, invented design decisions, false claims about the code).
+Same criteria as previous cycles (contradiction, undeclared duplication, dangling references, schema violation, not implementable, invented design decisions, and the three cases below).
 
-**Prescriptive requirement:** every BLOCKING finding MUST carry a concrete `Suggested wording:` line — the actual replacement text or frontmatter change the spec should carry. If you cannot write the replacement yourself, you do not understand the finding well enough to block on it: downgrade it to RECOMMENDED.
+- **Claims about the shipped system that are false.** The spec says the code does something it does not do. Verify against the code. Cite file:line. BLOCKING.
+- **Claims about decided, unbuilt behavior that contradict the record.** The spec states a target value or behavior that the ticket, its comments, a linked decision, or a constraint the spec itself carries forward (a test floor, an invariant) rules out. Verify against the record and the carried-forward constraint, NOT against the code: the code does not have it yet, and "the code does not do this" is not a finding against a target. BLOCKING when the contradiction is with a recorded decision or a carried-forward constraint; otherwise it is an invented decision (above).
+- **Hand-counted inventories.** When the spec maps shipped consumers onto new behavior, judge the CLASSIFICATION RULE, not the list. A rule is acceptable when every consumer you sample lands in exactly one class and the spec names the command that generates the inventory at build time (the L4 `## Validation steps` slot). A literal count ("exactly three", "73 consumers"), a closed list, or a negative-existence claim ("there is no fourth case") is itself ONE BLOCKING finding whose fix is: delete the count, keep the rule, name the generator. Do NOT search for the missing member and do NOT ask the spec to append it. One finding per rule or list; a second counterexample to the same list is the same finding, marked [RECURRENCE], never [NEW].
+
+**Prescriptive requirement:** every BLOCKING finding MUST carry a concrete `Suggested wording:` line — the actual replacement text or frontmatter change the spec should carry. If you cannot write the replacement yourself, you do not understand the finding well enough to block on it: downgrade it to RECOMMENDED. For a hand-counted-inventory finding the suggested wording is the classification rule and the generating command, never the missing member.
 
 **A note on convergence:** if a finding recurs because the underlying question is a design decision nobody has made, the correct resolution is NOT to keep demanding a different answer. It is to require the spec to flag it `[ASSUMPTION]` with a "Flips if:" clause and move on. Specs are allowed to have open questions; they are not allowed to hide them.
 
@@ -932,7 +940,9 @@ How to resolve each kind of finding:
 - **Schema violation:** fix the frontmatter, ID, or section layout to match the corpus convention.
 - **Not implementable:** add the missing acceptance criteria or contract detail. If you cannot, that is itself the finding — flag it.
 - **Invented design decision:** you asserted something the ticket, the code, and the corpus do not establish. Do NOT invent a better-sounding answer. Convert it to an `[ASSUMPTION]` with a "Flips if:" clause so the owner can confirm or correct it. Getting an open question flagged is a success, not a failure.
-- **False claim about current behavior:** verify against the code and correct the spec to describe what the code actually does.
+- **False claim about the shipped system:** verify against the code and correct the description of what ships today. Do not change the target.
+- **Contradiction with the record or a carried-forward constraint:** change the target value, or drop the constraint explicitly and say why. Never keep both.
+- **Counterexample to a list, count, or "no Nth case" claim:** do NOT add the item to the list. Delete the count or the closed list. Write the rule that classifies the counterexample together with the existing members, and add the command that generates the inventory under `## Validation steps` (for example `grep -n 'var(--rule)' app/public/app/app.css`). If the counterexample does not fit any class the rule names, that is a real gap: add the class, not the item.
 
 Constraints — these are hard:
 - Edit ONLY files under the spec directory ./__SPEC_DIR__: the spec(s) under review (__SPEC_PATH__), the corpus's `index.md` and `log.md`, and any corpus support files the schema keeps there (evidence, decisions, plans). Do NOT change code, tests, configuration, or any file outside that directory. The wrapper verifies this after every cycle and will bail the review if you touch anything else.

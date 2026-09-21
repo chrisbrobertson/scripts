@@ -212,6 +212,7 @@ Requirements:
 2. Every file you add or change must be under ./$SPEC_DIR — specs, index.md, log.md, and any corpus support files the schema calls for (evidence, decisions, plans). Do not change code, tests, or configuration. Do not run gh, push, open a PR, or edit issues; the wrapper owns lifecycle.
 3. Frontmatter per the schema, status: review, ids per the corpus prefix. Cite the issue URL https://github.com/$REPO/issues/$ISSUE in each new spec.
 4. Never infer a design decision: unknowns become [ASSUMPTION] with "Flips if:" or [OPEN: … — owner: …]. Do not mark anything status: ready.
+4a. Ground each claim on the right source: cite code for what ships today, cite the issue, a comment, a mockup, or a decision record for what is decided and unbuilt, and keep the two visibly apart (a "Shipped" and a "Decided" bullet, or two subsections). Where the spec maps shipped consumers onto new tokens or behavior, write the classification rule and the command that generates the inventory; never write a count, a closed list, or "there is no other case".
 5. Update ./$SPEC_DIR/index.md and append to ./$SPEC_DIR/log.md if they exist.
 6. Commit your work on this branch (do not rename the branch).
 
