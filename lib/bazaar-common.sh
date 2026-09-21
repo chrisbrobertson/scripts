@@ -40,7 +40,7 @@ BZR_LABELS="bzr-drafting bzr-needs-info bzr-spec-review bzr-ready bzr-building b
 
 # ---------- tiny utils ----------
 
-bzr_log() { printf '[ctl:%s] %s\n' "${BZR_ROLE:-?}" "$*" | tee -a "${LOG:-/dev/null}" >&2; }
+bzr_log() { printf '[%s] %s\n' "${BZR_LOG_TAG:-ctl:${BZR_ROLE:-?}}" "$*" | tee -a "${LOG:-/dev/null}" >&2; }
 bzr_die() { echo "ERROR: $*" >&2; exit 1; }
 bzr_die_usage() { echo "ERROR: $*" >&2; bzr_usage >&2; exit 2; }
 bzr_now() { date -u +%FT%TZ; }
@@ -218,7 +218,7 @@ bzr_ensure_labels() {
 bzr_child_pid() { cat "$BZR_CHILDREN/$1" 2>/dev/null; }
 bzr_child_set() { printf '%s\n' "$2" > "$BZR_CHILDREN/$1"; }
 bzr_child_unset() { rm -f "$BZR_CHILDREN/$1"; }
-bzr_child_issues() { ls "$BZR_CHILDREN" 2>/dev/null; }
+bzr_child_issues() { ls "$BZR_CHILDREN" 2>/dev/null | grep -v '\.stream$'; }
 
 # ---------- comments and markers ----------
 
@@ -255,8 +255,8 @@ bzr_has_label() { bzr_issue_labels "$1" | grep -qx "$2"; }
 bzr_transition() {  # <issue> <add-label|""> <remove-label|"">
   local issue="$1" add="$2" rm="$3"
   if [ "$DRY_RUN" -eq 1 ]; then bzr_log "dry-run: #$issue +${add:-∅} -${rm:-∅}"; return 0; fi
-  if [ -n "$add" ]; then gh issue edit "$issue" --repo "$REPO" --add-label "$add" >> "$LOG" 2>&1 || return 1; fi
-  if [ -n "$rm" ]; then gh issue edit "$issue" --repo "$REPO" --remove-label "$rm" >> "$LOG" 2>&1 || return 1; fi
+  if [ -n "$add" ]; then gh issue edit "$issue" --repo "$REPO" --add-label "$add" >/dev/null 2>>"$LOG" || return 1; fi
+  if [ -n "$rm" ]; then gh issue edit "$issue" --repo "$REPO" --remove-label "$rm" >/dev/null 2>>"$LOG" || return 1; fi
 }
 
 # ---------- claims ----------
@@ -422,6 +422,7 @@ bzr_reap() {  # collect finished children, hand outcomes to the role
     kill -0 "$pid" 2>/dev/null && continue
     rc=0; wait "$pid" 2>/dev/null || rc=$?
     bzr_child_unset "$issue"
+    [ -f "$BZR_CHILDREN/$issue.stream" ] && { /bin/sleep 1.5; kill "$(cat "$BZR_CHILDREN/$issue.stream")" 2>/dev/null; rm -f "$BZR_CHILDREN/$issue.stream"; }
     sentinel=$(tail -n 1 "$BZR_REPO_DIR/run/$issue.sentinel" 2>/dev/null || true)
     word="${sentinel%% *}"; rest="${sentinel#"$word"}"; rest="${rest# }"
     bzr_log "worker-exit #$issue rc=$rc sentinel=${word:-none}"
@@ -450,6 +451,37 @@ bzr_spawn() {  # <issue>
   ) &
   bzr_child_set "$issue" "$!"
   bzr_log "dispatch #$issue worker=$! log=$log"
+  bzr_stream_worker "$issue" "$!" "$log"
+}
+
+# Relay the worker's readable log lines (those starting with '[' after optional
+# indent: phase notes, [tool]/[text] calls, per-cycle review counts, sentinels) to the
+# controller's stderr as "[#N] …". Raw model JSON and prompt dumps stay in the file.
+# Exits by itself once the worker pid is gone (one final read first).
+bzr_stream_worker() {  # <issue> <worker-pid> <log>
+  [ "${BZR_NO_STREAM:-0}" -eq 1 ] && return 0
+  python3 - "$1" "$2" "$3" <<'PY2' &
+import os, sys, time, re
+issue, pid, path = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+pat = re.compile(r"^\s*\[")
+pos = 0
+def alive():
+    try: os.kill(pid, 0); return True
+    except OSError: return False
+def pump():
+    global pos
+    try:
+        with open(path, "r", errors="replace") as f:
+            f.seek(pos)
+            for line in f:
+                if pat.match(line): sys.stderr.write("[#%s] %s\n" % (issue, line.strip())); sys.stderr.flush()
+            pos = f.tell()
+    except FileNotFoundError: pass
+while alive():
+    pump(); time.sleep(1)
+time.sleep(0.2); pump()
+PY2
+  printf '%s\n' "$!" > "$BZR_CHILDREN/$1.stream"
 }
 
 # Dead-pid release for this role's claim label. Foreign-host claims are skipped.
@@ -581,7 +613,7 @@ bzr_reconcile_sub_issues() {  # <parent> <tsv>
     case " $want " in *" $sid "*) ;; *)
       bzr_log "sub-issue #$num ($sid) not in the current spec set → closing"
       printf 'bazaar: the current spec set no longer contains %s; closing this sub-issue.\n' "$sid" > "$BZR_TMP/close-$num.md"
-      bzr_comment issue "$num" "$BZR_TMP/close-$num.md"; gh issue close "$num" --repo "$REPO" >>"$LOG" 2>&1 || true ;;
+      bzr_comment issue "$num" "$BZR_TMP/close-$num.md"; gh issue close "$num" --repo "$REPO" >/dev/null 2>>"$LOG" || true ;;
     esac
   done <<< "$existing"
 }
@@ -622,7 +654,7 @@ bzr_tick() {
     fi
     [ "${BZR_SKIP_LABEL_CHECK:-0}" -eq 1 ] && q=$(printf '%s' "$live" | head -n 1)   # --force: drop whatever bzr label it has
     if ! bzr_transition "$pick" "$(role_claim_label)" "$q"; then
-      bzr_log "claim-failed #$pick"; gh issue edit "$pick" --repo "$REPO" --remove-label "$(role_claim_label)" >>"$LOG" 2>&1 || true; continue
+      bzr_log "claim-failed #$pick"; gh issue edit "$pick" --repo "$REPO" --remove-label "$(role_claim_label)" >/dev/null 2>>"$LOG" || true; continue
     fi
     bzr_spawn "$pick"; free=$((free-1))
   done

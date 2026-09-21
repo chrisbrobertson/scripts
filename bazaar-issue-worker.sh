@@ -14,7 +14,7 @@ set -uo pipefail
 BZR_SCRIPT_VERSION="0.1.0"
 SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 ISSUE="${1:-${BZR_ISSUE:-}}"; [ -n "$ISSUE" ] || { echo "usage: bazaar-issue-worker.sh <issue>" >&2; exit 2; }
-BZR_ROLE=issues; REPO="${BZR_REPO:?}"; LOG="${BZR_LOG:?}"; DRY_RUN=0
+BZR_ROLE=issues; BZR_LOG_TAG="issue-worker"; REPO="${BZR_REPO:?}"; LOG="${BZR_LOG:?}"; DRY_RUN=0
 BZR_REPO_DIR="${BZR_REPO_DIR:?}"; DEFAULT_BRANCH="${DEFAULT_BRANCH:?}"; BZR_SENTINEL="${BZR_SENTINEL:?}"
 IMPLEMENTER="${IMPLEMENTER:-claude}"; REVIEWER="${REVIEWER:-codex}"
 MAX_SPEC_REVIEW_CYCLES="${MAX_SPEC_REVIEW_CYCLES:-6}"
@@ -194,7 +194,7 @@ CLASS=$(head -n 1 "$RUN_DIR/classification.txt" | tr '[:upper:]' '[:lower:]')
 
 # normalise the body: agent's sections + the original report, verbatim, in a details block (invariant 8)
 { cat "$RUN_DIR/normalised.md"; printf '\n\n<details><summary>Original report</summary>\n\n'; cat "$RUN_DIR/original.md"; printf '\n\n</details>\n'; } > "$BZR_TMP/newbody.md"
-gh issue edit "$ISSUE" --repo "$REPO" --body-file "$BZR_TMP/newbody.md" >>"$LOG" 2>&1 || bzr_log "#$ISSUE WARNING: body normalisation edit failed"
+gh issue edit "$ISSUE" --repo "$REPO" --body-file "$BZR_TMP/newbody.md" >/dev/null 2>>"$LOG" || bzr_log "#$ISSUE WARNING: body normalisation edit failed"
 
 # ---------- pass B: draft specs ----------
 cat > "$BZR_TMP/promptB.txt" <<EOP
@@ -269,7 +269,7 @@ run_review_cycle --mode spec --pr "$PR" --worktree "$WT" --branch "$BRANCH" --ma
 collect_l4s; SUBS=$(bzr_reconcile_sub_issues "$ISSUE" "$BZR_TMP/l4.tsv" | tr '\n' ' ')   # the review may have changed the L4 set
 case "$rc" in
   0)
-    gh pr ready "$PR" --repo "$REPO" >>"$LOG" 2>&1 || bzr_log "#$ISSUE WARNING: gh pr ready failed; PR stays draft"
+    gh pr ready "$PR" --repo "$REPO" >/dev/null 2>>"$LOG" || bzr_log "#$ISSUE WARNING: gh pr ready failed; PR stays draft"
     cat > "$BZR_TMP/done.md" <<EOP
 bazaar-issues: the spec draft for this issue converged after $REVIEW_CYCLES_RUN review cycle(s) and is ready for your review: https://github.com/$REPO/pull/$PR
 

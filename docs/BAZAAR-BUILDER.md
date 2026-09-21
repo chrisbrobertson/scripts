@@ -177,7 +177,32 @@ priority are broken by a Haiku call; `--controller-model none` turns that off.
 
 ## 5. Debugging
 
+### What the terminal shows
+
+Controller events, one line each, prefixed `[ctl:issues]` or `[ctl:build]`: `start`,
+`tick: queue empty`, `dispatch #N worker=<pid> log=<path>`, `skip #N <reason>`, `bounce`,
+`approved`, `sub-issue #M created`, `merged-sweep`, `worker-exit #N rc=<n> sentinel=<word>`,
+`attempt #N n=<k>`, `escalate #N`, `stop file present`, `stopped`.
+
+Worker progress is relayed live with the issue number as prefix, so one terminal tells the
+whole story even with several workers running:
+
+```
+[#758] [issue-worker] #758 resuming existing branch bzr/spec-758
+[#758] [claude implementer] verifying #758...
+[#758] [tool] Bash grep -rn "help" bz/bin bz/lib | head -80
+[#758] [text] The fallback branch prints usage and exits 1 because ...
+[#758] [claude reviewer] template=spec-baseline cycle=1/6
+[#758] [review:spec] PR #770 → cycle 1: 2 BLOCKING, 6 RECOMMENDED
+[#758] [issue-worker] #758 sentinel=SPEC_REVIEW 770
+```
+
+Only lines that start with `[` are relayed; the raw model stream and prompt text stay in the
+worker's log file. `BZR_NO_STREAM=1` turns the relay off (cron jobs, for instance).
+
 ### Where to look
+
+
 
 | What | Where |
 |---|---|

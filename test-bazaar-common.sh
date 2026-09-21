@@ -75,6 +75,27 @@ assert_grep "AT1 skip no-slot logged" "skip #1 no-slot" "$BZR_HOME/o-r/logs/ctl-
 assert_grep "AT1 claim marker posted" "<!-- bzr-claim role=build host=testhost pid=" <(comments 2)
 assert_not_grep "AT1 no model call with model=none" "CALL=claude" "$RECORD"
 
+# ---- worker progress is streamed to the controller terminal ----
+new_case stream '{"1":{"labels":["bzr-ready"]}}'
+cat > "$TMP/bin/stub-worker" <<'S'
+#!/usr/bin/env bash
+echo '  [claude implementer] doing the thing'
+echo '{"type":"assistant","noise":true}'
+echo '[review:code] PR #7 → cycle 1: 0 BLOCKING, 1 RECOMMENDED'
+/bin/sleep 1.2
+printf '%s\n' "${STUB_SENTINEL:-DONE}" > "$BZR_SENTINEL"
+S
+run_ctl stream --once --controller-model none 2>"$CASE/stderr" >/dev/null
+assert_grep "worker phase line streamed with issue prefix" "[#1] [claude implementer] doing the thing" "$CASE/stderr"
+assert_grep "worker review line streamed" "[#1] [review:code] PR #7 → cycle 1: 0 BLOCKING, 1 RECOMMENDED" "$CASE/stderr"
+assert_not_grep "raw model JSON not streamed" '{"type":"assistant"' "$CASE/stderr"
+assert_eq "no stream helper left behind" "$(ls "$BZR_HOME"/o-r/../ 2>/dev/null | grep -c stream)" "0"
+cat > "$TMP/bin/stub-worker" <<'S'
+#!/usr/bin/env bash
+[ -n "${STUB_WORKER_SLEEP:-}" ] && /bin/sleep "$STUB_WORKER_SLEEP"
+printf '%s\n' "${STUB_SENTINEL:-DONE}" > "$BZR_SENTINEL"
+S
+
 # ---- AT11: --workers 2 dispatches exactly two of three ----
 new_case at11 '{"1":{"labels":["bzr-ready"]},"2":{"labels":["bzr-ready"]},"3":{"labels":["bzr-ready"]}}'
 STUB_WORKER_SLEEP=0.3 run_ctl at11 --once --workers 2 --controller-model none >/dev/null 2>&1

@@ -55,3 +55,7 @@ With the cap at 6 and resume-at-review, run 4 skipped verify and draft (zero imp
 ## [2026-09-20] amend | Spec-only contract covers the whole spec directory
 
 A pilot draft was blocked for updating a corpus evidence file: the issue worker's scope check allowed only top-level `*.md` under the spec directory, while `bazaar-specs/` keeps `_evidence/`, `_decisions/`, and `plans/` with mixed file types. The check now allows any path under the spec directory (still nothing outside it), the draft and remediation prompts say so, and the PR's spec list is derived from frontmatter rather than filename. Issue-worker L3 invariant 6 clarified. Harness: issue-worker 46, review-lib 62, e2e 18.
+
+## [2026-09-20] amend | Terminal output: worker progress relayed, GitHub URL echoes silenced
+
+Controllers now relay each worker's readable log lines (those beginning with `[`: phase notes, tool calls, per-cycle review counts, sentinels) to their own stderr as `[#N] …`, via a per-worker python streamer that exits when the worker pid is gone (`BZR_NO_STREAM=1` disables). Worker logs carry their own tags (`[issue-worker]`, `[build-worker]`) instead of `[ctl:…]`. Every GitHub write (`gh issue edit/comment/close`, `gh pr edit/ready/comment/merge/close`, `gh label create`) now discards stdout so the issue and PR URLs `gh` prints no longer litter the log or the terminal; stderr still goes to the log. Operator guide section 5 documents what the terminal shows. Harness: common 38 (streaming case), all others unchanged and green.

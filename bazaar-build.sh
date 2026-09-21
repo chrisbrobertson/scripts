@@ -80,7 +80,7 @@ role_sweeps() {
     if [ "$open_total" -eq 0 ]; then
       bzr_log "merged-sweep #$issue pr=$pr all sub-issues closed → closing parent"
       bzr_marker_comment "$issue" "<!-- bzr-build-merged pr=$pr ts=$(bzr_now) -->" "bazaar-build: PR #$pr merged and every sub-issue is closed; closing."
-      gh issue close "$issue" --repo "$REPO" >>"$LOG" 2>&1 || true
+      gh issue close "$issue" --repo "$REPO" >/dev/null 2>>"$LOG" || true
     elif [ "$open_unblocked" -gt 0 ]; then
       bzr_log "merged-sweep #$issue pr=$pr $open_unblocked unblocked sub-issue(s) remain → bzr-ready (next round)"
       bzr_transition "$issue" bzr-ready bzr-pr-ready

@@ -19,7 +19,7 @@ set -uo pipefail
 BZR_SCRIPT_VERSION="0.1.0"
 SCRIPTS_DIR="${SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 ISSUE="${1:-${BZR_ISSUE:-}}"; [ -n "$ISSUE" ] || { echo "usage: bazaar-build-worker.sh <issue>" >&2; exit 2; }
-BZR_ROLE=build; REPO="${BZR_REPO:?}"; LOG="${BZR_LOG:?}"; DRY_RUN=0
+BZR_ROLE=build; BZR_LOG_TAG="build-worker"; REPO="${BZR_REPO:?}"; LOG="${BZR_LOG:?}"; DRY_RUN=0
 BZR_REPO_DIR="${BZR_REPO_DIR:?}"; DEFAULT_BRANCH="${DEFAULT_BRANCH:?}"; BZR_SENTINEL="${BZR_SENTINEL:?}"
 IMPLEMENTER="${IMPLEMENTER:-claude}"; REVIEWER="${REVIEWER:-codex}"
 MAX_REVIEW_CYCLES="${MAX_REVIEW_CYCLES:-6}"
@@ -178,7 +178,7 @@ ensure_pr() {  # opens the draft PR after the first push if none exists; always 
     local url; url=$(gh pr create --repo "$REPO" --head "$BRANCH" --base "$DEFAULT_BRANCH" --draft --title "#$ISSUE $TITLE" --body-file "$BZR_TMP/prbody.md" 2>>"$LOG") || { sentinel STUCK "gh pr create failed"; exit 1; }
     PR="${url##*/}"; bzr_log "#$ISSUE draft PR #$PR opened on $BRANCH"
   else
-    gh pr edit "$PR" --repo "$REPO" --body-file "$BZR_TMP/prbody.md" >>"$LOG" 2>&1 || true
+    gh pr edit "$PR" --repo "$REPO" --body-file "$BZR_TMP/prbody.md" >/dev/null 2>>"$LOG" || true
   fi
 }
 
@@ -248,7 +248,7 @@ skip_unit() {  # <unit> <reason> <findings-file|"">
       [ -n "$f" ] && [ -s "$f" ] && { printf '\nLast review:\n\n```\n'; cat "$f"; printf '\n```\n'; }
       printf '\nFix the cause and remove `bzr-blocked` from this sub-issue; the parent is rebuilt for the remaining units after the current PR merges.\n'; } > "$BZR_TMP/skip-$u.md"
     bzr_comment issue "$u" "$BZR_TMP/skip-$u.md"
-    gh issue edit "$u" --repo "$REPO" --add-label bzr-blocked >>"$LOG" 2>&1 || true   # the one worker label write
+    gh issue edit "$u" --repo "$REPO" --add-label bzr-blocked >/dev/null 2>>"$LOG" || true   # the one worker label write
   fi
   bzr_log "#$ISSUE unit #$u skipped: $reason"
 }
@@ -316,7 +316,7 @@ Reverts $PRE_SHA..$END_SHA. Refs #$U" >>"$LOG" 2>&1; then
         skip_unit "$U" "review did not converge: $REVIEW_FAIL_REASON (commits $PRE_SHA..$END_SHA reverted)" "${REVIEW_LAST_FILE:-}"
       else
         git -C "$WT" revert --abort >>"$LOG" 2>&1 || git -C "$WT" reset --hard -q "$END_SHA" >>"$LOG" 2>&1 || true
-        gh pr ready "$PR" --repo "$REPO" --undo >>"$LOG" 2>&1 || true
+        gh pr ready "$PR" --repo "$REPO" --undo >/dev/null 2>>"$LOG" || true
         printf 'bazaar-build: unit #%s did not converge (%s) and its commits could not be reverted cleanly, so the build halted with the branch as-is. Resolve by hand.\n' "$U" "$REVIEW_FAIL_REASON" > "$BZR_TMP/rc.md"
         comment_issue halt "$BZR_TMP/rc.md"; ensure_pr; sentinel BLOCKED "unit #$U: revert conflict after non-convergence"; exit 0
       fi ;;
@@ -331,13 +331,13 @@ done < "$RUN_DIR/order.txt"
 N_CONV=$(state_get converged | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
 SKIPPED=$(state_get skipped | python3 -c 'import json,sys; print(" ".join("#"+k for k in json.load(sys.stdin)))')
 if [ "$N_CONV" -eq 0 ]; then
-  [ -n "$PR" ] && gh pr close "$PR" --repo "$REPO" >>"$LOG" 2>&1 || true
+  [ -n "$PR" ] && gh pr close "$PR" --repo "$REPO" >/dev/null 2>>"$LOG" || true
   sentinel BLOCKED "no unit converged in round $ROUND (skipped: ${SKIPPED:-none})"; exit 0
 fi
 git -C "$WT" push --quiet origin "HEAD:refs/heads/$BRANCH" >>"$LOG" 2>&1 || { sentinel STUCK "final push failed"; exit 1; }
 HEAD_SHA=$(git -C "$WT" rev-parse HEAD)
 post_codex_review_status "$HEAD_SHA" "$PR" "$REVIEWER review converged for every commit on this branch" || bzr_log "#$ISSUE WARNING: codex-review status post failed"
-gh pr ready "$PR" --repo "$REPO" >>"$LOG" 2>&1 || bzr_log "#$ISSUE WARNING: gh pr ready failed"
+gh pr ready "$PR" --repo "$REPO" >/dev/null 2>>"$LOG" || bzr_log "#$ISSUE WARNING: gh pr ready failed"
 { printf 'bazaar-build: round %s finished. PR ready for human merge: https://github.com/%s/pull/%s\n\nConverged units: %s\nSkipped units: %s\n' "$ROUND" "$REPO" "$PR" "$(state_get converged | python3 -c 'import json,sys; print(" ".join("#"+k for k in json.load(sys.stdin)))')" "${SKIPPED:-none}"
   [ -n "$SKIPPED" ] && printf '\nSkipped sub-issues carry `bzr-blocked` with the last review. Clear the label when fixed; after this PR merges the parent is queued for another round.\n'
   printf '\nThis pipeline never merges. A `codex-review=success` status is on `%s`.\n' "${HEAD_SHA:0:8}"; } > "$BZR_TMP/done.md"

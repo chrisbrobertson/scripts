@@ -132,7 +132,7 @@ line = "Specs: " + ", ".join("`%s`" % p for p in sys.argv[1].split())
 if re.search(r"^Specs:.*$", b, re.M): b = re.sub(r"^Specs:.*$", line, b, count=1, flags=re.M)
 else: b = b.rstrip() + "\n\n## Links\n" + line + "\n"
 sys.stdout.write(b)' "$specs" > "$body"
-  [ "$DRY_RUN" -eq 1 ] || gh issue edit "$parent" --repo "$REPO" --body-file "$body" >>"$LOG" 2>&1
+  [ "$DRY_RUN" -eq 1 ] || gh issue edit "$parent" --repo "$REPO" --body-file "$body" >/dev/null 2>>"$LOG"
 }
 
 approve_issue() {  # <issue> <pr> <state> <mergedAt>
@@ -141,7 +141,7 @@ approve_issue() {  # <issue> <pr> <state> <mergedAt>
     sha=$(flip_spec_status "$issue" "$pr") || { bzr_log "approval #$issue: status flip failed"; return 1; }
     post_codex_review_status "$sha" "$pr" "spec approved by a human; bazaar-issues status flip" \
       || bzr_log "approval #$issue: WARNING codex-review status post failed for ${sha:0:8}"
-    if ! gh pr merge "$pr" --repo "$REPO" --merge >>"$LOG" 2>&1; then
+    if ! gh pr merge "$pr" --repo "$REPO" --merge >/dev/null 2>>"$LOG"; then
       printf 'bazaar-issues: approval seen on PR #%s but the merge failed. Fix the PR (conflicts or checks) and the sweep will retry once its head changes.\n' "$pr" > "$BZR_TMP/mf-$issue.md"
       bzr_comment issue "$issue" "$BZR_TMP/mf-$issue.md"; bzr_log "approval #$issue: merge of PR #$pr failed"; return 1
     fi
@@ -162,7 +162,7 @@ reject_issue() {  # <issue> <pr>
   while read -r num st sid; do
     [ -n "$num" ] && [ "$st" = OPEN ] || continue
     printf 'bazaar-issues: spec PR #%s was closed without merging; closing this draft-time sub-issue.\n' "$pr" > "$BZR_TMP/rj-$num.md"
-    bzr_comment issue "$num" "$BZR_TMP/rj-$num.md"; gh issue close "$num" --repo "$REPO" >>"$LOG" 2>&1 || true
+    bzr_comment issue "$num" "$BZR_TMP/rj-$num.md"; gh issue close "$num" --repo "$REPO" >/dev/null 2>>"$LOG" || true
   done <<< "$(bzr_sub_issue_markers "$issue")"
   bzr_escalate "$issue" "spec PR #$pr was closed without merging (rejected). Its draft-time sub-issues were closed."
 }
