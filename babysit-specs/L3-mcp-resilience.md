@@ -148,7 +148,7 @@ Function is internal to script; no versioning. Breaking changes (retry count, de
 - **Events emitted:**
   - `[codex] waiting Ns before retry (attempt M of 3)...` (on retry, N = delay in seconds)
   - `[codex] MCP transport failure on attempt M of 3 (rc=N, review=<present|empty>)` (on telltale match)
-  - `[codex] reviewing PR #N...` (on each attempt, logged by caller before invoking function)
+  - `[$REVIEWER reviewer] reviewing PR #N...` (once per review cycle, logged by caller immediately before invoking `review_with_retry` — not per internal retry attempt; `$REVIEWER` is `codex` or `claude`, see L4-selectable-reviewer.md)
 - **Sinks:** Main log file (~/sisyphus-logs/<project>-<timestamp>-<pid>.log)
 - **Linkage to L1 KPIs:**
   - Reliability KPI: (MCP transport failures / total Codex calls) = Codex availability
