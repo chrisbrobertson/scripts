@@ -8,7 +8,9 @@ there that carry YAML frontmatter.
 Usage:
   specs                       list all specs with status and components
   specs --status approved     filter by status value
-  specs --check-impl          show whether component dirs contain source files
+  specs --check-impl          show whether the spec's implementation exists on disk
+                              (via `components:` frontmatter if present, else by
+                              resolving backtick-quoted source filenames in the body)
   specs --json                JSON output
   specs --help
 """
@@ -16,13 +18,14 @@ import argparse, json, os, re, sys
 from pathlib import Path
 
 
-def parse_frontmatter(path):
+def _read_frontmatter_and_body(path):
+    """Split a spec file into (frontmatter lines, body text). ([], "") if no frontmatter."""
     try:
         text = path.read_text(errors="replace")
     except OSError:
-        return {}
+        return [], ""
     if not text.startswith("---"):
-        return {}
+        return [], text
     lines = text.splitlines()
     end_idx = None
     for i, line in enumerate(lines[1:], 1):
@@ -30,8 +33,16 @@ def parse_frontmatter(path):
             end_idx = i
             break
     if end_idx is None:
-        return {}
-    fm_lines = lines[1:end_idx]
+        return [], text
+    return lines[1:end_idx], "\n".join(lines[end_idx + 1 :])
+
+
+def parse_frontmatter(path):
+    fm_lines, _ = _read_frontmatter_and_body(path)
+    return _frontmatter_dict(fm_lines)
+
+
+def _frontmatter_dict(fm_lines):
     result = {}
     i = 0
     while i < len(fm_lines):
@@ -100,24 +111,50 @@ def parse_components(fm):
     return [x.strip() for x in val.split(",") if x.strip()]
 
 
-def has_impl(root, components):
-    """Return True/False if component dirs have non-markdown source files, None if unknown."""
-    if not components:
+SOURCE_EXTENSIONS = {
+    ".sh", ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rb", ".rs", ".java", ".c", ".cpp",
+}
+
+
+def find_referenced_files(body):
+    """Backtick-quoted source-file paths mentioned in a spec's body, e.g. `babysit-builder.sh`.
+
+    Fallback signal for corpora (like this repo's) whose spec-guide schema has no
+    `components:` frontmatter field — specs here name the scripts they document
+    inline instead.
+    """
+    refs = set()
+    for m in re.finditer(r"`([\w./-]+)`", body):
+        token = m.group(1)
+        if token.startswith("./"):
+            token = token[2:]
+        if Path(token).suffix in SOURCE_EXTENSIONS:
+            refs.add(token)
+    return refs
+
+
+def has_impl(root, components, body):
+    """Return True/False if the spec's implementation surface exists on disk, None if unknown."""
+    if components:
+        found_dir = False
+        for comp in components:
+            comp_path = root / comp
+            if not comp_path.exists():
+                continue
+            found_dir = True
+            for f in comp_path.rglob("*"):
+                if (
+                    f.is_file()
+                    and f.suffix not in (".md", ".txt", "")
+                    and not any(p.startswith(".") for p in f.parts)
+                ):
+                    return True
+        return False if found_dir else None
+
+    refs = find_referenced_files(body)
+    if not refs:
         return None
-    found_dir = False
-    for comp in components:
-        comp_path = root / comp
-        if not comp_path.exists():
-            continue
-        found_dir = True
-        for f in comp_path.rglob("*"):
-            if (
-                f.is_file()
-                and f.suffix not in (".md", ".txt", "")
-                and not any(p.startswith(".") for p in f.parts)
-            ):
-                return True
-    return False if found_dir else None
+    return any((root / ref).is_file() for ref in refs)
 
 
 def _is_specs_dir(name):
@@ -142,7 +179,7 @@ def main():
     ap.add_argument(
         "--check-impl",
         action="store_true",
-        help="Show whether component dirs contain source files",
+        help="Show whether the spec's implementation exists on disk",
     )
     ap.add_argument("--json", action="store_true", dest="as_json", help="JSON output")
     args = ap.parse_args()
@@ -150,12 +187,13 @@ def main():
     root = Path.cwd()
     specs = []
     for path in find_specs(root):
-        fm = parse_frontmatter(path)
+        fm_lines, body = _read_frontmatter_and_body(path)
+        fm = _frontmatter_dict(fm_lines)
         status = fm.get("status", "")
         if args.status and status != args.status:
             continue
         components = parse_components(fm)
-        impl = has_impl(root, components) if args.check_impl else None
+        impl = has_impl(root, components, body) if args.check_impl else None
         specs.append(
             {
                 "path": str(path.relative_to(root)),
