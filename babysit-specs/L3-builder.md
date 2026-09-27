@@ -291,18 +291,22 @@ sign-off before `babysit-builder.sh` is built against this spec:
   identifiable spec reference should itself count as a "gap" (kicked back) rather than
   a hard `STUCK`.
 - [ASSUMPTION] Spec-gap kickback mechanics: the owner confirmed gaps found on ingest
-  are kicked back rather than built as-is (see "What we know"), but the following
-  remain open: what counts as a "gap" is the implementer's judgment call at the start
-  of the build attempt (missing acceptance criteria, contradictory requirements, a
-  referenced file/dependency that doesn't exist) — there's no separate lint pass.
+  are kicked back rather than built as-is (see "What we know"). Two sub-cases, not one:
+  a referenced spec path that is unsafe or doesn't exist in the repo at the build's
+  base ref is caught by an automated pre-check (`safe_repo_relative_path` and
+  `spec_exists_on_base` in `babysit-builder.sh`) *before* a worktree is created or the
+  implementer is invoked — this one gap type does have a dedicated lint pass. Every
+  other gap type (missing acceptance criteria, contradictory requirements, and any
+  other spec inadequacy) remains the implementer's judgment call at the start of the
+  build attempt, with no separate validation pass.
   The kickback comment is posted on the ticket (not the already-merged spec PR, which
   may not exist for a Jira-sourced or hand-labelled ticket). Whether
   `babysit-work-prep.sh` should watch for `build-needs-clarification` and
   auto-re-open drafting on the same ticket, or whether that's a purely manual
   hand-off, is undecided.
-  Owner should confirm the gap-detection judgment call is acceptable without a
-  separate validation pass, and whether work-prep needs a matching auto-pickup for
-  `build-needs-clarification` tickets to close the loop.
+  Owner should confirm the judgment-call gap detection is acceptable without a
+  separate validation pass for those remaining cases, and whether work-prep needs a
+  matching auto-pickup for `build-needs-clarification` tickets to close the loop.
 
 ## Contract
 
