@@ -146,7 +146,12 @@ Rules that keep this safe:
   an implementer pass may reorder with reasons. The plan is posted once per round.
 - **Per unit:** implement, commit, push, review cycle (up to `MAX_REVIEW_CYCLES`, default 6).
   A unit that does not converge is **reverted off the branch**, its sub-issue gets
-  `bzr-blocked` with the last review, and units that depend on it are skipped too.
+  `bzr-blocked` with the last review, and units that depend on it are skipped too. The
+  implementer can also flag `SPEC_GAP` at its own step 0, before touching code — only that
+  unit's changes are discarded. If an earlier unit in the same round already converged, its
+  commits are already pushed and the draft PR already exists (`ensure_pr` runs after every
+  convergence), so this is not "nothing built": the round halts with real, reviewed work
+  sitting in an open draft PR, and just the offending unit is escalated.
 - **Finish:** everything that converged ships in one PR. `Closes #<parent>` appears only if
   nothing was skipped; otherwise the parent stays open and, after you merge, the sweep requeues
   it for the remaining sub-issues once you clear their `bzr-blocked`.
@@ -228,7 +233,7 @@ grep -v '^{"type"' ~/.bazaar/<owner>-<repo>/logs/issues-123-*.log | tail -40
 | `NEEDS_INFO <n>` | issue | questions posted | issue → `bzr-needs-info` |
 | `NOT_ACTIONABLE <why>` | issue | duplicate, question, no spec corpus | escalated |
 | `PR_READY <pr>` | build | build converged | issue → `bzr-pr-ready` |
-| `SPEC_GAP <why>` | build | precheck or implementer found the spec unbuildable | escalated, nothing built |
+| `SPEC_GAP <why>` | build | precheck or implementer found the spec unbuildable | escalated; nothing built only if the precheck caught it — a later unit's implementer can flag it after earlier units already converged and pushed, leaving real work in an open draft PR (see "Inside the build loop") |
 | `BLOCKED <why>` | both | review cap hit, contract violated, every unit skipped, revert conflict | escalated |
 | `STUCK <why>` | both | transient: model or reviewer unavailable, push failed, crash | back to queue; third time escalates |
 
