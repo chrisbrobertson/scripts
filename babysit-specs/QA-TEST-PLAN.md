@@ -637,7 +637,7 @@ were drafted (2026-06-28). It is deterministic and requires no live Claude/Codex
 calls, so — unlike Suites 1-3 — it runs in CI-suitable time and is expected to pass
 before every commit that touches harness selection or review-structure validation.
 
-**Run:** `./test-babysit-with-review-cli.sh` — last run 2026-09-27, 160 assertions,
+**Run:** `./test-babysit-with-review-cli.sh` — last run 2026-09-27, 168 assertions,
 0 failed. 18 of those are the Suite 1 pre-flight cases (TC-1.2) added the same day;
 everything else below is selectable-implementer/reviewer and review-structure
 coverage.
