@@ -93,6 +93,38 @@ run_script() {
     BABYSIT_TEST_MODE="$mode" "$SCRIPT" "$@"
 }
 
+# Isolated repo with a bare "origin" remote and one commit on branch "main",
+# already pushed (not ahead/behind). gh is not on PATH in these tests, so the
+# pre-flight default-branch lookup falls back to its "main" default, matching
+# this fixture's branch name.
+make_preflight_repo() {
+  local dir="$1"
+  git init -q --bare "$dir/origin.git"
+  git clone -q "$dir/origin.git" "$dir/work" >/dev/null 2>&1
+  (
+    cd "$dir/work"
+    git config user.email test@test.com
+    git config user.name test
+    git checkout -q -b main 2>/dev/null || git checkout -q main
+    echo base > tracked.txt
+    git add tracked.txt
+    git commit -q -m init
+    git push -q -u origin main
+  )
+}
+
+# Runs the outer pre-flight checks (BABYSIT_TEST_MODE=outer-preflight) against
+# a real repo directory, capturing stdout/stderr/rc for assertions.
+run_preflight() {
+  local repo_dir="$1" home="$2" out="$3" err="$4"
+  set +e
+  ( cd "$repo_dir" && HOME="$home" PATH="$TMP/bin:/usr/bin:/bin" \
+      BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) >"$out" 2>"$err"
+  local rc=$?
+  set -e
+  return $rc
+}
+
 make_stubs "$TMP/bin"
 mkdir -p "$TMP/home"
 
@@ -327,6 +359,107 @@ if "$SCRIPT" --help | grep -q -- '--implementer MODEL'; then fail 'help labels h
 for option in implementer implementer-model implementer-effort reviewer reviewer-model reviewer-effort; do
   if "$SCRIPT" --help | grep -q -- "--$option"; then pass "help documents --$option"; else fail "help documents --$option"; fi
 done
+
+# Pre-flight checks: converts QA-TEST-PLAN.md Suite 1 manual smoke tests
+# (clean-tree/branch/ahead-behind gating) into deterministic coverage. No
+# Claude/Codex/gh involved; gh is intentionally absent from PATH so the
+# default-branch lookup falls back to "main", matching make_preflight_repo.
+mkdir -p "$TMP/preflight/home"
+
+mkdir -p "$TMP/preflight/clean"
+make_preflight_repo "$TMP/preflight/clean" >/dev/null 2>&1
+rc=0
+run_preflight "$TMP/preflight/clean/work" "$TMP/preflight/home" \
+  "$TMP/preflight/clean.out" "$TMP/preflight/clean.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'preflight: clean repo on default branch exits 0' || fail 'preflight: clean repo on default branch exits 0'
+assert_contains "$TMP/preflight/clean.out" 'PREFLIGHT_OK branch=main' 'preflight: reports resolved default branch'
+
+mkdir -p "$TMP/preflight/unstaged"
+make_preflight_repo "$TMP/preflight/unstaged" >/dev/null 2>&1
+echo modified >> "$TMP/preflight/unstaged/work/tracked.txt"
+rc=0
+run_preflight "$TMP/preflight/unstaged/work" "$TMP/preflight/home" \
+  "$TMP/preflight/unstaged.out" "$TMP/preflight/unstaged.err" || rc=$?
+[ "$rc" -eq 1 ] && pass 'preflight: unstaged modification exits 1' || fail 'preflight: unstaged modification exits 1'
+if grep -q 'unstaged modifications' "$TMP/preflight/unstaged.err"; then pass 'preflight: unstaged modification error names the cause'; else fail 'preflight: unstaged modification error names the cause'; fi
+
+mkdir -p "$TMP/preflight/staged"
+make_preflight_repo "$TMP/preflight/staged" >/dev/null 2>&1
+echo modified >> "$TMP/preflight/staged/work/tracked.txt"
+(cd "$TMP/preflight/staged/work" && git add tracked.txt)
+rc=0
+run_preflight "$TMP/preflight/staged/work" "$TMP/preflight/home" \
+  "$TMP/preflight/staged.out" "$TMP/preflight/staged.err" || rc=$?
+[ "$rc" -eq 1 ] && pass 'preflight: staged uncommitted change exits 1' || fail 'preflight: staged uncommitted change exits 1'
+if grep -q 'staged but uncommitted changes' "$TMP/preflight/staged.err"; then pass 'preflight: staged change error names the cause'; else fail 'preflight: staged change error names the cause'; fi
+
+mkdir -p "$TMP/preflight/untracked"
+make_preflight_repo "$TMP/preflight/untracked" >/dev/null 2>&1
+echo new > "$TMP/preflight/untracked/work/extra.txt"
+rc=0
+run_preflight "$TMP/preflight/untracked/work" "$TMP/preflight/home" \
+  "$TMP/preflight/untracked.out" "$TMP/preflight/untracked.err" || rc=$?
+[ "$rc" -eq 1 ] && pass 'preflight: untracked non-ignored file exits 1' || fail 'preflight: untracked non-ignored file exits 1'
+if grep -q 'untracked non-ignored file' "$TMP/preflight/untracked.err"; then pass 'preflight: untracked file error names the cause'; else fail 'preflight: untracked file error names the cause'; fi
+
+mkdir -p "$TMP/preflight/otherbranch"
+make_preflight_repo "$TMP/preflight/otherbranch" >/dev/null 2>&1
+(cd "$TMP/preflight/otherbranch/work" && git checkout -q -b wip/other)
+rc=0
+run_preflight "$TMP/preflight/otherbranch/work" "$TMP/preflight/home" \
+  "$TMP/preflight/otherbranch.out" "$TMP/preflight/otherbranch.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'preflight: clean non-default branch auto-switches and exits 0' || fail 'preflight: clean non-default branch auto-switches and exits 0'
+assert_contains "$TMP/preflight/otherbranch.out" 'PREFLIGHT_OK branch=main' 'preflight: auto-switch lands back on default branch'
+if grep -q "switching from 'wip/other' to default branch 'main'" "$TMP/preflight/otherbranch.err"; then pass 'preflight: auto-switch is logged'; else fail 'preflight: auto-switch is logged'; fi
+
+mkdir -p "$TMP/preflight/ahead"
+make_preflight_repo "$TMP/preflight/ahead" >/dev/null 2>&1
+(cd "$TMP/preflight/ahead/work" && git commit -q --allow-empty -m "local only, unpushed")
+rc=0
+run_preflight "$TMP/preflight/ahead/work" "$TMP/preflight/home" \
+  "$TMP/preflight/ahead.out" "$TMP/preflight/ahead.err" || rc=$?
+[ "$rc" -eq 1 ] && pass 'preflight: ahead of origin exits 1' || fail 'preflight: ahead of origin exits 1'
+if grep -q 'ahead of origin/main' "$TMP/preflight/ahead.err"; then pass 'preflight: ahead-of-origin error names the cause'; else fail 'preflight: ahead-of-origin error names the cause'; fi
+
+mkdir -p "$TMP/preflight/behind"
+make_preflight_repo "$TMP/preflight/behind" >/dev/null 2>&1
+mkdir -p "$TMP/preflight/behind/pusher"
+git clone -q "$TMP/preflight/behind/origin.git" "$TMP/preflight/behind/pusher/work" >/dev/null 2>&1
+(
+  cd "$TMP/preflight/behind/pusher/work"
+  git config user.email test@test.com
+  git config user.name test
+  git checkout -q main
+  echo remote-change >> tracked.txt
+  git add tracked.txt
+  git commit -q -m "remote-only commit"
+  git push -q origin main
+)
+rc=0
+run_preflight "$TMP/preflight/behind/work" "$TMP/preflight/home" \
+  "$TMP/preflight/behind.out" "$TMP/preflight/behind.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'preflight: behind origin fast-forwards and exits 0' || fail 'preflight: behind origin fast-forwards and exits 0'
+if grep -q "is 1 commit(s) behind origin; fast-forwarding" "$TMP/preflight/behind.err"; then pass 'preflight: fast-forward is logged'; else fail 'preflight: fast-forward is logged'; fi
+if [ "$(cd "$TMP/preflight/behind/work" && git log --format=%s -1)" = "remote-only commit" ]; then pass 'preflight: fast-forward actually advances local branch'; else fail 'preflight: fast-forward actually advances local branch'; fi
+
+mkdir -p "$TMP/preflight/diverged"
+make_preflight_repo "$TMP/preflight/diverged" >/dev/null 2>&1
+mkdir -p "$TMP/preflight/diverged/pusher"
+git clone -q "$TMP/preflight/diverged/origin.git" "$TMP/preflight/diverged/pusher/work" >/dev/null 2>&1
+(
+  cd "$TMP/preflight/diverged/pusher/work"
+  git config user.email test@test.com
+  git config user.name test
+  git checkout -q main
+  git commit -q --allow-empty -m "remote-only commit"
+  git push -q origin main
+)
+(cd "$TMP/preflight/diverged/work" && git commit -q --allow-empty -m "local-only commit")
+rc=0
+run_preflight "$TMP/preflight/diverged/work" "$TMP/preflight/home" \
+  "$TMP/preflight/diverged.out" "$TMP/preflight/diverged.err" || rc=$?
+[ "$rc" -eq 1 ] && pass 'preflight: diverged from origin exits 1' || fail 'preflight: diverged from origin exits 1'
+if grep -q 'diverged from origin/main' "$TMP/preflight/diverged.err"; then pass 'preflight: diverged error names the cause'; else fail 'preflight: diverged error names the cause'; fi
 
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]

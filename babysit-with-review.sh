@@ -1552,7 +1552,9 @@ ${_hb}--- end prior review cycles ---
 
 # Narrow deterministic test hook for argument and provider-command regression
 # coverage. Normal execution is unchanged when BABYSIT_TEST_MODE is unset.
-if [ -n "${BABYSIT_TEST_MODE:-}" ]; then
+# outer-preflight is handled separately below: it needs the real pre-flight
+# checks (git state) to run, so it is excluded from this early-exit dispatch.
+if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight" ]; then
   case "$BABYSIT_TEST_MODE" in
     config)
       printf 'implementer=%s\nimplementer_model=%s\nimplementer_effort=%s\n' \
@@ -1738,6 +1740,13 @@ unset _pf_default _pf_current _pf_untracked _pf_n _pf_more _pf_ahead _pf_behind
 
 # Prune stale worktree metadata from previous crashed runs.
 git worktree prune >>"$LOG" 2>&1 || true
+
+# outer-preflight test mode stops here: pre-flight checks have run for real
+# against the caller's git state, but no implementer/reviewer is invoked.
+if [ "${BABYSIT_TEST_MODE:-}" = "outer-preflight" ]; then
+  echo "PREFLIGHT_OK branch=$DEFAULT_BRANCH"
+  exit 0
+fi
 
 # ---------- outer loop ----------
 
