@@ -19,22 +19,19 @@
 #   MAX_REVIEW_CYCLES  default 6    max reviewer/implementer cycles per PR
 #
 # MCP-outage resilience: when Codex is selected as reviewer and cannot reach
-# its backend, the wrapper
-# retries up to 3 times (0 / 60s / 300s back-off), labels the PR
-# `review-mcp-outage`, and halts. `review-codex-outdated` and
+# its backend, the wrapper retries up to 3 times (0 / 60s / 300s back-off),
+# labels the PR `review-mcp-outage`, and halts. `review-codex-outdated` and
 # `review-codex-no-credits` label and halt the same way for their own
-# failure classes. At the top of every outer iteration, the pre-iter scan
-# retries whichever labelled PR it finds first (in that priority order)
-# automatically before running the implementer. For `review-mcp-outage` the
-# wrapper is still running, so this just happens on its own at the next
-# iteration; for `review-codex-outdated`/`review-codex-no-credits` the
-# wrapper has already halted, so it only happens once the operator fixes
-# the underlying cause and restarts. The label itself must NOT be removed
-# by hand in either case: the sweep finds the stalled PR by that label and
-# removes it itself; removing it manually leaves the PR stuck in draft with
-# nothing to find it.
+# failure classes. All three halt the wrapper — there is no in-process
+# retry once a label is applied. At the top of every outer iteration
+# (i.e. after the operator addresses the cause and restarts the wrapper),
+# the pre-iter scan retries whichever labelled PR it finds first (in that
+# priority order) automatically before running the implementer. The label
+# itself must NOT be removed by hand: the sweep finds the stalled PR by
+# that label and removes it itself; removing it manually leaves the PR
+# stuck in draft with nothing to find it.
 # `review-incomplete` = human action required, no auto-retry.
-# `review-mcp-outage` = auto-retry; transient, often clears on its own.
+# `review-mcp-outage` = transport failure, often transient; restart the wrapper to retry.
 # `review-codex-outdated` = Codex CLI too old for model; upgrade CLI then restart.
 # `review-codex-no-credits` = Codex workspace out of credits; add credits then restart.
 
@@ -2016,8 +2013,9 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
   # The label search here is the ONLY way a stalled PR is found again, so
   # the label must still be on the PR when this runs — operators must NOT
   # remove it manually; the documented recovery is "fix the underlying
-  # cause, then restart" (review-mcp-outage doesn't need a restart since the
-  # wrapper never halted for it — it just resolves on the next iteration).
+  # cause, then restart" for all three labels (the wrapper halts on all of
+  # them — see rc=2/3/4 handling below and at the HANDOFF_REVIEW call site —
+  # so none of them resolve on their own without a restart).
   # Removing the label yourself makes this search silently find nothing, leaving the
   # PR in draft forever (see #82/#104). The PR stays in draft through the
   # review itself; only merge_reviewed_pr() un-drafts it, and only after a
