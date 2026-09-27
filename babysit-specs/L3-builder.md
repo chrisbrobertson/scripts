@@ -52,7 +52,7 @@ babysit-builder.sh [--repo OWNER/REPO] [--source github|jira|both]
                      from; auto-detected via `gh repo view` when omitted
 --source SOURCE     Ticket origin: github (default), jira, or both — same semantics as
                      babysit-work-prep.sh's flag
---max-tickets N      Cap on tickets built per invocation (default 5; see scale envelope)
+--max-tickets N      Cap on tickets built per invocation (default 5, range 1-20; see scale envelope)
 --dry-run            List the build queue and what would be built; no worktree, no
                       implementer/reviewer call, no gh/Jira writes
 
@@ -303,13 +303,14 @@ babysit-builder.sh [--repo OWNER/REPO] [--source github|jira|both]
 ```
 # stdout: per-ticket summary
 [build] ticket #103 (github, spec: babysit-specs/L3-example.md) → worktree created, implementing
-[build] ticket #103 → PR #150 opened, HANDOFF_REVIEW → entering build cycle
+[build] ticket #103 (github) → PR #150 opened, HANDOFF_REVIEW → entering build cycle
 [build] PR #150 → cycle 1: 2 BLOCKING, 1 RECOMMENDED
-[build] PR #150 → cycle 2: 0 BLOCKING → converged, labelled build-ready-for-merge,
-        codex-review=success posted, summary comment posted, halted for human merge
+[build] PR #150 → cycle 2: 0 BLOCKING → converged, labelled build-ready-for-merge, halted for human merge
 [build] ticket PROJ-9 (jira) → SPEC_GAP: acceptance criteria missing for the retry path,
         labelled build-needs-clarification, build-ready removed, comment posted
-[build] ticket #104 (github) → STUCK: worktree creation failed, left in queue
+
+# stderr
+[build] ticket #104 (github): worktree creation failed → left in queue
 
 # exit 0 even when zero tickets are built or all tickets bail this run
 ```
@@ -329,8 +330,8 @@ babysit-builder.sh [--repo OWNER/REPO] [--source github|jira|both]
    ticket reaches a terminal state. The four quarantine labels are a disjoint,
    non-terminal set: a PR carrying one of them carries neither terminal PR label,
    because no review verdict was reached.
-4. **Max-tickets cap:** no more than `--max-tickets` (default 5) new tickets are
-   started per invocation, regardless of queue size.
+4. **Max-tickets cap:** no more than `--max-tickets` (default 5, range 1-20) new tickets
+   are started per invocation, regardless of queue size.
 5. **Dry-run is read-only:** `--dry-run` performs `gh`/Jira reads only — no worktree,
    no implementer/reviewer invocation, no PR/issue/label/status writes.
 6. **Label namespace isolation:** this script never reads or writes a `review-*`
@@ -349,9 +350,9 @@ before `HANDOFF_REVIEW` is reached can produce a duplicate PR on the next run, s
 ticket carries no in-progress marker. This is deliberate, not a defect to fix.
 
 ### Versioning policy
-Companion script to `babysit-with-review.sh`; no independent version number proposed
-yet. Breaking changes to the `build-*` label schema or the spec-resolution contract
-require manual migration of any open build PRs.
+Companion script to `babysit-with-review.sh`, versioned independently via semver
+(`--version`; current: 0.1.0). Breaking changes to the `build-*` label schema or the
+spec-resolution contract require manual migration of any open build PRs.
 
 ## Performance budget
 - **Per-ticket build+review latency:** comparable to a full `babysit-with-review.sh`
@@ -380,16 +381,23 @@ require manual migration of any open build PRs.
 
 ## Telemetry contract
 Events emitted to stdout:
-- `[build] ticket <id> (<source>, spec: <path>) → worktree created, implementing`
+- `[build] ticket <id> (<source>, spec: <path>) → worktree created, implementing` (or
+  `spec: none referenced` when the ticket carries no `Spec:`/`Spec path:` line)
 - `[build] ticket <id> (<source>) → PR #M opened, HANDOFF_REVIEW → entering build cycle`
 - `[build] PR #M → cycle <k>: <n> BLOCKING, <m> RECOMMENDED`
-- `[build] PR #M → cycle <k>: 0 BLOCKING → converged, labelled build-ready-for-merge, codex-review=success posted, summary comment posted, halted for human merge`
-- `[build] PR #M → max cycles exhausted, labelled build-max-cycles, summary comment posted, halted for human merge`
+- `[build] PR #M → cycle <k>: 0 BLOCKING → converged, labelled build-ready-for-merge, halted for human merge`
+  (the `codex-review=success` status and the summary comment are posted just before this
+  line, not named in it)
+- `[build] PR #M → max cycles exhausted, labelled build-max-cycles, halted for human merge`
+  (the summary comment is posted just before this line, not named in it)
 - `[build] ticket <id> (<source>) → SPEC_GAP: <reason>, labelled build-needs-clarification, build-ready removed, comment posted`
 
 Events emitted to stderr:
+- `[build] ticket <id> (<source>): worktree creation failed → left in queue`
+- `[build] ticket <id> (<source>): implementer exited non-zero → left in queue`
+- `[build] ticket <id> (<source>): HANDOFF_REVIEW with non-numeric PR '<pr>' → left in queue`
 - `[build] ticket <id> (<source>): STUCK: <reason> → left in queue`
-- `[build] ticket <id> (<source>): worktree/implementer failure → left in queue`
+- `[build] ticket <id> (<source>): no sentinel on last line → left in queue`
 - `[jira] Jira API unavailable → skipping Jira-sourced tickets this run`
 
 ## Verifiers
