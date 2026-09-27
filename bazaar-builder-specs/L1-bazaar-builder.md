@@ -30,7 +30,7 @@ Like a Kanban board with two swim-lanes (Refine, Build) where a dumb dispatcher 
   3. GitHub issues only. No Jira.
   4. `babysit-with-review.sh` is left untouched for use elsewhere. The review loop is extracted into a library for this tool.
   5. Concurrency is a cost configuration. All work happens in unique worktrees on unique feature branches named for the issue ID.
-  6. Controllers are simple, non-thinking models that only queue the next work item. Default accepted: a bash label query is the queue; a cheap model is called only to break ties or write the one-line reason an item was skipped.
+  6. Controllers are simple, non-thinking models that only queue the next work item. Default accepted: one paginated GraphQL call per tick fetches every open issue into a shared JSON cache that each controller filters/sorts client-side, not a bash label query; a cheap model is called only to break ties among equal-top-priority candidates — skip reasons are hardcoded strings, never model output.
   7. Sub-issues use GitHub native sub-issues. The issue loop may create them.
   8. One branch, one PR per parent issue. Review after each sub-issue. On a failed sub-issue, skip it and continue (owner, 2026-09-19, replacing the halt default).
   9. Human bounce for issue verification is a comment plus a label. Body editing is allowed (decision 2 supersedes the read-only default).
@@ -55,7 +55,7 @@ Like a Kanban board with two swim-lanes (Refine, Build) where a dumb dispatcher 
 
 ## Business case
 - **Value:** removes the two hand steps that stall the current pipeline (deciding what to build next; splitting a ticket into build units) and makes the human's only job "answer questions on the issue, approve the spec, merge the PR".
-- **Cost model:** per issue, one issue-worker run (Sonnet-class, plus up to 6 spec-review cycles, raised from 4 on 2026-09-20) and one build-worker run (Sonnet/Opus per stage, plus up to 6 review cycles per sub-issue). Controller cost is near zero (Haiku, one short call per dispatch, none when the queue has one candidate).
+- **Cost model:** per issue, one issue-worker run (Sonnet-class, plus up to 6 spec-review cycles, raised from 4 on 2026-09-20) and one build-worker run (Sonnet/Opus per stage, plus up to 6 review cycles per sub-issue). Controller cost is near zero (Haiku, one short call only when multiple candidates tie at the same top priority; no call otherwise).
 - **Success metric:** median wall-clock from issue opened to `bzr-pr-ready` under 24h with at most one human touch in between.
 
 ## Approvers
@@ -65,7 +65,7 @@ Like a Kanban board with two swim-lanes (Refine, Build) where a dumb dispatcher 
 - Compliance: N/A
 
 ## Failure modes & blast radius
-- **Controller dispatches the same issue twice:** two workers race on one branch. Blast: a force-push or a conflicting PR. Mitigation: per-issue claim label plus a claim marker naming host and pid, checked against live processes before spawn (see [BZR-FEAT-CONTROLLER](L3-controller.md)).
+- **Controller dispatches the same issue twice:** two workers race on one branch. Blast: a force-push or a conflicting PR. Mitigation: the controller re-reads the issue's live label immediately before claiming and aborts if it changed; the claim marker naming host and pid is posted after that check and is used only to detect a dead worker on a later sweep, not as a pre-spawn liveness check (see [BZR-FEAT-CONTROLLER](L3-controller.md)).
 - **Issue worker invents requirements:** spec looks complete but encodes guesses. Blast: a wrong feature gets built. Mitigation: spec review cycle flags invented decisions; human approval gate.
 - **Build worker merges:** would bypass review. Blast: unreviewed code on main. Mitigation: no merge path in the worker; branch protection with the `codex-review` status remains the hard stop.
 - **Reviewer backend outage:** review cannot run. Blast: the attempt fails, the issue returns to its queue, nothing merges; three failures escalate to a human.
