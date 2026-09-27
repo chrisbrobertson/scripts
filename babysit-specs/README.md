@@ -22,7 +22,7 @@ TIF (Trustable, Intuitive, Flexible) specifications documenting the autonomous d
 | Plan | File | Description |
 |---|---|---|
 | **Security** | [SECURITY-REVIEW-PLAN.md](SECURITY-REVIEW-PLAN.md) | Review checklist: lock file races, auto-merge approval, telltale regex |
-| **QA** | [QA-TEST-PLAN.md](QA-TEST-PLAN.md) | 27 manual TCs across outer loop, review cycle, and MCP resilience (Suites 1-3, not yet executed except TC-1.2's pre-flight gate, TC-1.5/TC-1.6's sentinel-detection gate, and TC-1.8's MAX_ITER-exhaustion gate — all automated 2026-09-27), plus an automated Suite 4 for the selectable-implementer/reviewer surface and review-structure validation (`BABYSIT_TEST_MODE` + `test-babysit-with-review-cli.sh`, 140/140 passing) |
+| **QA** | [QA-TEST-PLAN.md](QA-TEST-PLAN.md) | 28 manual TCs across outer loop, review cycle, and MCP resilience (Suites 1-3, not yet executed except TC-1.2's pre-flight gate, TC-1.3/TC-1.3b's lock-file-collision gate, TC-1.5/TC-1.6's sentinel-detection gate, and TC-1.8's MAX_ITER-exhaustion gate — all automated 2026-09-27), plus an automated Suite 4 for the selectable-implementer/reviewer surface and review-structure validation (`BABYSIT_TEST_MODE` + `test-babysit-with-review-cli.sh`, 144/144 passing) |
 
 Note: the work-prep/builder amendment notes were applied directly to
 `L1-babysit-with-review.md` and `L2-autonomous-dev-system.md` (see their "companion
