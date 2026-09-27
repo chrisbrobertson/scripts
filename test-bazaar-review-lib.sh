@@ -14,6 +14,19 @@ fail() { echo "not ok - $1" >&2; FAIL=$((FAIL + 1)); }
 assert_eq() { if [ "$2" = "$3" ]; then pass "$1"; else echo "  expected '$3' got '$2'" >&2; fail "$1"; fi; }
 assert_grep() { if grep -qF -- "$2" "$3" 2>/dev/null; then pass "$1"; else echo "  missing '$2' in $3" >&2; fail "$1"; fi; }
 assert_not_grep() { if grep -qF -- "$2" "$3" 2>/dev/null; then echo "  unexpected '$2' in $3" >&2; fail "$1"; else pass "$1"; fi; }
+# Portable stdin hash: `md5` is macOS/BSD-only and silently errors to an empty
+# string elsewhere, which would make the byte-identical checks below pass
+# vacuously (empty == empty) instead of failing loudly on a real divergence.
+hash_text() {
+  if command -v md5 >/dev/null 2>&1; then md5
+  elif command -v md5sum >/dev/null 2>&1; then md5sum | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 | cut -d' ' -f1
+  elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha256 | awk '{print $NF}'
+  else
+    echo "FATAL: no hash utility (md5/md5sum/shasum/openssl) found on PATH" >&2
+    exit 1
+  fi
+}
 
 # ---------- stubs ----------
 # Each stub consumes $STUB_DIR/<tool>.<n> in order. A response file may carry
@@ -123,7 +136,7 @@ case "$msg" in *"'LOG'"*) pass "AT7 names LOG" ;; *) fail "AT7 names LOG ($msg)"
 
 # ---------- AT6: parser functions byte-identical to the builder ----------
 for f in valid_review_structure count_blocking; do
-  a=$(awk "/^$f\(\) *\{/,/^\}/" "$LIB" | md5); b=$(awk "/^$f\(\) *\{/,/^\}/" "$ROOT/babysit-builder.sh" | md5)
+  a=$(awk "/^$f\(\) *\{/,/^\}/" "$LIB" | hash_text); b=$(awk "/^$f\(\) *\{/,/^\}/" "$ROOT/babysit-builder.sh" | hash_text)
   assert_eq "AT6 $f md5 matches babysit-builder.sh" "$a" "$b"
 done
 
@@ -197,8 +210,8 @@ p=$( source "$LIB"; remediation_prompt spec 2 ); case "$p" in *"index.md"*"log.m
 case "$p" in *"Edit ONLY the spec file"*) fail "spec remediation prompt no longer restricts to one file" ;; *) pass "spec remediation prompt no longer restricts to one file" ;; esac
 for pair in "BZR_CODE_REVIEW_C1:REVIEW_PROMPT_CYCLE1:babysit-builder.sh" "BZR_CODE_REM_C5_6:REMEDIATION_PROMPT_CYCLE5_6:babysit-builder.sh" "BZR_SPEC_REVIEW_C3:SPEC_REVIEW_PROMPT_CYCLE3:babysit-work-prep.sh"; do
   IFS=: read -r ours theirs src <<< "$pair"
-  a=$(sed -n "/^IFS= read -r -d .. $ours /,/^PROMPT_EOF$/p" "$LIB" | sed 1d | md5)
-  b=$(sed -n "/^IFS= read -r -d .. $theirs /,/^PROMPT_EOF$/p" "$ROOT/$src" | sed 1d | md5)
+  a=$(sed -n "/^IFS= read -r -d .. $ours /,/^PROMPT_EOF$/p" "$LIB" | sed 1d | hash_text)
+  b=$(sed -n "/^IFS= read -r -d .. $theirs /,/^PROMPT_EOF$/p" "$ROOT/$src" | sed 1d | hash_text)
   assert_eq "prompt $ours verbatim from $src" "$a" "$b"
 done
 
