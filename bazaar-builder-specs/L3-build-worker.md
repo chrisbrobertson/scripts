@@ -30,13 +30,14 @@ Implementing agent: build the worker in `bazaar-build.sh` on top of the lib. Chr
 ```bash
 bazaar-build-worker.sh <issue>    # spawned by bazaar-build.sh; env: BZR_ISSUE BZR_REPO BZR_REPO_DIR BZR_HOME BZR_HOST
                                   # BZR_LOG DEFAULT_BRANCH BZR_SENTINEL SCRIPTS_DIR IMPLEMENTER* REVIEWER* MAX_REVIEW_CYCLES
-                                  # branch bzr/<issue>-<slug> (or -rN), worktree $BZR_HOME/<repo>/wt/<issue>
+                                  # branch bzr/<issue>-<slug> (or -rN), worktree $BZR_HOME/<owner>-<repo>/wt/<issue>
 
 # Precheck outcome (wrapper, before any model call):
 #   the parent's `Specs:` line (written by the approval sweep) names spec files that exist on origin/main with status: ready
 #   every open sub-issue carries the `<!-- bzr-sub-issue … spec=<L4 ID> -->` marker and that L4 exists, or the parent has no sub-issues and its Specs: line names at least one L4 (all named L4s bundle into one unit)
-#   branch does not exist on origin, or exists with a marker PR (resume)
 # Otherwise: SPEC_GAP <what is missing> → bzr-blocked + comment, claim released.
+# (Not gated at precheck: if a branch bzr/<issue>-<slug>[-rN] already exists on origin it is fetched and resumed
+#  unconditionally — no marker-PR check — as part of ordinary round/resume handling, not a precheck failure mode.)
 
 # Sentinel per implementer pass (last line, bare): PLAN_POSTED | UNIT_DONE | SPEC_GAP <reason> | STUCK <reason>
 # Sentinel to the controller (last line of $BZR_SENTINEL): PR_READY <pr> | SPEC_GAP <reason> | BLOCKED <reason> | STUCK <reason>
@@ -118,7 +119,7 @@ Per sub-issue: 10-40 min implement plus 1-7 min per review cycle times up to 6. 
 Inherits `gh` auth and branch protection. The worker's only write to main-adjacent state is the commit status, and only at finish.
 
 ## Telemetry contract
-Log lines carry the tag `[build-worker]` (set via `BZR_LOG_TAG`, not `[build:<n>]`); the issue number is in the message body as `#<n>`, e.g. `[build-worker] #123 round=1 new branch bzr/123-slug`, `[build-worker] #123 unit #2 converged after 2 cycle(s)`, `[build-worker] #123 sentinel=PR_READY`. Phase is recorded as a marker comment (`<!-- bzr-build-worker phase=<p> ts=<t> -->`), not as a log line. Review-cycle detail comes from the shared review lib's `run_review_cycle --mode code`: `[review:code] cycle=<c>/<max> blocking=<b> recommended=<r> new=<n> recurrence=<r>`. Sink: `$BZR_HOME/<repo>/logs/build-<n>-<ts>.log`.
+Log lines carry the tag `[build-worker]` (set via `BZR_LOG_TAG`, not `[build:<n>]`); the issue number is in the message body as `#<n>`, e.g. `[build-worker] #123 round=1 new branch bzr/123-slug`, `[build-worker] #123 unit #2 converged after 2 cycle(s)`, `[build-worker] #123 sentinel=PR_READY 101` (sentinel lines always carry the second argument — the PR number, reason, etc. — never the bare sentinel name). Phase is recorded as a marker comment (`<!-- bzr-build-worker phase=<p> ts=<t> -->`), not as a log line. Review-cycle detail comes from the shared review lib's `run_review_cycle --mode code`: `[review:code] cycle=<c> blocking=<b> recommended=<r> new=<n> recurrence=<r>` (the `cycle=<c>/<max>` form appears one line up, on the reviewer-invocation log line, not on this one). Sink: `$BZR_HOME/<repo>/logs/build-<n>-<ts>.log`.
 
 ## Verifiers
 - Tech lead: Chris Robertson
@@ -155,7 +156,7 @@ Composes with [BZR-FEAT-REVIEW-LIB](L3-review-lib.md) (`--mode code`), `setup-br
 7. **Given** the reviewer transport fails after the lib's retries, **when** the worker exits `STUCK`, **then** the parent is `bzr-ready` again, an attempt marker exists, and the marker block still shows the current sub-issue pending.
 7b. **Given** sub-issue 3 depends on skipped sub-issue 2 per the plan, **when** the worker reaches 3, **then** 3 is skipped too with reason `depends on #2`.
 8. **Given** an issue with no sub-issues and one L4, **when** dispatched, **then** the plan phase is skipped and one implement/review pass runs.
-9. **Given** `--issue N` on an issue without `bzr-ready` and no `--force`, **when** run, **then** exit 2 with a usage message.
+9. **Given** `bazaar-build-worker.sh` invoked with no positional `<issue>` argument, **when** run, **then** exit 2 with a usage message. (The `--issue N [--force]` flag pair and the `bzr-ready` label gate belong to the *controller*, `bazaar-build.sh` — see its API surface fragment and implementation notes in [L3-controller.md](L3-controller.md) — not to this worker script, which takes only a bare issue number.)
 10. **Given** any transcript, **when** grepped for `gh pr merge`, **then** no match in worker prompts or wrapper.
 
 ## Telemetry events tied to L1 KPIs
