@@ -939,7 +939,7 @@ correct action depends on whether a babysitter is currently running:
      `EXIT` trap deletes it on exit. `touch`-ing it is a no-op — the file
      already exists, and the loop only checks for *absence* to detect a stop
      request. Removing it makes the loop notice on its next check
-     (`babysit-with-review.sh:1751-1752`) and exit gracefully — this can take
+     (`babysit-with-review.sh:1949-1950`) and exit gracefully — this can take
      as long as the iteration currently in progress.
   3. **Verify it actually exited** before declaring the chain paused. Don't
      `pgrep` for the fleet name — the driver launches `babysit-with-review.sh`

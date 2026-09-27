@@ -31,7 +31,7 @@ Engineering leads implementing autonomous development tools — understand compo
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│ babysit-with-review.sh v1.1.1 (orchestrator, 2084 lines)            │
+│ babysit-with-review.sh v1.1.2 (orchestrator, 2116 lines)            │
 │  - Outer loop: git worktree → collect_state → run_implementer        │
 │  - Review cycle: review_with_retry → run_implementer → convergence   │
 │  - Pre-flight: working tree + git worktree prune (reviewer probe     │
@@ -83,7 +83,7 @@ babysit-builder.sh (implementation + convergent review loop)
 
 From the existing implementation:
 
-- Orchestrator: Single bash script (2,084 lines, `VERSION="1.1.1"`) with no external dependencies beyond standard Unix tools
+- Orchestrator: Single bash script (2,116 lines, `VERSION="1.1.2"`) with no external dependencies beyond standard Unix tools
 - Components run as subprocesses; orchestrator captures stdout/stderr and exit codes
 - Temp files: `TMP_RESULT` (implementer output), `TMP_REVIEW` (reviewer output), `TMP_REVIEW_RESULT` (implementer review response), `TMP_CODEX_FULL` (full Codex output for telltale scanning)
 - Logs written to `$HOME/sisyphus-logs/<project>-<timestamp>-<pid>.log`

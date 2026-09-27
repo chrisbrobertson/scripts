@@ -272,13 +272,29 @@ reference for those.
 ---
 
 ### TC-2.2: Zero BLOCKING Findings — Auto-Merge
-**Status: automated (blocking-count only), not manual (added 2026-09-27).**
-Same `review-blocking-count` harness as TC-2.1: covers a sole `- (none)`
-bullet under `## BLOCKING` counting as zero, a review with no `## BLOCKING`
-heading at all counting as zero, and non-blocking bullets under
-`## RECOMMENDED` not leaking into the count. The actual `gh pr merge` and PR
-state transition are not exercised by this harness; the manual steps below
-remain the acceptance reference for those.
+**Status: automated (blocking-count + merge mechanics), not manual (added
+2026-09-27, extended same day).**
+The `review-blocking-count` harness covers a sole `- (none)` bullet under
+`## BLOCKING` counting as zero, a review with no `## BLOCKING` heading at
+all counting as zero, and non-blocking bullets under `## RECOMMENDED` not
+leaking into the count. `test-babysit-review-merge-draft.sh` drives the real
+`merge_reviewed_pr()` (extracted from `run_review_cycle`'s zero-blocking
+branch) against a stubbed `gh`/`git` on PATH, covering the actual merge
+mechanics that the blocking-count harness doesn't reach: the
+`codex-review=success` status POST, that `gh pr ready` is called before
+`gh pr merge` (a PR can still be draft at this point — see below), that a
+`gh pr ready` failure doesn't abort the merge attempt, that a status-POST
+failure skips both `gh pr ready` and `gh pr merge` entirely, and the
+`--auto` → plain-merge fallback. The full `gh pr view N --json state`
+end-to-end assertion remains the manual acceptance reference below.
+
+**Regression note (2026-09-27):** a real PR in this repo's own backlog (#60)
+reached a clean zero-BLOCKING review and had `codex-review=success` set, but
+stayed open and in draft forever — `gh pr merge` fails silently on a draft
+PR, and nothing in the success path un-drafted it first (only the
+`review-mcp-outage` retry path called `gh pr ready`). Fixed by adding a
+best-effort `gh pr ready` call before the merge attempt in
+`merge_reviewed_pr`; see `test-babysit-review-merge-draft.sh` and issue #82.
 
 **Given:** Codex returns 0 BLOCKING findings  
 **When:** Cycle completes  

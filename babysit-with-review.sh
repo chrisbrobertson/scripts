@@ -29,7 +29,7 @@
 
 set -uo pipefail
 
-VERSION="1.1.1"
+VERSION="1.1.2"
 
 usage() {
   cat <<'EOF'
@@ -1263,6 +1263,71 @@ reviewer_binary_available() {
   command -v "$REVIEWER" >/dev/null 2>&1
 }
 
+# Finish a review cycle that reached zero blocking findings: set the
+# codex-review status, ensure the PR isn't left in draft, merge it, and
+# reset the local worktree to the default branch. Extracted from
+# run_review_cycle so BABYSIT_TEST_MODE=review-merge can drive it
+# deterministically.
+# Args: <pr_num> <cycle>
+merge_reviewed_pr() {
+  local pr_num="$1"
+  local cycle="$2"
+
+  echo "  [review] zero blocking findings; PR #$pr_num cleared after $cycle cycle(s)" | tee -a "$LOG" >&2
+
+  # Set codex-review=success commit status so branch protection allows the merge.
+  # This is the ONLY place this status is set green — the implementation agent never sets it.
+  local _owner_repo _head_sha
+  _owner_repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
+  _head_sha=$(gh pr view "$pr_num" --json headRefOid -q .headRefOid 2>/dev/null || echo "")
+  if [ -n "$_owner_repo" ] && [ -n "$_head_sha" ]; then
+    if gh api -X POST "repos/${_owner_repo}/statuses/${_head_sha}" \
+        -f state=success \
+        -f context=codex-review \
+        -f description="$REVIEWER review passed (cycle ${cycle} of ${MAX_REVIEW_CYCLES})" \
+        -f target_url="https://github.com/${_owner_repo}/pull/${pr_num}" \
+        >>"$LOG" 2>&1; then
+      echo "  [review] codex-review status set to success for ${_head_sha:0:8}" | tee -a "$LOG" >&2
+    else
+      echo "  [review] WARNING: failed to set codex-review status for PR #$pr_num; leaving PR open rather than merging without the status check" | tee -a "$LOG" >&2
+      return 0
+    fi
+  else
+    echo "  [review] WARNING: could not resolve repo or head SHA for PR #$pr_num; leaving PR open rather than merging without the status check" | tee -a "$LOG" >&2
+    return 0
+  fi
+
+  # The PR can reach this point still marked draft — e.g. the implementer
+  # opened it with `gh pr create --draft`, or an earlier bail drafted it via
+  # a label with no undraft retry sweep (only review-mcp-outage has one).
+  # `gh pr merge` fails silently (from this script's point of view — the
+  # failure just lands in $LOG) on a draft PR, so always attempt to un-draft
+  # first; a failure here is not fatal, since the merge attempt below fails
+  # the same safe way (left open for next iteration) if the PR is still draft.
+  gh pr ready "$pr_num" >>"$LOG" 2>&1 \
+    || echo "  [review] WARNING: gh pr ready failed for PR #$pr_num; attempting merge anyway" | tee -a "$LOG" >&2
+
+  if gh pr merge "$pr_num" --squash --delete-branch --auto >>"$LOG" 2>&1; then
+    echo "  [review] PR #$pr_num queued for auto-merge (merges when CI passes)" | tee -a "$LOG" >&2
+  elif gh pr merge "$pr_num" --squash --delete-branch >>"$LOG" 2>&1; then
+    echo "  [review] PR #$pr_num merged." | tee -a "$LOG" >&2
+  else
+    echo "  [review] WARNING: merge failed for PR #$pr_num; left open for next iteration. See $LOG." | tee -a "$LOG" >&2
+    return 0
+  fi
+
+  # Clean up: switch back to default branch so the next outer-loop iteration
+  # starts from the right base, and delete the local PR branch.
+  local _pr_branch
+  _pr_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  git checkout "$DEFAULT_BRANCH" >>"$LOG" 2>&1 || true
+  git pull --ff-only origin "$DEFAULT_BRANCH" >>"$LOG" 2>&1 || true
+  if [ -n "$_pr_branch" ] && [ "$_pr_branch" != "$DEFAULT_BRANCH" ]; then
+    git branch -D "$_pr_branch" >>"$LOG" 2>&1 || true
+  fi
+  return 0
+}
+
 # Run the selected implementer/reviewer cycle for a PR number.
 run_review_cycle() {
   local pr_num="$1"
@@ -1422,48 +1487,7 @@ ${_hb}--- end prior review cycles ---
     fi
 
     if [ "$n_blocking" -eq 0 ]; then
-      echo "  [review] zero blocking findings; PR #$pr_num cleared after $cycle cycle(s)" | tee -a "$LOG" >&2
-
-      # Set codex-review=success commit status so branch protection allows the merge.
-      # This is the ONLY place this status is set green — the implementation agent never sets it.
-      local _owner_repo _head_sha
-      _owner_repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
-      _head_sha=$(gh pr view "$pr_num" --json headRefOid -q .headRefOid 2>/dev/null || echo "")
-      if [ -n "$_owner_repo" ] && [ -n "$_head_sha" ]; then
-        if gh api -X POST "repos/${_owner_repo}/statuses/${_head_sha}" \
-            -f state=success \
-            -f context=codex-review \
-            -f description="$REVIEWER review passed (cycle ${cycle} of ${MAX_REVIEW_CYCLES})" \
-            -f target_url="https://github.com/${_owner_repo}/pull/${pr_num}" \
-            >>"$LOG" 2>&1; then
-          echo "  [review] codex-review status set to success for ${_head_sha:0:8}" | tee -a "$LOG" >&2
-        else
-          echo "  [review] WARNING: failed to set codex-review status for PR #$pr_num; leaving PR open rather than merging without the status check" | tee -a "$LOG" >&2
-          return 0
-        fi
-      else
-        echo "  [review] WARNING: could not resolve repo or head SHA for PR #$pr_num; leaving PR open rather than merging without the status check" | tee -a "$LOG" >&2
-        return 0
-      fi
-
-      if gh pr merge "$pr_num" --squash --delete-branch --auto >>"$LOG" 2>&1; then
-        echo "  [review] PR #$pr_num queued for auto-merge (merges when CI passes)" | tee -a "$LOG" >&2
-      elif gh pr merge "$pr_num" --squash --delete-branch >>"$LOG" 2>&1; then
-        echo "  [review] PR #$pr_num merged." | tee -a "$LOG" >&2
-      else
-        echo "  [review] WARNING: merge failed for PR #$pr_num; left open for next iteration. See $LOG." | tee -a "$LOG" >&2
-        return 0
-      fi
-
-      # Clean up: switch back to default branch so the next outer-loop iteration
-      # starts from the right base, and delete the local PR branch.
-      local _pr_branch
-      _pr_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-      git checkout "$DEFAULT_BRANCH" >>"$LOG" 2>&1 || true
-      git pull --ff-only origin "$DEFAULT_BRANCH" >>"$LOG" 2>&1 || true
-      if [ -n "$_pr_branch" ] && [ "$_pr_branch" != "$DEFAULT_BRANCH" ]; then
-        git branch -D "$_pr_branch" >>"$LOG" 2>&1 || true
-      fi
+      merge_reviewed_pr "$pr_num" "$cycle"
       return 0
     fi
 
@@ -1729,6 +1753,14 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight
       # stdin (QA-TEST-PLAN.md TC-2.4: STUCK_REVIEW bails the review cycle).
       # No Claude/Codex/gh involved.
       parse_review_sentinel "$(cat)"
+      ;;
+    review-merge)
+      # Drives the real merge_reviewed_pr() against a stubbed gh/git on PATH.
+      # Covers the case where a fully-reviewed PR (zero blocking findings) is
+      # still marked draft when the merge is attempted — `gh pr ready` must
+      # be called before `gh pr merge`, and a `gh pr ready` failure must not
+      # prevent the merge attempt.
+      merge_reviewed_pr "${TEST_PR_NUM:-7}" "${TEST_CYCLE:-1}"
       ;;
     review-head-unchanged)
       # Each stdin line is "pre_sha post_sha". Prints "pre=<p> post=<q>
