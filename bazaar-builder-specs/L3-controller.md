@@ -26,7 +26,7 @@ Like a job dispatcher reading a work-queue table, where the table is GitHub labe
 Implementing agent: build `lib/bazaar-common.sh` and the two scripts per the surface below. Chris Robertson: confirm the attempt-counter mechanics.
 
 ## API surface fragment
-*Implemented 2026-09-19: `lib/bazaar-common.sh` v0.1.0, `bazaar-issues.sh` v0.1.0, `bazaar-build.sh` v0.1.0. Harnesses `test-bazaar-common.sh` (33), `test-bazaar-build.sh` (16), `test-bazaar-issues.sh` (33), all green over `test-support/fake-gh.py`.*
+*Implemented 2026-09-19: `lib/bazaar-common.sh` v0.1.0, `bazaar-issues.sh` v0.1.0, `bazaar-build.sh` v0.1.0. Harnesses `test-bazaar-common.sh` (33), `test-bazaar-build.sh` (16), `test-bazaar-issues.sh` (33) at the time, all green over `test-support/fake-gh.py`; re-run 2026-09-27: `test-bazaar-common.sh` 38, `test-bazaar-build.sh` 16, `test-bazaar-issues.sh` 41 (harness totals are point-in-time snapshots, not a live figure — see `index.md`).*
 ```bash
 bazaar-issues.sh [OPTIONS]        # issue controller: intake → spec → approval
 bazaar-build.sh  [OPTIONS]        # build controller: bzr-ready → PR
