@@ -64,9 +64,9 @@ Labels (the whole set):
   bzr-ready     bzr-building    bzr-pr-ready        # build side
   bzr-blocked                                       # human escalation, either side
 Marker comments (agent-authored, first line):
-  <!-- bzr-claim role=issue|build host=H pid=P ts=T -->
-  <!-- bzr-attempt role=issue|build n=K reason=... -->
-  <!-- bzr-escalated role=issue|build attempts=K -->
+  <!-- bzr-claim role=issue|build host=H pid=P start="S" ts=T -->
+  <!-- bzr-attempt role=issue|build n=K reason="..." ts=T -->
+  <!-- bzr-escalated role=issue|build attempts=K ts=T -->
 ```
 
 ### Implementation notes (2026-09-19)
@@ -76,7 +76,7 @@ Marker comments (agent-authored, first line):
 - **Dry-run** runs no sweeps with side effects; `role_dry_sweeps` reports would-approve / would-escalate.
 - **`--issue N` and `--force` exist on both scripts, with opposite label semantics.** On `bazaar-build.sh`, `--issue N` requires the issue already be `bzr-ready`; `--force` bypasses that check (`BZR_SKIP_LABEL_CHECK`) but never the worker's precheck. On `bazaar-issues.sh`, `--issue N` requires the issue carry no `bzr-*` label; `--force` dispatches it anyway, replacing whatever `bzr-*` label it carries with `bzr-drafting`. Both set the same `BZR_SKIP_LABEL_CHECK` flag under the hood.
 - **Escalation** replaces every `bzr-*` state label with `bzr-blocked`, so a rejected `bzr-spec-review` issue ends with exactly one label.
-- **Approval marker** is `<!-- bzr-spec-merged pr=N -->`; the comment guard refuses any agent body containing the approval word, including marker names.
+- **Approval marker** is `<!-- bzr-spec-merged pr=N ts=T -->`; the comment guard refuses any agent body containing the approval word, including marker names.
 - **Local checkout for the approval sweep:** the git repo the controller runs in, else a clone under `~/.bazaar/<owner>-<repo>/clone`.
 
 ## Consumer
