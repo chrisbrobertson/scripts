@@ -140,7 +140,7 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
   the shipped implementation: `babysit-with-review.sh` uses `wip/<project>/iter-<N>`
   off `HEAD` (`git worktree add -b "$_wt_branch" "$_wt_dir" HEAD`, line ~1792);
   `babysit-work-prep.sh` uses `work-prep/<slug>-<pid>` off the default branch's SHA
-  (`git worktree add -b "$branch" "$worktree" "$base_sha"`, line ~496). Neither ever
+  (`git worktree add -b "$branch" "$worktree" "$base_sha"`, line ~1243). Neither ever
   reuses a branch across attempts, so a rebuilt ticket starts from a genuinely clean
   base every time — no state from a prior crashed or abandoned attempt can leak in.
   Builder follows the same pattern (e.g., `build/<slug>-<pid>`).
@@ -399,6 +399,7 @@ Events emitted to stderr:
 - `[build] ticket <id> (<source>): STUCK: <reason> → left in queue`
 - `[build] ticket <id> (<source>): no sentinel on last line → left in queue`
 - `[jira] Jira API unavailable → skipping Jira-sourced tickets this run`
+- `[jira] Jira returned an invalid response → skipping Jira-sourced tickets this run`
 
 ## Verifiers
 - Tech lead: Chris Robertson
