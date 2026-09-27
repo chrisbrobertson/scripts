@@ -28,7 +28,7 @@
 #   REVIEW_CYCLES_RUN   number of cycles executed
 #   REVIEW_FAIL_REASON  one-line reason on rc 10/20/2/3/4
 
-BZR_REVIEW_LIB_VERSION="0.1.0"
+BZR_REVIEW_LIB_VERSION="0.1.1"
 
 # ---------- guards ----------
 
@@ -342,7 +342,8 @@ for c in p.get("comments", []) or []:
     b = c.get("body") or ""
     if not ours(b): out.append("### Comment by %s\n%s\n" % ((c.get("author") or {}).get("login", "?"), b))
 for c in inline or []:
-    out.append("### Inline comment by %s on %s:%s\n%s\n" % ((c.get("user") or {}).get("login", "?"), c.get("path", "?"), c.get("line") or c.get("original_line") or "?", c.get("body") or ""))
+    b = c.get("body") or ""
+    if not ours(b): out.append("### Inline comment by %s on %s:%s\n%s\n" % ((c.get("user") or {}).get("login", "?"), c.get("path", "?"), c.get("line") or c.get("original_line") or "?", b))
 sys.stdout.write("\n".join(out) if out else "(none)")'
 }
 

@@ -454,16 +454,27 @@ reference for the live-PR path (the actual prompt Claude receives).
 ---
 
 ### TC-2.11: Self-Posted Codex Comments Excluded
-**Status: automated, not manual (added 2026-09-27).** Same
-`test-babysit-review-feedback.sh` harness as TC-2.10: the `--json reviews`
-fixture covers all three self-posted prefixes (`**Codex review`, `**Claude
-review`, `**babysit-with-review:`), and the assertions confirm
-`collect_pr_feedback()` excludes all three from that call. The `--json
-comments` fixture additionally confirms exclusion of a self-posted `**Codex
-review` in top-level PR comments. Inline review comments (`gh api
-.../comments`) have no self-posted fixture, so exclusion there is untested by
-this harness. The manual steps remain the acceptance reference for the
-live-PR path.
+**Status: automated, not manual (added 2026-09-27; inline-comment gap closed
+2026-09-27).** Same `test-babysit-review-feedback.sh` harness as TC-2.10: the
+`--json reviews` fixture covers all three self-posted prefixes (`**Codex
+review`, `**Claude review`, `**babysit-with-review:`), and the assertions
+confirm `collect_pr_feedback()` excludes all three from that call. The
+`--json comments` fixture additionally confirms exclusion of a self-posted
+`**Codex review` in top-level PR comments. Inline review comments (`gh api
+.../comments`) previously had no self-posted fixture and, on inspection, the
+function didn't actually filter that source — reviews and top-level comments
+applied the three-prefix filter but inline comments were appended
+unconditionally. Fixed by applying the same filter to the inline `--jq`
+query (and its `babysit-builder.sh` and `lib/bazaar-review.sh` copies, per
+their versioning convention of staying in lockstep on shared logic); a
+self-posted inline fixture in `test-babysit-review-feedback.sh` and a new
+`collect_pr_feedback` case in `test-bazaar-review-lib.sh` now cover the
+exclusion for both. In practice no code path in these scripts posts inline
+comments (only `gh pr comment`, which is top-level), so this was latent
+rather than an active feedback loop — but it matches this function's own
+"filters out comments posted by the babysitter itself" contract, which named
+no exception for inline. The manual steps remain the acceptance reference
+for the live-PR path.
 
 **Given:** PR has self-posted Codex review comment  
 **When:** collect_pr_feedback runs  

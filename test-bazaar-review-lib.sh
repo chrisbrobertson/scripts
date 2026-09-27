@@ -55,7 +55,7 @@ case "$*" in
   *"pr comment"*) cat >/dev/null; exit 0 ;;
   *"--json reviews,comments"*) printf '%s' "${STUB_PR_JSON:-{\}}"; exit 0 ;;
   *"--json comments"*|*"--json reviews"*) echo ""; exit 0 ;;
-  *"api "*"/comments"*) echo "[]"; exit 0 ;;
+  *"api "*"/comments"*) printf '%s' "${STUB_INLINE_JSON:-[]}"; exit 0 ;;
   *) exit 0 ;;
 esac
 S
@@ -223,6 +223,13 @@ STUB_PR_JSON='{"reviews":[],"comments":[{"author":{"login":"me"},"body":"<!-- bz
   run_cycle --mode code --pr 7 --worktree "$CASE/wt" --branch feat >/dev/null 2>&1
 assert_not_grep "prior reviewer comment not fed back as PR feedback" "Comment by me" "$RECORD"
 assert_grep "human PR comment is fed back" "please also rename foo" "$RECORD"
+
+new_case fbinline
+export STUB_INLINE_JSON='[{"user":{"login":"human"},"path":"a.sh","line":3,"body":"off-by-one here"},{"user":{"login":"codex-bot"},"path":"b.sh","line":9,"body":"**Codex review — PR #7 cycle 1 of 6**\nself-posted inline, should be excluded"}]'
+out=$( source "$LIB"; collect_pr_feedback 7 )
+unset STUB_INLINE_JSON
+assert_grep "collect_pr_feedback includes human inline comment" "off-by-one here" <(printf '%s' "$out")
+assert_not_grep "collect_pr_feedback excludes self-posted inline comment" "self-posted inline, should be excluded" <(printf '%s' "$out")
 
 new_case at5; stub codex.default "$ONE_BLOCKING"; printf '@@COMMIT\nDONE_REVIEW\n' > "$STUB_DIR/claude.default"
 rc=0; run_cycle --mode code --pr 7 --worktree "$CASE/wt" --branch feat --max-cycles 2 >/dev/null 2>&1 || rc=$?

@@ -43,7 +43,8 @@ COMMENTS_JSON='{"comments":[
   {"author":{"login":"codex-bot"},"body":"**Codex review — PR #7 cycle 2 of 6**\nself-posted, should be excluded"}
 ]}'
 INLINE_JSON='[
-  {"user":{"login":"human"},"path":"a.sh","line":3,"body":"off-by-one here"}
+  {"user":{"login":"human"},"path":"a.sh","line":3,"body":"off-by-one here"},
+  {"user":{"login":"codex-bot"},"path":"b.sh","line":9,"body":"**Codex review — PR #7 cycle 1 of 6**\nself-posted inline, should be excluded"}
 ]'
 
 cat > "$TMP/bin/gh" <<STUB
@@ -101,6 +102,7 @@ assert_not_grep "TC-2.11 self-posted Codex review excluded" "old codex findings"
 assert_not_grep "TC-2.11 self-posted Claude review excluded" "old claude findings" "$TMP/feedback.out"
 assert_not_grep "TC-2.11 self-posted babysit bail comment excluded" "Reason: x" "$TMP/feedback.out"
 assert_not_grep "TC-2.11 self-posted Codex top-level comment excluded" "self-posted, should be excluded" "$TMP/feedback.out"
+assert_not_grep "TC-2.11 self-posted Codex inline comment excluded" "self-posted inline, should be excluded" "$TMP/feedback.out"
 
 # ---------- empty-body reviews are dropped, not rendered as blank sections ----------
 assert_not_grep "empty-body review not attributed" "### Review by ghost" "$TMP/feedback.out"

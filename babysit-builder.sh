@@ -17,7 +17,7 @@
 
 set -uo pipefail
 
-VERSION="0.1.0"
+VERSION="0.1.1"
 
 usage() {
   cat <<'EOF'
@@ -992,7 +992,11 @@ collect_pr_feedback() {
   [ -n "$comments" ] && out="${out}${comments}"$'\n'
 
   inline=$(gh api "repos/${REPO}/pulls/${pr_num}/comments" \
-    --jq '.[] | "### Inline comment by \(.user.login) on \(.path):\(.line // .original_line // "?")\n\(.body)\n"' \
+    --jq '.[]
+          | select(.body | startswith("**Codex review") | not)
+          | select(.body | startswith("**Claude review") | not)
+          | select(.body | startswith("**babysit-builder:") | not)
+          | "### Inline comment by \(.user.login) on \(.path):\(.line // .original_line // "?")\n\(.body)\n"' \
     2>/dev/null || true)
   [ -n "$inline" ] && out="${out}${inline}"$'\n'
 
