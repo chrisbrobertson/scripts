@@ -874,12 +874,21 @@ cp ~/staff-fleet/secondbrain/profiles/staff-swe/config.yaml \
 The agent is still reachable via CLI and Telegram; it just won't fire on a schedule.
 
 To pause only the autonomous-dev chain (leave the chat/digest agents running),
-touch the dispatcher's stop-file instead:
-```bash
-touch ~/sisyphus-logs/secondbrain.stop
-# remove it to resume
-rm ~/sisyphus-logs/secondbrain.stop
-```
+use the dispatcher's stop-file — `~/sisyphus-logs/<fleet-name>.stop` — but the
+correct action depends on whether a babysitter is currently running:
+
+- **No babysitter running.** `team-dispatcher.sh` refuses to spawn one while
+  this file exists (`new-fleet.sh:953`). `touch` it to block future spawns;
+  `rm` it to allow them again.
+- **A babysitter is already running.** It created and owns this file itself
+  as its run-lock (`babysit-with-review.sh:243`), and its `EXIT` trap deletes
+  it on exit. `touch`-ing it is a no-op — the file already exists, and the
+  loop only checks for *absence* to detect a stop request. To actually stop
+  it, `rm` the file; the loop notices on its next check
+  (`babysit-with-review.sh:1751-1752`) and exits gracefully. Don't try to
+  "resume" by touching the file back — the exit trap has already removed it,
+  and the next `team-dispatcher.sh` tick will spawn a fresh babysitter (which
+  recreates its own stop-file as its run-lock).
 
 ### Remove a fleet entirely
 
