@@ -8,10 +8,11 @@ coverage for TC-1.5/TC-1.6, single-iteration outer-loop coverage for TC-1.1, and
 MAX_ITER-exhaustion coverage for TC-1.8 (see
 Suite 1), plus blocking-count coverage for TC-2.1/TC-2.2, sentinel/HEAD-unchanged
 coverage for TC-2.4/TC-2.5, missing-reviewer graceful-degradation coverage for
-TC-2.9, and a separate `test-babysit-review-feedback.sh` harness covering the
-`collect_pr_feedback()` filter (TC-2.10/TC-2.11, see Suite 2); Test Suites 1-3
-otherwise remain manual smoke tests against live Claude/Codex/gh, not yet
-executed  
+TC-2.9, MCP-outage terminal-path coverage for TC-2.8 (see
+`test-babysit-review-cycle-mcp-outage.sh`), and a separate
+`test-babysit-review-feedback.sh` harness covering the `collect_pr_feedback()`
+filter (TC-2.10/TC-2.11, see Suite 2); Test Suites 1-3 otherwise remain manual
+smoke tests against live Claude/Codex/gh, not yet executed  
 **Priority:** Medium (internal tool, existing implementation to verify)
 
 ## Test Strategy
@@ -387,6 +388,18 @@ remain the acceptance reference for that.
 ---
 
 ### TC-2.8: Codex MCP Transport Failure (3 Retries)
+**Status: automated, not manual (added 2026-09-27).**
+`test-babysit-review-cycle-mcp-outage.sh` drives the real `run_review_cycle()`
+(not just `codex_review_with_retry()`, which Suite 3's TC-3.4 already covers)
+through `codex`/`sleep`/`gh` stubs on PATH: a clean `reviewer_preflight()`
+probe followed by 3 consecutive transport-failure review attempts. Asserts
+that the rc=2 from the retry-exhausted reviewer call is turned into
+`fail_review_cycle_mcp()` specifically — the `review-mcp-outage` label, the
+`gh pr ready --undo` draft call, and the outage comment — rather than falling
+through to the generic `fail_review_cycle()` (`review-incomplete`) path every
+other non-zero `reviewer_rc` takes. No live MCP outage (firewall/`/etc/hosts`
+edit) required.
+
 **Given:** Codex MCP transport fails 3 times  
 **When:** Retry exhausted  
 **Then:** 
