@@ -57,7 +57,7 @@ Env: BZR_APPROVERS (default: gh api user login), MAX_ATTEMPTS (3),
      MAX_REVIEW_CYCLES (6), MAX_SPEC_REVIEW_CYCLES (6), BZR_HOME (~/.bazaar),
      BZR_NO_STREAM (0; set 1 to disable the worker-log relay below)
 
-Exit: 0 clean stop, 1 fatal (incl. reviewer outdated / no credits), 2 usage.
+Exit: 0 clean stop, 1 fatal (auth/lock/repo/gh-outage; a reviewer outdated or no-credits condition is never fatal here — see Attempt handling below), 2 usage.
 
 Labels (the whole set):
   bzr-drafting  bzr-needs-info  bzr-spec-review     # issue side
