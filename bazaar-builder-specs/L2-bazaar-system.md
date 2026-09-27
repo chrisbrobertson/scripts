@@ -22,7 +22,7 @@ Two long-running bash controllers (`bazaar-issues.sh`, `bazaar-build.sh`, sharin
 Like a systemd timer plus a job runner: the timer is dumb, the job knows the work, and the queue is the ticket system itself.
 
 ## Reader & next action
-Chris Robertson, before implementation: confirm the label state machine and the claim protocol, then approve the extraction plan in `IMPLEMENTATION-PLAN.md`. Implementing agent: read this page, then the L3 for the component being built.
+Chris Robertson: the label state machine and claim protocol below are implemented and have run end-to-end on a real repo (issue loop piloted through the human approval gate on bazaar-chat/bazaar#745, PR #761 — see `log.md`). Next action is to approve PR #761, then sign off on the remaining `[ASSUMPTION]` items in `index.md` so status can move to `ready`. Implementing agent: read this page, then the L3 for the component being touched.
 
 ## Component diagram
 
