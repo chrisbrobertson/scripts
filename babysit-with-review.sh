@@ -29,7 +29,7 @@
 
 set -uo pipefail
 
-VERSION="1.1.0"
+VERSION="1.1.1"
 
 usage() {
   cat <<'EOF'
@@ -863,7 +863,11 @@ collect_pr_feedback() {
   # Inline review comments (line-level diff annotations).
   local inline
   inline=$(gh api "repos/${owner_repo}/pulls/${pr_num}/comments" \
-    --jq '.[] | "### Inline comment by \(.user.login) on \(.path):\(.line // .original_line // "?")\n\(.body)\n"' \
+    --jq '.[]
+          | select(.body | startswith("**Codex review") | not)
+          | select(.body | startswith("**Claude review") | not)
+          | select(.body | startswith("**babysit-with-review:") | not)
+          | "### Inline comment by \(.user.login) on \(.path):\(.line // .original_line // "?")\n\(.body)\n"' \
     2>/dev/null || true)
   [ -n "$inline" ] && out="${out}${inline}"$'\n'
 
