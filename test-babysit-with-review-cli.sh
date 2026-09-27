@@ -547,5 +547,20 @@ rm -f "$lockfile_path"
 printf '%s\n' "$lockfile_path" | run_script outer-lockfile-removed "$TMP/lockfile-removed.record" "$TMP/home" > "$TMP/lockfile-removed.after.out"
 assert_contains "$TMP/lockfile-removed.after.out" "path=$lockfile_path removed=1" 'lock file removal: removing the stop file mid-run is detected (TC-1.4)'
 
+# Review-cycle template selection: converts QA-TEST-PLAN.md Suite 2 TC-2.3
+# (prescriptive mode with "Suggested fix:" starts at cycle 3) and TC-2.7
+# (convergence-tracking history block starts at cycle 2) into deterministic
+# coverage. review-template-name feeds cycle numbers through the real
+# codex_template_name() function extracted from the per-cycle template
+# selection in run_review_cycle; no Claude/Codex/gh involved.
+: > "$TMP/review-template.record"
+printf '1\n2\n3\n4\n5\n6\n' | run_script review-template-name "$TMP/review-template.record" "$TMP/home" > "$TMP/review-template.out"
+assert_contains "$TMP/review-template.out" 'cycle=1 template=descriptive-baseline' 'review template: cycle 1 uses the descriptive baseline'
+assert_contains "$TMP/review-template.out" 'cycle=2 template=descriptive-convergence' 'review template: cycle 2 switches to descriptive-convergence (TC-2.7)'
+assert_contains "$TMP/review-template.out" 'cycle=3 template=prescriptive-detailed' 'review template: cycle 3 switches to prescriptive mode (TC-2.3)'
+assert_contains "$TMP/review-template.out" 'cycle=4 template=prescriptive-detailed' 'review template: cycle 4 stays prescriptive-detailed'
+assert_contains "$TMP/review-template.out" 'cycle=5 template=prescriptive-adjudication' 'review template: cycle 5 switches to prescriptive-adjudication'
+assert_contains "$TMP/review-template.out" 'cycle=6 template=prescriptive-adjudication' 'review template: cycle 6 stays prescriptive-adjudication'
+
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]
