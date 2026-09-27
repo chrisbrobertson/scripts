@@ -239,11 +239,15 @@ sign-off before `babysit-builder.sh` is built against this spec:
   `build-incomplete` bail also swaps the ticket to `build-done` — leaving it
   `build-ready` would guarantee a duplicate PR on every subsequent run with no
   progress, which is the one case the accepted-duplicate-PR trade-off does not cover.
-  Confirmed against the shipped implementation: the ticket-side comment `mark_ticket_done`
-  posts is the same generic "PR halted for human merge" heading on all three paths that
-  reach it (`build-ready-for-merge` convergence, `build-max-cycles`, and `build-incomplete`)
-  — it does not carry the bail's real semantics; a human must read the PR's own label to
-  tell the three apart. `build-mcp-outage` is one deliberate exception to the swap: the
+  Confirmed against the shipped implementation: `mark_ticket_done` takes its comment's
+  heading as a parameter, and three of the four paths that reach it
+  (`build-ready-for-merge` convergence, `build-max-cycles`, and an ordinary `build-incomplete`
+  bail) pass the same generic "PR halted for human merge" string — it does not carry the
+  bail's real semantics there, so a human must read the PR's own label to tell those three
+  apart. The fourth path, a PR-branch/worktree-branch mismatch (`babysit-builder.sh:1622`,
+  also `build-incomplete`-labelled), passes a distinct "PR quarantined — branch mismatch"
+  heading instead, so that one case is self-describing in the ticket comment.
+  `build-mcp-outage` is one deliberate exception to the swap: the
   ticket keeps `build-ready` because the outage sweep at the top of the next run resumes
   that PR before the queue is read. `build-codex-outdated` and `build-codex-no-credits` are
   also exceptions in the shipped code — `mark_ticket_done` is never reached on those paths
@@ -310,15 +314,15 @@ babysit-builder.sh [--repo OWNER/REPO] [--source github|jira|both]
 ### Response shape
 ```
 # stdout: per-ticket summary
-[build] ticket #103 (github, spec: babysit-specs/L3-example.md) → worktree created, implementing
-[build] ticket #103 (github) → PR #150 opened, HANDOFF_REVIEW → entering build cycle
+[build] ticket 103 (github, spec: babysit-specs/L3-example.md) → worktree created, implementing
+[build] ticket 103 (github) → PR #150 opened, HANDOFF_REVIEW → entering build cycle
 [build] PR #150 → cycle 1: 2 BLOCKING, 1 RECOMMENDED
 [build] PR #150 → cycle 2: 0 BLOCKING → converged, labelled build-ready-for-merge, halted for human merge
 [build] ticket PROJ-9 (jira) → SPEC_GAP: acceptance criteria missing for the retry path,
         labelled build-needs-clarification, build-ready removed, comment posted
 
 # stderr
-[build] ticket #104 (github): worktree creation failed → left in queue
+[build] ticket 104 (github): worktree creation failed → left in queue
 
 # exit 0 even when zero tickets are built or all tickets bail this run
 ```
