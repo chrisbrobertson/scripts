@@ -116,7 +116,7 @@ Excluded from every queue: sub-issues (built through their parent), closed issue
 For each open issue in `bzr-spec-review` whose spec PR (branch `bzr/spec-<issue>`, body `Refs #<issue>`) is non-draft and approved per the L2 "Human → system" contract. Each step idempotent:
 1. In a scratch worktree on the PR branch, rewrite `status: review` → `status: ready` in every changed file with a `spec_type:` frontmatter; commit `spec: mark ready per approval on #<issue>`; push. This is the only content edit a controller makes, authorised by the approval.
 2. Post commit status `codex-review=success` on the new head (same `gh api` call as `babysit-builder.sh`), since `setup-branch-protection.sh` requires it on main. `babysit-work-prep.sh` merges bare today (line 416) and would fail on a protected repo.
-3. `gh pr merge --merge`. On failure: comment on the issue, stay in `bzr-spec-review`, retry only when the PR head changes.
+3. `gh pr merge --merge`. On failure: comment on the issue, stay in `bzr-spec-review`. There is no head-change or comment-dedup gate: as long as the PR stays open, non-draft, and approved, every subsequent tick re-runs steps 1-3 unconditionally and re-posts the same failure comment (`sweep_approvals`, `bazaar-issues.sh:189-204`) — see Failure modes.
 4. Reconcile sub-issues: the worker created them at draft time (see [BZR-FEAT-ISSUE-WORKER](L3-issue-worker.md)); when two or more `spec_type: task` files merge, the sweep verifies one open sub-issue with a `bzr-sub-issue … spec=<L4 ID>` marker exists per file, creates any missing, and closes any whose L4 was dropped from the final PR. When zero or one `spec_type: task` file merges, no sub-issue is wanted for it and none is created (`bzr_reconcile_sub_issues`, `lib/bazaar-common.sh:595`).
 5. Rewrite the parent's `Specs:` line to the merged spec IDs and paths (the build precheck reads this).
 6. `bzr-spec-review` → `bzr-ready`; comment with the merged spec list and sub-issue numbers.
@@ -174,6 +174,7 @@ Log lines `[ctl:<role>]`: `tick: queue empty` (only when nothing is in the queue
 - **Controller on host A dies while worker on host A still runs; controller restarts:** startup release would free a live claim. Mitigation: startup release checks each pid before releasing; only dead pids are freed.
 - **Approval regex false positive** ("not approved yet"): a spec merges early. Mitigation: negative-phrase guard and GitHub review state preferred. [ASSUMPTION] the guard is enough. Flips if: it misfires once, then approval moves to GitHub reviews only.
 - **Attempt markers drown the thread:** three per escalation at most; acceptable.
+- **Stuck approval merge spams the thread:** a persistent `gh pr merge` failure (e.g. unresolved conflicts) re-posts the same failure comment every tick, since the sweep has no head-change or comment-dedup gate. Blast: one issue's comment thread; no double-merge risk, since a merged PR moves the issue out of the `bzr-spec-review` queue on the next fetch.
 
 # Bounds
 
