@@ -532,5 +532,20 @@ assert_contains "$TMP/maxiter-not-reached.out" 'iter=4 exhausted=0' 'max-iter: a
 printf '6\n' | MAX_ITER=5 run_script outer-maxiter "$TMP/maxiter-past.record" "$TMP/home" > "$TMP/maxiter-past.out"
 assert_contains "$TMP/maxiter-past.out" 'iter=6 exhausted=1' 'max-iter: uses >= so a counter past MAX_ITER still counts as exhausted'
 
+# Lock file removal mid-run: converts QA-TEST-PLAN.md Suite 1 TC-1.4 (removing
+# the stop file mid-run causes the loop to exit gracefully) into deterministic
+# coverage. outer-lockfile-removed feeds stop-file paths through the real
+# stop_file_removed() function extracted from the outer loop's per-iteration
+# check; no Claude/Codex/gh involved.
+lockfile_path="$TMP/lockfile-removed-mid-run.stop"
+touch "$lockfile_path"
+: > "$TMP/lockfile-removed.record"
+printf '%s\n' "$lockfile_path" | run_script outer-lockfile-removed "$TMP/lockfile-removed.record" "$TMP/home" > "$TMP/lockfile-removed.before.out"
+assert_contains "$TMP/lockfile-removed.before.out" "path=$lockfile_path removed=0" 'lock file removal: still present mid-run is not treated as removed (TC-1.4)'
+
+rm -f "$lockfile_path"
+printf '%s\n' "$lockfile_path" | run_script outer-lockfile-removed "$TMP/lockfile-removed.record" "$TMP/home" > "$TMP/lockfile-removed.after.out"
+assert_contains "$TMP/lockfile-removed.after.out" "path=$lockfile_path removed=1" 'lock file removal: removing the stop file mid-run is detected (TC-1.4)'
+
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]

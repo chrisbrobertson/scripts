@@ -111,6 +111,13 @@ creates the lock file itself and never expects to find one already there)
 ---
 
 ### TC-1.4: Lock File Removal Mid-Run
+**Status: automated, not manual (added 2026-09-27).** The per-iteration
+stop-file check now has deterministic coverage in
+`test-babysit-with-review-cli.sh` via `BABYSIT_TEST_MODE=outer-lockfile-removed`,
+which drives the real `stop_file_removed()` function extracted from the outer
+loop against a real file on disk (present, then removed) — no Claude/Codex/gh
+involved. The manual steps below remain as the original acceptance reference.
+
 **Given:** Lock file removed during run  
 **When:** Next iteration checks lock file  
 **Then:** Loop exits gracefully

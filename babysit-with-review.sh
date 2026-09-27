@@ -1589,6 +1589,15 @@ maxiter_exhausted() {
   [ "$iter_val" -ge "$max_val" ]
 }
 
+# Stop-file removal predicate: true once the lock file the outer loop created
+# at startup is no longer present (the documented mid-run graceful-stop
+# signal). Extracted from the per-iteration check so
+# BABYSIT_TEST_MODE=outer-lockfile-removed can drive it deterministically.
+stop_file_removed() {
+  local stop_file="$1"
+  [ ! -f "$stop_file" ]
+}
+
 # Narrow deterministic test hook for argument and provider-command regression
 # coverage. Normal execution is unchanged when BABYSIT_TEST_MODE is unset.
 # outer-preflight is handled separately below: it needs the real pre-flight
@@ -1639,6 +1648,18 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight
           echo "iter=$_iter_line exhausted=1"
         else
           echo "iter=$_iter_line exhausted=0"
+        fi
+      done
+      ;;
+    outer-lockfile-removed)
+      # Each stdin line is a stop-file path to check. Prints "path=<p>
+      # removed=0|1" per line using the real stop_file_removed() against
+      # that path.
+      while IFS= read -r _path_line; do
+        if stop_file_removed "$_path_line"; then
+          echo "path=$_path_line removed=1"
+        else
+          echo "path=$_path_line removed=0"
         fi
       done
       ;;
@@ -1812,7 +1833,7 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
   HEADER="=== iter $iter @ $(date -u +%FT%TZ) ==="
   echo "$HEADER" | tee -a "$LOG" >&2
   echo "  [stop file: $STOP_FILE]" >&2
-  if [ ! -f "$STOP_FILE" ]; then
+  if stop_file_removed "$STOP_FILE"; then
     echo "Stop file removed; exiting before iter $iter." | tee -a "$LOG"
     break
   fi
