@@ -1667,6 +1667,15 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight
         printf 'missing_reviewer=%s\n' "$REVIEWER"
       fi
       ;;
+    review-cycle-missing-reviewer)
+      # Drives the real run_review_cycle() through its graceful-degradation
+      # early return when the selected reviewer binary is absent from PATH
+      # (QA-TEST-PLAN.md TC-2.9). That check runs before any gh/git call, so
+      # no gh stub is needed here. PR number comes from TEST_PR_NUM.
+      _rc=0
+      run_review_cycle "${TEST_PR_NUM:-7}" || _rc=$?
+      printf 'run_review_cycle_rc=%s\n' "$_rc"
+      ;;
     model-policy)
       printf 'startup_model=%s\n' "$(implementer_startup_model_policy)"
       printf 'remediation_model=%s\n' "$(resolved_implementer_model 'claude-opus-4-8')"
