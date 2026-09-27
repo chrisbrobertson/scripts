@@ -1680,6 +1680,18 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight
       run_review_cycle "${TEST_PR_NUM:-7}" || _rc=$?
       printf 'run_review_cycle_rc=%s\n' "$_rc"
       ;;
+    review-cycle-mcp-outage)
+      # Drives the real run_review_cycle() through its MCP-outage terminal
+      # path (QA-TEST-PLAN.md TC-2.8): 3 consecutive codex transport failures
+      # exhaust review_with_retry, and the function must call
+      # fail_review_cycle_mcp() (label review-mcp-outage, draft, comment) and
+      # return 2 rather than falling through to the generic
+      # fail_review_cycle() (review-incomplete) path. Requires codex/sleep/gh
+      # stubs on PATH. PR number comes from TEST_PR_NUM.
+      _rc=0
+      run_review_cycle "${TEST_PR_NUM:-7}" || _rc=$?
+      printf 'run_review_cycle_rc=%s\n' "$_rc"
+      ;;
     model-policy)
       printf 'startup_model=%s\n' "$(implementer_startup_model_policy)"
       printf 'remediation_model=%s\n' "$(resolved_implementer_model 'claude-opus-4-8')"
