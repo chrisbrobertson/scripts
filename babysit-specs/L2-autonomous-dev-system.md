@@ -34,7 +34,8 @@ Engineering leads implementing autonomous development tools — understand compo
 │ babysit-with-review.sh v1.1.0 (orchestrator, 1921 lines)            │
 │  - Outer loop: git worktree → collect_state → run_implementer        │
 │  - Review cycle: review_with_retry → run_implementer → convergence   │
-│  - Pre-flight: working tree + git worktree prune + reviewer probe    │
+│  - Pre-flight: working tree + git worktree prune (reviewer probe     │
+│    runs per review cycle, not at startup — see run_review_cycle)     │
 │  - Stuck detection: SHA256 hash comparison                           │
 │  - Merge gate: gh api codex-review=success + setup-branch-protection│
 └─────────────────────┬───────────────────────────────────────────────┘
@@ -199,12 +200,12 @@ From the existing implementation:
 
 ### Orchestrator → Helper Scripts
 
-- **Protocol:** Subprocess invocation with --json flag
+- **Protocol:** Subprocess invocation, no `--json` flag (`collect_state()` calls each script with its default table output; `specs` is called with `--check-impl`, not `--json`)
 - **Scripts:**
   - `$SCRIPTS_DIR/prs` (PR list with CI rollup)
   - `$SCRIPTS_DIR/issues` (issue list sorted by priority)
-  - `$SCRIPTS_DIR/specs` (spec file list with status)
-- **Response shape:** JSON array or table format
+  - `$SCRIPTS_DIR/specs --check-impl` (spec file list with status and implementation check)
+- **Response shape:** Table format (`--json` remains available as a flag the implementer Claude may invoke itself for ad hoc queries mid-iteration, but is not part of the orchestrator's own state-collection protocol)
 - **Auth/deps:** Inherit from gh CLI authentication
 - **Idempotency:** Idempotent read-only operations
 

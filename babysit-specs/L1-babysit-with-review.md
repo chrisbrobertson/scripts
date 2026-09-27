@@ -35,7 +35,7 @@ From the existing implementation (babysit-with-review.sh):
 - Two companion scripts extend the loop: `babysit-work-prep.sh` (ticket → spec pipeline with human approval gate) and `babysit-builder.sh` (spec → PR pipeline with human merge gate). Both reuse the same REPO_BASE infrastructure, stop-file protocol, and selectable implementer/reviewer harnesses.
 - Codex review integration is optional (graceful degradation when codex CLI unavailable)
 - Logging infrastructure exists at ~/sisyphus-logs/ with per-project lock files
-- Helper scripts (prs, issues, specs) provide state collection via --json output
+- Helper scripts (prs, issues, specs) provide state collection via their default table output (`collect_state()` calls `prs`, `issues`, and `specs --check-impl` with no `--json` flag); `--json` is available for Claude to invoke itself mid-iteration for ad hoc queries, but is not how the wrapper's own state collection works
 
 ## What we assume
 
