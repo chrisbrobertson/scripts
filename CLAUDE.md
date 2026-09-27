@@ -28,7 +28,7 @@ empirical tests (`test-*`). No formal test suite, no build step, no CI.
 | File | Purpose |
 | --- | --- |
 | `new-fleet.sh` | Provision a staff-team fleet (staff-swe/sre/pm) for a service; see `docs/STAFF-FLEET.md` |
-| `claude-code-proxy.py` | OpenAI-compatible HTTP proxy routing to `claude -p`; used by new-fleet.sh |
+| `claude-code-proxy.py` | Orphaned. OpenAI-compatible HTTP proxy that used to bridge Hermes to `claude -p`; `new-fleet.sh` dropped it for Hermes's native `openai-codex` provider in 84364ea (2026-05-11) — no longer wired to anything. |
 | `babysit-with-review.sh` | Autonomous implementation loop with independently selectable Claude/Codex implementer and reviewer harnesses, stop-file lock, and convergent PR-review cycle; see `--help` for role-specific model/effort switches. Pass `--repo-base PATH` (or `REPO_BASE` env var) if helper scripts live outside `~/repos/scripts` — auto-detects `~/repos` then `~/repo`. Versioned via semver (`--version`); current: 1.1.0. |
 | `babysit-work-prep.sh` | Ticket-to-spec intake loop. Drafts one TIF spec per GitHub/Jira ticket in an isolated worktree and opens a marked **draft** PR, then drives it through an adversarial spec review cycle (contradiction with existing specs, undeclared duplication, dangling references, schema violations, invented design decisions) — the PR only leaves draft at 0 BLOCKING, and the approval sweep refuses to act on a draft. Then merges approved spec PRs and creates idempotent `sub-ticket` + `build-ready` sub-tickets for `babysit-builder.sh` to pick up (the *source* ticket gets `status:ready-to-build`, meaning "spec approved, sub-ticket exists"). Approval defaults to the authenticated GitHub user; see `--help` for source, model, dry-run, and approver settings. |
 | `babysit-builder.sh` | Spec-to-PR build loop. Pulls any GitHub/Jira ticket labelled `build-ready`, implements its referenced spec in a per-ticket worktree, then runs the same convergent review cycle as `babysit-with-review.sh` — but **never merges**: it halts with the PR labelled for a human. Specs with gaps are kicked back (`SPEC_GAP` → `build-needs-clarification`) rather than built as-is. Own `build-*` label namespace and own stop file, so it runs concurrently with the other two loops. See `babysit-specs/L3-builder.md` and `--help`. Current: 0.1.0. |
@@ -59,8 +59,8 @@ empirical tests (`test-*`). No formal test suite, no build step, no CI.
 ## Staff-fleet agents
 
 `new-fleet.sh` scaffolds three always-on AI agents (staff-swe, staff-sre, staff-pm) for a
-service, using `claude-code-proxy.py` to bridge Hermes Agent (needs OpenAI endpoint) with
-Claude Code CLI (OAuth, no API key). One fleet per service, each fully isolated.
+service, running on Hermes Agent's native `openai-codex` provider (ChatGPT OAuth, model
+`gpt-5.5`) — no proxy in front of it. One fleet per service, each fully isolated.
 
 Full operator guide: **`docs/STAFF-FLEET.md`** — quick start, architecture, tuning, troubleshooting.
 
