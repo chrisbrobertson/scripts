@@ -1,9 +1,10 @@
 # QA Test Plan — babysit-with-review.sh
 
 **Owner:** qa-lead  
-**Status:** Test Suite 4 automated and passing (130/130, last run 2026-09-27), now
-including automated pre-flight coverage for TC-1.2 (see Suite 1); Test Suites 1-3
-otherwise remain manual smoke tests against live Claude/Codex/gh, not yet executed  
+**Status:** Test Suite 4 automated and passing (136/136, last run 2026-09-27), now
+including automated pre-flight coverage for TC-1.2 and sentinel-detection coverage
+for TC-1.5/TC-1.6 (see Suite 1); Test Suites 1-3 otherwise remain manual smoke tests
+against live Claude/Codex/gh, not yet executed  
 **Priority:** Medium (internal tool, existing implementation to verify)
 
 ## Test Strategy
@@ -99,6 +100,15 @@ reference; the automated cases are the ones that actually run before every commi
 ---
 
 ### TC-1.5: STOP Sentinel Detection
+**Status: automated, not manual (added 2026-09-27).** The trailing-line
+classification (STOP recognized only as the final line, not mid-output) is
+extracted into `parse_sentinel()` and covered deterministically in
+`test-babysit-with-review-cli.sh` via `BABYSIT_TEST_MODE=outer-sentinel`,
+which feeds one simulated iteration's implementer RESULT through the real
+function (no Claude/Codex/gh involved). The manual steps below remain as the
+original acceptance reference; the automated cases are the ones that
+actually run before every commit.
+
 **Given:** Claude outputs `STOP` sentinel  
 **When:** Iteration completes  
 **Then:** Loop exits with code 0
@@ -114,6 +124,13 @@ reference; the automated cases are the ones that actually run before every commi
 ---
 
 ### TC-1.6: HANDOFF_REVIEW Sentinel Detection
+**Status: automated (parsing only), not manual (added 2026-09-27).** The
+same `parse_sentinel()`/`outer-sentinel` harness covers PR-number extraction,
+whitespace trimming, and the non-numeric "ignore" path. The actual
+`run_review_cycle` invocation this sentinel triggers is not exercised by this
+harness (it needs a real PR and gh/codex) — the manual steps below remain the
+acceptance reference for that end-to-end behavior.
+
 **Given:** Claude outputs `HANDOFF_REVIEW 123`  
 **When:** Iteration completes  
 **Then:** Review cycle runs before next iteration
