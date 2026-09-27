@@ -5,7 +5,8 @@
 including automated pre-flight coverage for TC-1.2, lock-file-collision coverage
 for TC-1.3/TC-1.3b, lock-file-removal coverage for TC-1.4, sentinel-detection
 coverage for TC-1.5/TC-1.6, and MAX_ITER-exhaustion coverage for TC-1.8 (see
-Suite 1), plus blocking-count coverage for TC-2.1/TC-2.2 and a separate
+Suite 1), plus blocking-count coverage for TC-2.1/TC-2.2 and
+MAX_REVIEW_CYCLES-exhaustion coverage for TC-2.6 (predicate only) and a separate
 `test-babysit-review-feedback.sh` harness covering the `collect_pr_feedback()`
 filter (TC-2.10/TC-2.11, see Suite 2); Test Suites 1-3 otherwise remain
 manual smoke tests against live Claude/Codex/gh, not yet
@@ -336,6 +337,16 @@ remain the acceptance reference for that.
 ---
 
 ### TC-2.6: MAX_REVIEW_CYCLES Exhaustion
+**Status: automated (predicate only), not manual (added 2026-09-27).** The cycle-cap
+check is extracted into `review_cycles_exhausted()` (the boolean that now drives
+`run_review_cycle`'s loop condition directly, in place of the inline `-lt`
+comparison) and covered deterministically in `test-babysit-with-review-cli.sh` via
+`BABYSIT_TEST_MODE=review-cycles-exhausted`, which feeds simulated `cycle max`
+pairs through the real function — no Claude/Codex/gh involved. The resulting
+`fail_review_cycle("review-incomplete" label, PR undraft, bail comment)` side
+effects are not exercised by this harness (they need a real PR and gh); the
+manual steps below remain the acceptance reference for that end-to-end behavior.
+
 **Given:** MAX_REVIEW_CYCLES=3  
 **When:** Cycle limit reached  
 **Then:** PR labeled `review-incomplete`
@@ -577,10 +588,13 @@ were drafted (2026-06-28). It is deterministic and requires no live Claude/Codex
 calls, so — unlike Suites 1-3 — it runs in CI-suitable time and is expected to pass
 before every commit that touches harness selection or review-structure validation.
 
-**Run:** `./test-babysit-with-review-cli.sh` — last run 2026-09-27, 130 assertions,
-0 failed. 18 of those are the Suite 1 pre-flight cases (TC-1.2) added the same day;
-everything else below is selectable-implementer/reviewer and review-structure
-coverage.
+**Run:** `./test-babysit-with-review-cli.sh` — last run 2026-09-27, 161 assertions,
+0 failed (this figure had drifted to a stale 130 before today's TC-2.6 pass; treat
+the count as point-in-time, not a live figure — see the `index.md` precedent in
+`bazaar-builder-specs/log.md` for why these aren't re-chased every iteration). 18 of
+those are the Suite 1 pre-flight cases (TC-1.2) added the same day, and 3 more are
+the TC-2.6 `review-cycles-exhausted` cases added just above; everything else below
+is selectable-implementer/reviewer and review-structure coverage.
 
 **Coverage (paraphrased from the harness's own assertions, not a numbered TC list —
 add TC IDs here if this suite is ever split into individually-run cases):**

@@ -532,6 +532,24 @@ assert_contains "$TMP/maxiter-not-reached.out" 'iter=4 exhausted=0' 'max-iter: a
 printf '6\n' | MAX_ITER=5 run_script outer-maxiter "$TMP/maxiter-past.record" "$TMP/home" > "$TMP/maxiter-past.out"
 assert_contains "$TMP/maxiter-past.out" 'iter=6 exhausted=1' 'max-iter: uses >= so a counter past MAX_ITER still counts as exhausted'
 
+# MAX_REVIEW_CYCLES exhaustion: converts QA-TEST-PLAN.md Suite 2 TC-2.6 (the
+# review cycle bails via fail_review_cycle() once the cycle counter reaches
+# MAX_REVIEW_CYCLES without convergence) into deterministic coverage.
+# review-cycles-exhausted feeds simulated "cycle max" pairs through the real
+# review_cycles_exhausted() function extracted from run_review_cycle's loop
+# condition; no Claude/Codex/gh involved.
+: > "$TMP/review-cycles-not-reached.record"
+printf '2 6\n' | run_script review-cycles-exhausted "$TMP/review-cycles-not-reached.record" "$TMP/home" > "$TMP/review-cycles-not-reached.out"
+assert_contains "$TMP/review-cycles-not-reached.out" 'cycle=2 max=6 exhausted=0' 'review-cycles: a cycle below MAX_REVIEW_CYCLES is not exhaustion'
+
+: > "$TMP/review-cycles-reached.record"
+printf '6 6\n' | run_script review-cycles-exhausted "$TMP/review-cycles-reached.record" "$TMP/home" > "$TMP/review-cycles-reached.out"
+assert_contains "$TMP/review-cycles-reached.out" 'cycle=6 max=6 exhausted=1' 'review-cycles: exhaustion fires once cycle reaches MAX_REVIEW_CYCLES (TC-2.6)'
+
+: > "$TMP/review-cycles-below-cap.record"
+printf '5 6\n' | run_script review-cycles-exhausted "$TMP/review-cycles-below-cap.record" "$TMP/home" > "$TMP/review-cycles-below-cap.out"
+assert_contains "$TMP/review-cycles-below-cap.out" 'cycle=5 max=6 exhausted=0' 'review-cycles: exhaustion does not fire before MAX_REVIEW_CYCLES'
+
 # Lock file removal mid-run: converts QA-TEST-PLAN.md Suite 1 TC-1.4 (removing
 # the stop file mid-run causes the loop to exit gracefully) into deterministic
 # coverage. outer-lockfile-removed feeds stop-file paths through the real

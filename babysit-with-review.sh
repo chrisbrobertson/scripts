@@ -1304,7 +1304,7 @@ run_review_cycle() {
   # surfaces changes made by the selected implementer during this review cycle.
   review_start_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
 
-  while [ "$cycle" -lt "$MAX_REVIEW_CYCLES" ]; do
+  while ! review_cycles_exhausted "$cycle" "$MAX_REVIEW_CYCLES"; do
     cycle=$((cycle + 1))
     echo "--- review cycle $cycle / $MAX_REVIEW_CYCLES (PR #$pr_num) @ $(date -u +%FT%TZ) ---" | tee -a "$LOG" >&2
 
@@ -1588,6 +1588,16 @@ maxiter_exhausted() {
   [ "$iter_val" -ge "$max_val" ]
 }
 
+# MAX_REVIEW_CYCLES exhaustion predicate: true once the review cycle's
+# attempt counter has reached the configured cap (the point where
+# run_review_cycle stops looping and calls fail_review_cycle). Extracted
+# from the loop condition so BABYSIT_TEST_MODE=review-cycles-exhausted can
+# drive it deterministically.
+review_cycles_exhausted() {
+  local cycle_val="$1" max_val="$2"
+  [ "$cycle_val" -ge "$max_val" ]
+}
+
 # Stop-file removal predicate: true once the lock file the outer loop created
 # at startup is no longer present (the documented mid-run graceful-stop
 # signal). Extracted from the per-iteration check so
@@ -1683,6 +1693,21 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight
           echo "iter=$_iter_line exhausted=1"
         else
           echo "iter=$_iter_line exhausted=0"
+        fi
+      done
+      ;;
+    review-cycles-exhausted)
+      # Each stdin line is "cycle max" — the review loop's cycle counter and
+      # MAX_REVIEW_CYCLES at the point the loop condition is re-checked.
+      # Prints "cycle=C max=M exhausted=0|1" per line using the real
+      # review_cycles_exhausted() (QA-TEST-PLAN.md TC-2.6: hitting the cap
+      # without convergence bails the review cycle via fail_review_cycle()).
+      # No Claude/Codex/gh involved.
+      while IFS=' ' read -r _cycle_val _max_val; do
+        if review_cycles_exhausted "$_cycle_val" "$_max_val"; then
+          echo "cycle=$_cycle_val max=$_max_val exhausted=1"
+        else
+          echo "cycle=$_cycle_val max=$_max_val exhausted=0"
         fi
       done
       ;;
