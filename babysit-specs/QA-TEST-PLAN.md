@@ -383,12 +383,15 @@ reference for the live-PR path (the actual prompt Claude receives).
 
 ### TC-2.11: Self-Posted Codex Comments Excluded
 **Status: automated, not manual (added 2026-09-27).** Same
-`test-babysit-review-feedback.sh` harness as TC-2.10: canned fixtures include a
-self-posted `**Codex review`, `**Claude review`, and `**babysit-with-review:`
-comment/review, and the assertions confirm `collect_pr_feedback()` excludes all
-three regardless of which of the three gh calls (`--json reviews`, `--json
-comments`, `gh api .../comments`) returned them. The manual steps remain the
-acceptance reference for the live-PR path.
+`test-babysit-review-feedback.sh` harness as TC-2.10: the `--json reviews`
+fixture covers all three self-posted prefixes (`**Codex review`, `**Claude
+review`, `**babysit-with-review:`), and the assertions confirm
+`collect_pr_feedback()` excludes all three from that call. The `--json
+comments` fixture additionally confirms exclusion of a self-posted `**Codex
+review` in top-level PR comments. Inline review comments (`gh api
+.../comments`) have no self-posted fixture, so exclusion there is untested by
+this harness. The manual steps remain the acceptance reference for the
+live-PR path.
 
 **Given:** PR has self-posted Codex review comment  
 **When:** collect_pr_feedback runs  
