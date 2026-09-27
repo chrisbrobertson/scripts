@@ -2023,9 +2023,24 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
   # review itself; only merge_reviewed_pr() un-drafts it, and only after a
   # clean review, so an in-progress retry is never briefly mergeable.
   _retry_pairs=()
+  _retry_lookup_failed=0
   for _label in "${RESUMABLE_STALL_LABELS[@]}"; do
-    _retry_pairs+=("$_label $(gh pr list --state open --label "$_label" --limit 1 --json number -q '.[0].number' 2>/dev/null)")
+    if ! _pr_num=$(gh pr list --state open --label "$_label" --limit 1 --json number -q '.[0].number' 2>>"$LOG"); then
+      # A GitHub API failure here must NOT be treated as "no stalled PR" —
+      # that would let new implementation work start while a real stalled
+      # PR sits unlabelled-for-discovery, silently defeating the retry gate.
+      echo "[outer] WARNING: gh pr list failed while checking for PRs labelled $_label; skipping new work this iteration" | tee -a "$LOG" >&2
+      _retry_lookup_failed=1
+      break
+    fi
+    _retry_pairs+=("$_label $_pr_num")
   done
+  if [ "$_retry_lookup_failed" -eq 1 ]; then
+    unset _retry_pairs _label _pr_num _retry_lookup_failed
+    sleep "$SLEEP_SEC"
+    continue
+  fi
+  unset _retry_lookup_failed
   _retry_pick=$(pick_stalled_retry "${_retry_pairs[@]}") || _retry_pick=""
   unset _retry_pairs _label
   if [ -n "$_retry_pick" ]; then
