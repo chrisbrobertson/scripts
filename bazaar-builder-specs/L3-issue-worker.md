@@ -115,7 +115,7 @@ Verify + normalise + classify: 3-10 min Sonnet-class. Draft: 10-30 min. Review c
 Inherits `gh` auth. The worker can edit issue bodies and open PRs but cannot merge (no code path) and, with branch protection, cannot push to main.
 
 ## Telemetry contract
-`[issue:<n>] phase=<p> …`, `sentinel=<word>`, `spec-review cycle=<k> blocking=<b>`. Sink: `$BZR_HOME/<repo>/logs/issue-<n>-<ts>.log`.
+Log lines carry the tag `[issue-worker]` (set via `BZR_LOG_TAG`, not `[issue:<n>]`); the issue number is in the message body as `#<n>`, e.g. `[issue-worker] #123 sentinel=SPEC_REVIEW`, `[issue-worker] #123 draft PR #456 opened`, `[issue-worker] #123 resuming existing branch bzr/spec-123`. Phase is recorded as a PR-body marker comment (`<!-- bzr-issue-worker phase=<p> ts=<t> -->`), not as a log line. Review-cycle detail comes from the shared review lib's `run_review_cycle --mode spec`: `[review:spec] cycle=<k>/<max> blocking=<b> recommended=<r> new=<n> recurrence=<r>`. Sink: `$BZR_HOME/<repo>/logs/issues-<n>-<ts>.log` (filename prefix is the controller's `BZR_ROLE=issues`, not `issue`).
 
 ## Verifiers
 - Tech lead: Chris Robertson
