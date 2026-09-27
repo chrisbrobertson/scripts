@@ -68,7 +68,7 @@ Design decisions:
   silently fixed issues.
 - **Worktree isolation.** Each PR is reviewed in a temporary `git worktree`. The main
   checkout is never touched. The trap cleans up the worktree on exit.
-- **Codex prompt is Cycle 1 template + `[RETROSPECTIVE]` preamble.** The preamble includes
+- **Codex prompt is Cycle 1 template + `[RETROSPECTIVE REVIEW]` preamble.** The preamble includes
   the PR number, merge date, and the full `gh pr diff` output so Codex sees the exact
   change set without needing to compute it from the worktree state alone.
 - **Idempotency via HTML comment marker.** Before posting, the script checks existing PR
@@ -116,7 +116,7 @@ run-retrospective-review.sh [--repo OWNER/REPO] [--dry-run] [--no-issues] PR_NUM
 # stdout: per-PR summary
 PR #133: 2 blocking finding(s) → review posted, 2 issue(s) created
 PR #134: 0 blocking finding(s) → review posted (PASSED)
-PR #135: Codex failure (compat) → skipped (see stderr)
+PR #135: Codex failure (compat) → skipped (upgrade Codex CLI before retrying)
 PR #136: already reviewed → skipped (idempotent)
 
 # exit 0 even with skipped PRs; exit 1 only on fatal errors
@@ -168,7 +168,7 @@ Events emitted to stdout:
 
 Events emitted to stderr:
 - `PR #N: Codex failure (compat) → skipped`
-- `PR #N: worktree creation failed → skipped`
+- `PR #N: worktree creation failed at $merge_sha → skipped`
 - `PR #N: gh pr view failed → skipped`
 
 ## Verifiers
@@ -224,8 +224,8 @@ Events emitted to stderr:
 
 ## Acceptance tests
 1. **Given** a merged PR with no `<!-- retrospective-review: pr=N -->` marker, **when**
-   script runs, **then** Codex review is posted as a PR comment with the `[RETROSPECTIVE]`
-   header and the marker.
+   script runs, **then** Codex review is posted as a PR comment with a
+   `[RETROSPECTIVE REVIEW — ...]` header and the marker.
 2. **Given** the script is run twice on the same PR, **then** the second run outputs
    `already reviewed → skipped` and no duplicate comment is posted.
 3. **Given** Codex returns 2 blocking findings, **when** review completes, **then** 2
