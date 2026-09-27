@@ -1,14 +1,15 @@
 # QA Test Plan — babysit-with-review.sh
 
 **Owner:** qa-lead  
-**Status:** Test Suite 4 automated and passing (151/151, last run 2026-09-27), now
+**Status:** Test Suite 4 automated and passing (160/160, last run 2026-09-27), now
 including automated pre-flight coverage for TC-1.2, lock-file-collision coverage
 for TC-1.3/TC-1.3b, lock-file-removal coverage for TC-1.4, sentinel-detection
 coverage for TC-1.5/TC-1.6, and MAX_ITER-exhaustion coverage for TC-1.8 (see
-Suite 1), plus blocking-count coverage for TC-2.1/TC-2.2 and a separate
-`test-babysit-review-feedback.sh` harness covering the `collect_pr_feedback()`
-filter (TC-2.10/TC-2.11, see Suite 2); Test Suites 1-3 otherwise remain
-manual smoke tests against live Claude/Codex/gh, not yet
+Suite 1), plus blocking-count coverage for TC-2.1/TC-2.2, sentinel/HEAD-unchanged
+coverage for TC-2.4/TC-2.5, missing-reviewer graceful-degradation coverage for
+TC-2.9, and a separate `test-babysit-review-feedback.sh` harness covering the
+`collect_pr_feedback()` filter (TC-2.10/TC-2.11, see Suite 2); Test Suites 1-3
+otherwise remain manual smoke tests against live Claude/Codex/gh, not yet
 executed  
 **Priority:** Medium (internal tool, existing implementation to verify)
 
@@ -383,6 +384,16 @@ remain the acceptance reference for that.
 ---
 
 ### TC-2.9: Codex CLI Not Installed (Graceful Degradation)
+**Status: automated, not manual (added 2026-09-27).**
+`BABYSIT_TEST_MODE=review-cycle-missing-reviewer` drives the real
+`run_review_cycle()` with the selected reviewer binary removed from PATH,
+exercising the graceful-degradation return in full (not just the
+`reviewer_binary_available()` predicate that Suite 4 already covered) — no
+gh/git call happens before that check, so no stub is needed. Asserts both the
+exact skip log line and that the function returns 0 (PR left open for
+external review). The manual steps remain the acceptance reference for an
+actually-uninstalled system `codex` binary.
+
 **Given:** Codex CLI not installed  
 **When:** Cycle starts  
 **Then:** Logged message, function returns 0
@@ -671,9 +682,12 @@ covering TC-2.10/TC-2.11.
 classification and its HEAD-unchanged defensive check into pure functions
 (`parse_review_sentinel()`, `review_head_unchanged()`) and drive them
 deterministically — no Claude/Codex/gh involved. This covers TC-2.4 and TC-2.5
-(see each TC's own status note above). The cycle loop itself, label
-application, and TC-2.6/2.8/2.9 are untouched by this — no stub exists yet for
-those.
+(see each TC's own status note above). A third sibling mode,
+`review-cycle-missing-reviewer`, drives `run_review_cycle`'s own
+graceful-degradation early return (not a pure-function extraction, since that
+return happens before any gh/git call) and covers TC-2.9. The cycle loop
+itself, label application, and TC-2.6/2.8 remain untouched — no stub exists
+yet for those.
 
 **Still open, for the rest of Test Suite 2 and all of Suite 3** (review-cycle state
 machine, MCP resilience): those cases still require live Claude/Codex/gh calls or

@@ -343,6 +343,20 @@ mv "$TMP/bin/codex.off" "$TMP/bin/codex"
 assert_contains "$TMP/availability.out" 'missing_reviewer=codex' 'missing selected reviewer is detected gracefully'
 assert_contains "$TMP/availability-claude.out" 'available_reviewer=claude' 'available selected reviewer is used even when Codex is missing'
 
+# QA-TEST-PLAN.md TC-2.9: run_review_cycle's own graceful-degradation path
+# (not just the reviewer_binary_available() predicate above) — verifies the
+# exact skip message and that the cycle returns 0 (PR left open) rather than
+# erroring, with no gh call attempted (none stubbed on PATH here).
+mv "$TMP/bin/codex" "$TMP/bin/codex.off"
+run_script review-cycle-missing-reviewer "$TMP/missing-reviewer.record" "$TMP/home" \
+  --reviewer codex > "$TMP/missing-reviewer.out" 2>"$TMP/missing-reviewer.err"
+mv "$TMP/bin/codex.off" "$TMP/bin/codex"
+assert_contains "$TMP/missing-reviewer.out" 'run_review_cycle_rc=0' \
+  'run_review_cycle returns 0 when reviewer CLI is missing'
+assert_contains "$TMP/missing-reviewer.err" \
+  '  [review] codex CLI not found; skipping review cycle (PR #7 remains open for external review)' \
+  'run_review_cycle logs the graceful-degradation skip message'
+
 # Displayed/logged model policy distinguishes Claude stage defaults from Codex
 # configured defaults, including remediation passes.
 run_script model-policy "$TMP/policy-claude.record" "$TMP/home" --implementer claude > "$TMP/policy-claude.out"
