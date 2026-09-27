@@ -1,9 +1,10 @@
 # QA Test Plan — babysit-with-review.sh
 
 **Owner:** qa-lead  
-**Status:** Test Suite 4 automated and passing (130/130, last run 2026-09-27), now
-including automated pre-flight coverage for TC-1.2 (see Suite 1); Test Suites 1-3
-otherwise remain manual smoke tests against live Claude/Codex/gh, not yet executed  
+**Status:** Test Suite 4 automated and passing (135/135, last run 2026-09-27), now
+including automated pre-flight coverage for TC-1.2 and stuck-detection coverage
+for TC-1.7 (see Suite 1); Test Suites 1-3 otherwise remain manual smoke tests
+against live Claude/Codex/gh, not yet executed  
 **Priority:** Medium (internal tool, existing implementation to verify)
 
 ## Test Strategy
@@ -129,6 +130,16 @@ reference; the automated cases are the ones that actually run before every commi
 ---
 
 ### TC-1.7: Stuck Detection
+**Status: automated, not manual (added 2026-09-27).** The sliding-window
+comparison (STUCK_N consecutive identical results, older hashes correctly
+sliding out of the window) is extracted into `stuck_guard()` and covered
+deterministically in `test-babysit-with-review-cli.sh` via
+`BABYSIT_TEST_MODE=outer-stuck`, which feeds one simulated iteration's
+implementer RESULT per stdin line through the real function (no
+Claude/Codex/gh involved). This TC's manual steps below remain as the
+original acceptance reference; the automated cases are the ones that
+actually run before every commit.
+
 **Given:** Claude outputs identical result for STUCK_N consecutive iterations  
 **When:** Stuck detection runs  
 **Then:** Loop halts with "Stuck" message
