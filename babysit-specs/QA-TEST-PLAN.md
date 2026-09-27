@@ -1,11 +1,11 @@
 # QA Test Plan — babysit-with-review.sh
 
 **Owner:** qa-lead  
-**Status:** Test Suite 4 automated and passing (140/140, last run 2026-09-27), now
-including automated pre-flight coverage for TC-1.2, sentinel-detection coverage
-for TC-1.5/TC-1.6, and MAX_ITER-exhaustion coverage for TC-1.8 (see Suite 1);
-Test Suites 1-3 otherwise remain manual smoke tests against live Claude/Codex/gh,
-not yet executed  
+**Status:** Test Suite 4 automated and passing (144/144, last run 2026-09-27), now
+including automated pre-flight coverage for TC-1.2, lock-file-collision coverage
+for TC-1.3/TC-1.3b, sentinel-detection coverage for TC-1.5/TC-1.6, and
+MAX_ITER-exhaustion coverage for TC-1.8 (see Suite 1); Test Suites 1-3 otherwise
+remain manual smoke tests against live Claude/Codex/gh, not yet executed  
 **Priority:** Medium (internal tool, existing implementation to verify)
 
 ## Test Strategy
@@ -73,15 +73,40 @@ reference; the automated cases are the ones that actually run before every commi
 ---
 
 ### TC-1.3: Lock File Semantics
-**Given:** Lock file exists  
+**Status: automated, not manual (added 2026-09-27).** This TC previously
+described a single scenario ("lock file exists → first iteration executes
+normally") that contradicts both the shipped code and
+`L3-autonomous-outer-loop.md` acceptance tests 3/3b: a *pre-existing* stop
+file is a startup collision (`exit 1`), not something the script tolerates.
+The two real scenarios — collision on a pre-existing lock file, and normal
+startup when none exists — are covered deterministically in
+`test-babysit-with-review-cli.sh` via `BABYSIT_TEST_MODE=outer-preflight`
+against a bare (collision case) or real (no-collision case) directory; no
+Claude/Codex/gh involved. The corrected manual steps below remain as the
+acceptance reference.
+
+**Given:** Lock file exists before start-up  
 **When:** Script runs  
-**Then:** First iteration executes normally
+**Then:** Exit 1 — collision (another instance may be running; the script
+creates the lock file itself and never expects to find one already there)
 
 **Test steps:**
 1. Create test repo
 2. Pre-create lock file: `mkdir -p ~/sisyphus-logs && touch ~/sisyphus-logs/test-babysit.stop`
 3. Run: `MAX_ITER=1 ~/repo/scripts/babysit-with-review.sh`
-4. Verify: Exit code 0, iteration executed
+4. Verify: Exit code 1, stderr contains `already exists`, no iteration executed
+
+---
+
+### TC-1.3b: Lock File Semantics — No Pre-Existing Lock
+**Given:** No lock file exists before start-up  
+**When:** Script runs  
+**Then:** Script creates the lock file itself; first iteration executes normally
+
+**Test steps:**
+1. Create test repo (ensure `~/sisyphus-logs/test-babysit.stop` does not exist)
+2. Run: `MAX_ITER=1 ~/repo/scripts/babysit-with-review.sh`
+3. Verify: Exit code 0, iteration executed, lock file present during the run
 
 ---
 

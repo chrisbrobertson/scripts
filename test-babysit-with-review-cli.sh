@@ -461,6 +461,30 @@ run_preflight "$TMP/preflight/diverged/work" "$TMP/preflight/home" \
 [ "$rc" -eq 1 ] && pass 'preflight: diverged from origin exits 1' || fail 'preflight: diverged from origin exits 1'
 if grep -q 'diverged from origin/main' "$TMP/preflight/diverged.err"; then pass 'preflight: diverged error names the cause'; else fail 'preflight: diverged error names the cause'; fi
 
+# Lock file collision: converts QA-TEST-PLAN.md TC-1.3 (lock file semantics)
+# into deterministic coverage. The STOP_FILE collision check runs unconditionally
+# before argument-mode dispatch and before any git/pre-flight work, so it needs
+# neither a git repo nor claude/codex/gh stubs — a bare cwd is enough. Covers
+# both AT3 (pre-existing stop file is a collision, exit 1) and AT3b (no
+# pre-existing stop file lets startup proceed) from
+# L3-autonomous-outer-loop.md.
+mkdir -p "$TMP/lockfile/proj" "$TMP/lockfile/home/sisyphus-logs"
+touch "$TMP/lockfile/home/sisyphus-logs/proj.stop"
+rc=0
+( cd "$TMP/lockfile/proj" && HOME="$TMP/lockfile/home" PATH="$TMP/bin:/usr/bin:/bin" \
+    BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
+  >"$TMP/lockfile/collision.out" 2>"$TMP/lockfile/collision.err" || rc=$?
+[ "$rc" -eq 1 ] && pass 'lock file: pre-existing stop file is a collision, exits 1 (TC-1.3 AT3)' || fail 'lock file: pre-existing stop file is a collision, exits 1 (TC-1.3 AT3)'
+assert_contains "$TMP/lockfile/collision.err" "ERROR: $TMP/lockfile/home/sisyphus-logs/proj.stop already exists." 'lock file: collision error names the existing lock path (TC-1.3 AT3)'
+
+mkdir -p "$TMP/lockfile/nocollision" "$TMP/lockfile/home2"
+make_preflight_repo "$TMP/lockfile/nocollision" >/dev/null 2>&1
+rc=0
+run_preflight "$TMP/lockfile/nocollision/work" "$TMP/lockfile/home2" \
+  "$TMP/lockfile/nocollision.out" "$TMP/lockfile/nocollision.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'lock file: no pre-existing stop file lets startup proceed (TC-1.3 AT3b)' || fail 'lock file: no pre-existing stop file lets startup proceed (TC-1.3 AT3b)'
+assert_contains "$TMP/lockfile/nocollision.out" 'PREFLIGHT_OK branch=main' 'lock file: first iteration setup reaches pre-flight (TC-1.3 AT3b)'
+
 # Sentinel detection: converts QA-TEST-PLAN.md Suite 1 TC-1.5 (STOP halts the
 # loop) and TC-1.6 (HANDOFF_REVIEW <PR> triggers a review cycle) into
 # deterministic coverage. outer-sentinel feeds one simulated iteration's
