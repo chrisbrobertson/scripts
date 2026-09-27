@@ -117,7 +117,7 @@ For each open issue in `bzr-spec-review` whose spec PR (branch `bzr/spec-<issue>
 1. In a scratch worktree on the PR branch, rewrite `status: review` → `status: ready` in every changed file with a `spec_type:` frontmatter; commit `spec: mark ready per approval on #<issue>`; push. This is the only content edit a controller makes, authorised by the approval.
 2. Post commit status `codex-review=success` on the new head (same `gh api` call as `babysit-builder.sh`), since `setup-branch-protection.sh` requires it on main. `babysit-work-prep.sh` merges bare today (line 416) and would fail on a protected repo.
 3. `gh pr merge --merge`. On failure: comment on the issue, stay in `bzr-spec-review`, retry only when the PR head changes.
-4. Reconcile sub-issues: the worker created them at draft time (see [BZR-FEAT-ISSUE-WORKER](L3-issue-worker.md)); the sweep verifies one open sub-issue with a `bzr-sub-issue … spec=<L4 ID>` marker exists per merged `spec_type: task` file, creates any missing, and closes any whose L4 was dropped from the final PR.
+4. Reconcile sub-issues: the worker created them at draft time (see [BZR-FEAT-ISSUE-WORKER](L3-issue-worker.md)); when two or more `spec_type: task` files merge, the sweep verifies one open sub-issue with a `bzr-sub-issue … spec=<L4 ID>` marker exists per file, creates any missing, and closes any whose L4 was dropped from the final PR. When zero or one `spec_type: task` file merges, no sub-issue is wanted for it and none is created (`bzr_reconcile_sub_issues`, `lib/bazaar-common.sh:599`).
 5. Rewrite the parent's `Specs:` line to the merged spec IDs and paths (the build precheck reads this).
 6. `bzr-spec-review` → `bzr-ready`; comment with the merged spec list and sub-issue numbers.
 
@@ -155,7 +155,7 @@ A tick is safe to repeat. Claims are checked against live labels and live pids. 
 Semver per script and for the lib, starting 0.1.0.
 
 ## Performance budget
-Tick under 10s with an empty queue; at most one model call per tick.
+Tick under 10s with an empty queue; at most one model call per dispatch, so up to `--workers` model calls in a tick with that many free slots and enough tied candidates (`bzr_pick` is called once per loop iteration in the dispatch loop, `lib/bazaar-common.sh:646`).
 
 ## Security model
 Inherits `gh` auth. Approval accepted only from `BZR_APPROVERS`. The word "approved" is forbidden in every agent-authored comment except one that itself carries a `<!-- bzr-` marker (grep guard in the shared comment helper, `bzr_comment`).
