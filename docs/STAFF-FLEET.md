@@ -147,8 +147,9 @@ left untouched.
 
 ### Step 2 — Fix `[REPO]` placeholders in the SOUL files
 
-The SOUL.md templates and the PM handoff prompt include `--repo [REPO]` in
-`gh` command examples. Replace with the actual `owner/repo` slug:
+The SOUL.md templates, each role's `config.yaml` `cron:` block, and the PM
+handoff/spec-review prompts all include `--repo [REPO]` in `gh` command
+examples. Replace with the actual `owner/repo` slug everywhere it appears:
 
 ```bash
 # Find your repo slugs:
@@ -156,25 +157,44 @@ cd ~/repos/secondbrain && gh repo view --json nameWithOwner -q .nameWithOwner
 cd ~/repos/meridian    && gh repo view --json nameWithOwner -q .nameWithOwner
 
 # Find all placeholders:
-grep -r '\[REPO\]' ~/staff-fleet/secondbrain/profiles/
+grep -rl '\[REPO\]' ~/staff-fleet/secondbrain/profiles/
 
 # Replace (example — use your actual slug):
 sed -i '' 's/\[REPO\]/yourorg\/secondbrain/g' \
   ~/staff-fleet/secondbrain/profiles/staff-swe/SOUL.md \
   ~/staff-fleet/secondbrain/profiles/staff-sre/SOUL.md \
-  ~/staff-fleet/secondbrain/profiles/staff-pm/SOUL.md
+  ~/staff-fleet/secondbrain/profiles/staff-pm/SOUL.md \
+  ~/staff-fleet/secondbrain/profiles/staff-swe/config.yaml \
+  ~/staff-fleet/secondbrain/profiles/staff-sre/config.yaml \
+  ~/staff-fleet/secondbrain/profiles/staff-pm/config.yaml \
+  ~/staff-fleet/secondbrain/profiles/staff-pm/handoff-prompt.txt \
+  ~/staff-fleet/secondbrain/profiles/staff-pm/spec-review-prompt.txt
 
-# Then sync back into Hermes profiles:
-cp ~/staff-fleet/secondbrain/profiles/staff-swe/SOUL.md \
-   ~/staff-fleet/secondbrain/.hermes/profiles/staff-swe/SOUL.md
-# (repeat for sre and pm)
+# Then sync SOUL.md + config.yaml back into Hermes profiles — new-fleet.sh
+# copied the originals here once at fleet-creation time, and `gateway install`
+# (Step 5) reads config.yaml from THIS location, not the template above:
+for role in swe sre pm; do
+  cp ~/staff-fleet/secondbrain/profiles/staff-${role}/SOUL.md \
+     ~/staff-fleet/secondbrain/.hermes/profiles/staff-${role}/SOUL.md
+  cp ~/staff-fleet/secondbrain/profiles/staff-${role}/config.yaml \
+     ~/staff-fleet/secondbrain/.hermes/profiles/staff-${role}/config.yaml
+done
 ```
 
-**Common failure:** the daily cron prompts hardcode `--repo [REPO]` (see
-`config.yaml`'s `cron:` block, not just SOUL.md) — a forgotten placeholder
-there produces a literal "unknown repository [REPO]" error from `gh`, not a
+The prompt files don't need a separate sync step — `start-gateways.sh` reads
+`handoff-prompt.txt` and `spec-review-prompt.txt` directly from the template
+`profiles/` directory when it registers those cron jobs.
+
+Do this **before** running `start-gateways.sh` (Step 5): the three daily
+crons are created by Hermes from `config.yaml` on first `gateway install`,
+and the two extra cron jobs embed the prompt file's contents as a literal
+argument at creation time. A placeholder left in either copy of `config.yaml`
+at that point, or fixed only after the cron already exists, produces a
+literal "unknown repository [REPO]" error from `gh` — not a
 silently-wrong-repo result, since `terminal.cwd` is already pinned to the
-service repo.
+service repo. Re-registering after the fact means deleting the affected cron
+job (`hermes -p staff-<role> cron remove <job_id>`) and re-running
+`start-gateways.sh`.
 
 ### Step 3 — Fill in `service-context.md`
 
