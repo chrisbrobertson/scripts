@@ -42,7 +42,7 @@ scripts" sections) rather than kept in a separate amendments file — no
   revised same-day to key off a `build-ready` label across GitHub/Jira tickets (not
   just work-prep sub-tickets) and to kick back gap-having specs for clarification
   instead of building them as-is. **Implemented 2026-08-27** as `babysit-builder.sh`
-  v0.1.0; the spec was updated in the same pass to record what implementation settled:
+  v0.1.0 (since bumped to v0.1.1); the spec was updated in the same pass to record what implementation settled:
   the worktree now lives through the build cycle (no `gh pr checkout`, so the
   operator's checkout is never touched), the four `build-*` quarantine labels are
   enumerated, the outage sweep runs before the queue is read, the reviewer probe is a
