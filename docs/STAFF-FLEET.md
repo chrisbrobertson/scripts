@@ -901,15 +901,37 @@ correct action depends on whether a babysitter is currently running:
 - **No babysitter running.** `team-dispatcher.sh` refuses to spawn one while
   this file exists (`new-fleet.sh:953`). `touch` it to block future spawns;
   `rm` it to allow them again.
-- **A babysitter is already running.** It created and owns this file itself
-  as its run-lock (`babysit-with-review.sh:243`), and its `EXIT` trap deletes
-  it on exit. `touch`-ing it is a no-op — the file already exists, and the
-  loop only checks for *absence* to detect a stop request. To actually stop
-  it, `rm` the file; the loop notices on its next check
-  (`babysit-with-review.sh:1751-1752`) and exits gracefully. Don't try to
-  "resume" by touching the file back — the exit trap has already removed it,
-  and the next `team-dispatcher.sh` tick will spawn a fresh babysitter (which
-  recreates its own stop-file as its run-lock).
+- **A babysitter is already running.** `rm`-ing the stop-file only stops the
+  *current* run — it does not pause the chain. `team-dispatcher` is a Hermes
+  cron job that still ticks every 5 minutes, and if open `priority/p1`/`p2`
+  work remains once the current babysitter exits, the very next tick spawns
+  a fresh one. To actually pause the chain while a babysitter is running:
+
+  1. **Pause `team-dispatcher` first**, so nothing can respawn once the
+     current run exits:
+     ```bash
+     JOB_ID=$(HERMES_HOME=~/staff-fleet/<fleet>/.hermes hermes -p staff-pm cron list \
+       | awk '/^  [a-f0-9]{12} \[/{id=$1} /Name:/{sub(/^[[:space:]]+Name:[[:space:]]+/,""); if ($0=="team-dispatcher") {print id; exit}}')
+     HERMES_HOME=~/staff-fleet/<fleet>/.hermes hermes -p staff-pm cron pause "$JOB_ID"
+     ```
+  2. **Then `rm` the stop-file.** The running babysitter created and owns
+     this file itself as its run-lock (`babysit-with-review.sh:243`); its
+     `EXIT` trap deletes it on exit. `touch`-ing it is a no-op — the file
+     already exists, and the loop only checks for *absence* to detect a stop
+     request. Removing it makes the loop notice on its next check
+     (`babysit-with-review.sh:1751-1752`) and exit gracefully — this can take
+     as long as the iteration currently in progress.
+  3. **Verify it actually exited** before declaring the chain paused:
+     ```bash
+     pgrep -f "babysit-with-review.sh.*<fleet>" || echo "babysitter has exited"
+     tail -5 ~/sisyphus-logs/<fleet>-driver-*.log   # look for its exit line
+     ```
+
+  Don't try to "resume" by touching the stop-file back — the exit trap has
+  already removed it. To resume, `hermes -p staff-pm cron resume "$JOB_ID"`
+  (same `HERMES_HOME`); the dispatcher will spawn a fresh babysitter on its
+  next tick if work is still open, which recreates its own stop-file as its
+  run-lock.
 
 ### Remove a fleet entirely
 
