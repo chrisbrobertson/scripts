@@ -138,7 +138,7 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
   `codex-review=success`, so the status can never go green against a SHA the PR does
   not carry. Confirmed against
   the shipped implementation: `babysit-with-review.sh` uses `wip/<project>/iter-<N>`
-  off `HEAD` (`git worktree add -b "$_wt_branch" "$_wt_dir" HEAD`, line ~1792);
+  off `HEAD` (`git worktree add -b "$_wt_branch" "$_wt_dir" HEAD`, line ~1946);
   `babysit-work-prep.sh` uses `work-prep/<slug>-<pid>` off the default branch's SHA
   (`git worktree add -b "$branch" "$worktree" "$base_sha"`, line ~1243). Neither ever
   reuses a branch across attempts, so a rebuilt ticket starts from a genuinely clean
