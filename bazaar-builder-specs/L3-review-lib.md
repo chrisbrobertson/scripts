@@ -107,7 +107,15 @@ Inherits `ASF-FEAT-MCP-RESILIENCE` (0-4) for reviewer calls. `run_review_cycle` 
 A cycle is idempotent per (PR head SHA, cycle number); history file makes re-runs append rather than restart.
 
 ### Versioning policy
-`BZR_REVIEW_LIB_VERSION` string; workers assert a minimum at source time.
+`BZR_REVIEW_LIB_VERSION` is set (`0.1.0`) but nothing asserts a minimum yet: neither
+`bazaar-issue-worker.sh` nor `bazaar-build-worker.sh` reads it before sourcing the lib
+(both just `. "$SCRIPTS_DIR/lib/bazaar-review.sh"` unconditionally), so an incompatible
+lib change would silently affect both workers with no fast failure. Separately, the
+`compat_re`/`credits_re` telltale regexes are duplicated verbatim between
+`codex_review_with_retry` (lib/bazaar-review.sh:207-208) and `reviewer_preflight`
+(lib/bazaar-review.sh:301-302) — the same false-negative risk `ASF-FEAT-MCP-RESILIENCE`
+already documents for its own duplicate copies: a regex fix applied to one site and not
+the other lets a compat/credits failure fall through undetected.
 
 ## Performance budget
 Unchanged from the sources: reviewer 1-7 min per call, implementer 5-30 min per remediation.
@@ -116,7 +124,14 @@ Unchanged from the sources: reviewer 1-7 min per call, implementer 5-30 min per 
 Inherits. Telltale regexes are fixed strings (see `SECURITY-REVIEW-PLAN.md` in `babysit-specs/` §4).
 
 ## Telemetry contract
-Same `[codex]` / `[review]` log lines as the sources, prefixed by the caller's tag. `run_review_cycle` additionally logs `cycle=<k> blocking=<b> new=<n> recurrence=<r>`.
+Log lines are not "prefixed by the caller's tag" — `_bzr_log` (lib/bazaar-review.sh:50)
+is the lib's own logger and writes raw text with no prefix at all. Caller-tag prefixing
+(`[issue-worker]` / `[build-worker]`) is a separate mechanism, `bzr_log` in
+`lib/bazaar-common.sh`, used only for a worker's own phase-note lines. The review lib's
+own tags are fixed strings: `[codex]` (retry/preflight events), `[$REVIEWER reviewer]` /
+`[$IMPLEMENTER implementer]` (stage banners), and `[review:<mode>]` for the per-cycle
+summary line. That summary line is `cycle=<k> blocking=<b> recommended=<r> new=<n>
+recurrence=<r>` — the `recommended=<r>` field was omitted from this contract.
 
 ## Verifiers
 - Tech lead: Chris Robertson
