@@ -22,9 +22,9 @@ TIF specs for **Bazaar Builder**: a two-controller, two-worker replacement for t
 
 ## Status
 
-- All specs `review`, drafted 2026-09-19 from the owner's decisions in conversation. Nothing is implemented; API surface fragments are marked *proposed*.
+- All specs still `review` — drafted 2026-09-19 from the owner's decisions in conversation, and status has not moved because only the owner flips a spec to `ready` (see `spec-guide.md`). This is otherwise stale as a description of implementation state: every API surface fragment marked *proposed* at draft time has since been swapped for the shipped one as phases 1-4 landed (see below); nothing here is still unbuilt.
 - **Phase 1 done 2026-09-19:** `lib/bazaar-review.sh` extracted, `test-bazaar-review-lib.sh` 59/59 green.
-- **Phase 5 pilot 2026-09-20:** three issue-loop runs on bazaar-chat/bazaar#745 (PR #761); every hand-off worked on the real repo; escalated at the spec-review cap. Owner decisions taken same day: spec cap 6; re-runs resume at the review. See `log.md`.
+- **Phase 5 pilot 2026-09-20, four runs on bazaar-chat/bazaar#745 (PR #761):** runs 1-3 escalated (Codex out of credits, then two bookkeeping cap-outs on the Claude reviewer, each fixing a real defect first). Owner decisions after run 3: spec-review cap raised 4→6, re-runs resume at the review cycle instead of re-verifying/re-drafting. Run 4 converged (2→0 BLOCKING); PR #761 is out of draft and awaiting the owner's approval, which will flip the three specs to `ready` and hand `bazaar-build.sh` its first real build. The issue loop has now been exercised end to end through the human approval gate. See `log.md`.
 - **Phase 4 done 2026-09-20:** `bazaar-build-worker.sh`; 45 harness cases green. All six harnesses: 229 cases green. Phase 5 (pilot, docs, retirement of builder/work-prep) is next.
 - **Phase 3 done 2026-09-20:** `bazaar-issue-worker.sh`; 39 harness cases green. Two approval-sweep holes found and fixed in review (reviewer self-approval; resume-after-merge closing sub-issues when the head branch was deleted).
 - **Phase 2 done 2026-09-19:** `lib/bazaar-common.sh`, `bazaar-issues.sh`, `bazaar-build.sh`, `test-support/fake-gh.py`; 82 controller harness cases green. Workers (phases 3-4) are next; until they land, `role_worker_cmd` points at `bazaar-issue-worker.sh` / `bazaar-build-worker.sh`, which do not exist yet.
@@ -64,5 +64,5 @@ All eleven open decisions from the first draft were answered the same day and fo
 1. Owner glances at the six remaining assumptions above; none blocks phase 1.
 2. ~~Phase 1: extract the lib with the harness green.~~ Done 2026-09-19.
 3. ~~Phases 2-4: controllers and both workers.~~ Done 2026-09-20.
-4. Pilot on one repo; write the operator guide; update `CLAUDE.md`.
+4. ~~Pilot the issue loop on one repo; write the operator guide; update `CLAUDE.md`.~~ Done: pilot run 4 converged on bazaar-chat/bazaar#745 (PR #761) 2026-09-20; `docs/BAZAAR-BUILDER.md` and `CLAUDE.md` both shipped. Still open: the owner has not yet approved PR #761, so the build loop has not been piloted, and `babysit-builder.sh` / `babysit-work-prep.sh` are not yet retired.
 5. Update status to `ready` once blockers clear.
