@@ -320,6 +320,17 @@ Suites 1-3 (manual smoke tests against live Claude/Codex/gh) still not executed
 
 **Reference:** L3-mcp-resilience.md Acceptance Tests (lines 174-182)
 
+**Status: TC-3.1–3.6 and TC-3.9–3.14 now automated.** `test-babysit-mcp-resilience.sh`
+(added 2026-09-27) stubs `codex`/`sleep` on PATH — the same recording-stub approach
+`test-bazaar-review-lib.sh` already proved for the extracted copy of this function —
+so the retry/backoff/telltale-precedence contract runs deterministically in
+milliseconds with no firewall or `/etc/hosts` edit required. This supersedes the
+"Deferred pending network-blocking test environment" note in
+L3-mcp-resilience.md's Verifiers section for the cases it covers. The manual steps
+below remain the reference for what each case verifies and for TC-3.7/3.8, whose log
+message assertions the harness folds into the TC-3.2/3.4 checks above rather than
+running as separate cases.
+
 ### TC-3.1: Codex Success on Attempt 1
 **Given:** Codex succeeds on attempt 1  
 **When:** Function called  

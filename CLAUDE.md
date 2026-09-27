@@ -37,6 +37,7 @@ empirical tests (`test-*`). No formal test suite, no build step, no CI.
 | `run-retrospective-review.sh` | One-shot Codex review for PRs that merged without automated review; posts findings as PR comments and opens issues for each BLOCKING finding |
 | `find-bailed-merged-prs.sh` | Scan babysit logs for review-cycle bails, then query GitHub to find which bailed PRs were subsequently merged (unreviewed code audit) |
 | `test-babysit-with-review-cli.sh` | Deterministic CLI regression harness for babysit-with-review.sh using recording stubs (`BABYSIT_TEST_MODE`) |
+| `test-babysit-mcp-resilience.sh` | Recording-stub coverage for `codex_review_with_retry()`'s retry/backoff/telltale contract (QA-TEST-PLAN.md Suite 3); `codex`/`sleep` stubs on PATH, no network dependency |
 | `test-llm-routing.py` | Empirical test: model-alias forwarding + OAuth rejection by Anthropic |
 | `test-codex-review.sh` | Codex review helper |
 | `prs` | `gh pr list` with CI rollup and review state |

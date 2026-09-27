@@ -159,7 +159,9 @@ Function is internal to script; no versioning. Breaking changes (retry count, de
 - Tech lead: Chris Robertson
 - API council / platform review: N/A (internal function)
 - Security: telltale regex injection risk accepted — patterns are fixed strings, not user-injectable; maintenance comment added to source. See SECURITY-REVIEW-PLAN.md §4.
-- QA: Test cases documented in QA-TEST-PLAN.md (TC-3.1–3.8); not yet executed. Deferred pending network-blocking test environment.
+- QA: Test cases documented in QA-TEST-PLAN.md (TC-3.1–3.8). TC-3.1–3.6 and TC-3.9–3.14
+  are automated via `test-babysit-mcp-resilience.sh` (recording-stub `codex`/`sleep`,
+  no network dependency); see that file and the QA-TEST-PLAN Suite 3 status note.
 
 ## Failure modes & blast radius
 - **`mcp_re` mismatch (false negative):** MCP transport failure not matched, returns 1 instead of 2. Blast: PR labeled `review-incomplete` (human-action) instead of `review-mcp-outage` (auto-retry).
