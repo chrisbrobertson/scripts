@@ -23,7 +23,7 @@ Given one `bzr-ready` issue, the build worker checks that everything it needs is
 Like a senior engineer picking up an epic: reads the stories, orders them, ships them one commit-series at a time on one branch, gets each slice reviewed, and asks the lead to merge at the end.
 
 ## Reader & next action
-Implementing agent: build the worker in `bazaar-build.sh` on top of the lib. Chris Robertson: confirm the revert-on-skip and second-round mechanics.
+Implementing agent: build the worker in `bazaar-build-worker.sh` on top of the lib. Chris Robertson: confirm the revert-on-skip and second-round mechanics.
 
 ## API surface fragment
 *Implemented 2026-09-20: `bazaar-build-worker.sh` v0.1.0; `test-bazaar-build-worker.sh` 45 cases green.*
@@ -67,7 +67,7 @@ bazaar-build-worker.sh <issue>    # spawned by bazaar-build.sh; env: BZR_ISSUE B
 ## What we assume
 - [ASSUMPTION] Each per-sub-issue review cycle reviews the whole PR diff against main, as the lib does today; only the final cycle posts the `codex-review` status. Flips if: cost grows with sub-issue count, in which case cycles 1..k-1 review only commits since the last converged SHA.
 - [ASSUMPTION] Planning is a separate short implementer pass that reads the parent, the sub-issues, and their L4s, and posts an ordered list with a one-line dependency reason each. Order rule: explicit "Blocked by #N" first, then L4 `depends_on`, then issue number. Flips if: the owner wants the plan reviewed by the reviewer before implementation starts.
-- [ASSUMPTION] Skip means: `git revert` the commit range recorded for sub-issue k, commit `revert: skip #<k> (review did not converge after N cycles)`, label sub-issue k `bzr-blocked` with the reviewer's last findings, mark k skipped in the marker block, and continue with the next sub-issue whose plan entry does not depend on k (dependents are skipped too, labelled with the reason). Flips if: the owner prefers to leave k's commits on the branch for the human to fix in place, which would keep the PR draft.
+- [ASSUMPTION] Skip means: `git revert` the commit range recorded for sub-issue k, commit `revert: skip unit #<k> (review did not converge)`, label sub-issue k `bzr-blocked` with the reviewer's last findings, mark k skipped in the marker block, and continue with the next sub-issue whose plan entry does not depend on k (dependents are skipped too, labelled with the reason). Flips if: the owner prefers to leave k's commits on the branch for the human to fix in place, which would keep the PR draft.
 - [ASSUMPTION] Second round: when the PR merges with skipped sub-issues, the parent stays open; once a human clears `bzr-blocked` on a skipped sub-issue, the build controller's merged-PR sweep puts the parent back to `bzr-ready` and the next build uses branch `bzr/<issue>-<slug>-r2` for the remaining sub-issues. The one-branch invariant therefore reads "one open PR per issue at a time". Flips if: the owner wants skipped sub-issues promoted to standalone issues instead.
 - [ASSUMPTION] Sub-issues close via `Closes #<sub>` lines in the PR body added as each completes, so merge closes parent and children together. Flips if: the owner wants sub-issues closed as each converges, before merge.
 - [ASSUMPTION] Staged implementer models per review cycle are kept from the builder (Sonnet 5 early, Opus 4-8 late). Flips if: the owner wants a single configured model.
@@ -119,7 +119,7 @@ Per sub-issue: 10-40 min implement plus 1-7 min per review cycle times up to 6. 
 Inherits `gh` auth and branch protection. The worker's only write to main-adjacent state is the commit status, and only at finish.
 
 ## Telemetry contract
-Log lines carry the tag `[build-worker]` (set via `BZR_LOG_TAG`, not `[build:<n>]`); the issue number is in the message body as `#<n>`, e.g. `[build-worker] #123 round=1 new branch bzr/123-slug`, `[build-worker] #123 unit #2 converged after 2 cycle(s)`, `[build-worker] #123 sentinel=PR_READY 101` (sentinel lines always carry the second argument — the PR number, reason, etc. — never the bare sentinel name). Phase is recorded as a marker comment (`<!-- bzr-build-worker phase=<p> ts=<t> -->`), not as a log line. Review-cycle detail comes from the shared review lib's `run_review_cycle --mode code`: `[review:code] cycle=<c> blocking=<b> recommended=<r> new=<n> recurrence=<r>` (the `cycle=<c>/<max>` form appears one line up, on the reviewer-invocation log line, not on this one). Sink: `$BZR_HOME/<repo>/logs/build-<n>-<ts>.log`.
+Log lines carry the tag `[build-worker]` (set via `BZR_LOG_TAG`, not `[build:<n>]`); the issue number is in the message body as `#<n>`, e.g. `[build-worker] #123 round=1 new branch bzr/123-slug`, `[build-worker] #123 unit #2 converged after 2 cycle(s)`, `[build-worker] #123 sentinel=PR_READY 101` (sentinel lines always carry the second argument — the PR number, reason, etc. — never the bare sentinel name). Phase is recorded as a marker comment (`<!-- bzr-build-worker phase=<p> ts=<t> -->`), not as a log line. Review-cycle detail comes from the shared review lib's `run_review_cycle --mode code`: `[review:code] cycle=<c> blocking=<b> recommended=<r> new=<n> recurrence=<r>` (the `cycle=<c>/<max>` form appears one line up, on the reviewer-invocation log line, not on this one). Sink: `$BZR_HOME/<owner>-<repo>/logs/build-<n>-<ts>.log`.
 
 ## Verifiers
 - Tech lead: Chris Robertson
@@ -129,13 +129,13 @@ Log lines carry the tag `[build-worker]` (set via `BZR_LOG_TAG`, not `[build:<n>
 - **Plan order wrong:** sub-issue k fails to build because k+1 was needed first. Blast: k skipped and its dependents with it; human reorders by comment, clears `bzr-blocked`, round 2 picks them up.
 - **Revert conflicts:** k+1 touched files k changed, so reverting k fails. Blast: the worker cannot skip cleanly; it stops, marks the PR draft, and escalates the parent to `bzr-blocked` with the conflict. Only in this case does the whole issue halt.
 - **Whole-PR review cost blow-up:** late cycles review a large diff. Blast: money and time; see review-scope assumption.
-- **Marker block corrupted by a hand edit:** resume re-implements or skips. Blast: one issue; audit detects a mismatch between marker and `Closes #` list.
+- **Marker block corrupted by a hand edit:** resume re-implements or skips. Blast: one issue; no audit check compares the marker block against the `Closes #` list today, so this surfaces only if a human notices.
 - **Two sub-issues touch the same file:** later one conflicts with a review fix on the earlier. Blast: extra review cycles.
 
 # Bounds
 
 ## Out of scope
-Merging, stacked PRs, parallel sub-issues within one issue, cross-issue dependencies (an issue blocked by another open issue is a precheck failure with `SPEC_GAP blocked by #N`), Jira, time limits, promoting skipped sub-issues to standalone issues.
+Merging, stacked PRs, parallel sub-issues within one issue, validating cross-issue dependencies (a sub-issue's "Blocked by #N" is read only to order the plan among that issue's own units; a reference to an unrelated or non-sub-issue number is never checked and produces no precheck failure), Jira, time limits, promoting skipped sub-issues to standalone issues.
 
 ## Assumptions-that-could-flip
 - **One PR per issue.** See L1.
@@ -157,7 +157,7 @@ Composes with [BZR-FEAT-REVIEW-LIB](L3-review-lib.md) (`--mode code`), `setup-br
 7b. **Given** sub-issue 3 depends on skipped sub-issue 2 per the plan, **when** the worker reaches 3, **then** 3 is skipped too with reason `depends on #2`.
 8. **Given** an issue with no sub-issues and one L4, **when** dispatched, **then** the plan phase is skipped and one implement/review pass runs.
 9. **Given** `bazaar-build-worker.sh` invoked with no positional `<issue>` argument, **when** run, **then** exit 2 with a usage message. (The `--issue N [--force]` flag pair and the `bzr-ready` label gate belong to the *controller*, `bazaar-build.sh` — see its API surface fragment and implementation notes in [L3-controller.md](L3-controller.md) — not to this worker script, which takes only a bare issue number.)
-10. **Given** any transcript, **when** grepped for `gh pr merge`, **then** no match in worker prompts or wrapper.
+10. **Given** the worker's log of `gh` commands actually executed (not the implementer prompt text, which states the merge prohibition using that phrase), **when** grepped for `gh pr merge`, **then** no match.
 
 ## Telemetry events tied to L1 KPIs
 Time from `bzr-building` to `bzr-pr-ready`; review cycles per sub-issue.
