@@ -1550,6 +1550,28 @@ ${_hb}--- end prior review cycles ---
   fail_review_cycle "$pr_num" "exhausted MAX_REVIEW_CYCLES=$MAX_REVIEW_CYCLES without clearing all blocking findings"
 }
 
+# Sliding-window stuck-loop detector. Appends the SHA-256 of $1 to the global
+# HASHES array (trimmed to the last STUCK_N entries) and returns 0 once
+# STUCK_N consecutive results hash identical, else 1. Extracted from the
+# outer loop so BABYSIT_TEST_MODE=outer-stuck can drive it deterministically.
+stuck_guard() {
+  local result="$1"
+  local hash
+  hash=$(printf '%s' "$result" | shasum -a 256 | awk '{print $1}')
+  HASHES+=("$hash")
+  if [ "${#HASHES[@]}" -gt "$STUCK_N" ]; then
+    HASHES=("${HASHES[@]: -$STUCK_N}")
+  fi
+  if [ "${#HASHES[@]}" -eq "$STUCK_N" ]; then
+    local h
+    for h in "${HASHES[@]}"; do
+      [ "$h" = "${HASHES[0]}" ] || return 1
+    done
+    return 0
+  fi
+  return 1
+}
+
 # Narrow deterministic test hook for argument and provider-command regression
 # coverage. Normal execution is unchanged when BABYSIT_TEST_MODE is unset.
 # outer-preflight is handled separately below: it needs the real pre-flight
@@ -1587,6 +1609,20 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight
     model-policy)
       printf 'startup_model=%s\n' "$(implementer_startup_model_policy)"
       printf 'remediation_model=%s\n' "$(resolved_implementer_model 'claude-opus-4-8')"
+      ;;
+    outer-stuck)
+      # Each stdin line is one simulated iteration's implementer RESULT.
+      # Prints "iter=N stuck=0|1" per line using the real stuck_guard().
+      declare -a HASHES=()
+      _line_n=0
+      while IFS= read -r _line; do
+        _line_n=$((_line_n + 1))
+        if stuck_guard "$_line"; then
+          echo "iter=$_line_n stuck=1"
+        else
+          echo "iter=$_line_n stuck=0"
+        fi
+      done
       ;;
     *)
       echo "Unknown BABYSIT_TEST_MODE: $BABYSIT_TEST_MODE" >&2
@@ -1904,20 +1940,9 @@ ${BASE_PROMPT}"
   esac
 
   # Stuck-loop guard.
-  HASH=$(printf '%s' "$RESULT" | shasum -a 256 | awk '{print $1}')
-  HASHES+=("$HASH")
-  if [ "${#HASHES[@]}" -gt "$STUCK_N" ]; then
-    HASHES=("${HASHES[@]: -$STUCK_N}")
-  fi
-  if [ "${#HASHES[@]}" -eq "$STUCK_N" ]; then
-    STUCK=1
-    for h in "${HASHES[@]}"; do
-      [ "$h" = "${HASHES[0]}" ] || { STUCK=0; break; }
-    done
-    if [ "$STUCK" -eq 1 ]; then
-      echo "Stuck: last $STUCK_N results identical. Bailing on iter $iter." | tee -a "$LOG"
-      break
-    fi
+  if stuck_guard "$RESULT"; then
+    echo "Stuck: last $STUCK_N results identical. Bailing on iter $iter." | tee -a "$LOG"
+    break
   fi
 
   sleep "$SLEEP_SEC"

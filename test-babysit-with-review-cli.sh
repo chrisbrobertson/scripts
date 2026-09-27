@@ -461,5 +461,27 @@ run_preflight "$TMP/preflight/diverged/work" "$TMP/preflight/home" \
 [ "$rc" -eq 1 ] && pass 'preflight: diverged from origin exits 1' || fail 'preflight: diverged from origin exits 1'
 if grep -q 'diverged from origin/main' "$TMP/preflight/diverged.err"; then pass 'preflight: diverged error names the cause'; else fail 'preflight: diverged error names the cause'; fi
 
+# Stuck-loop guard: converts QA-TEST-PLAN.md Suite 1 TC-1.7 (identical
+# implementer results for STUCK_N consecutive iterations halts the loop) into
+# deterministic coverage. outer-stuck feeds one simulated iteration's RESULT
+# per stdin line through the real stuck_guard() function extracted from the
+# outer loop; no Claude/Codex/gh involved.
+: > "$TMP/stuck-default.record"
+printf 'a\nb\nc\nc\nc\n' | STUCK_N=3 run_script outer-stuck "$TMP/stuck-default.record" "$TMP/home" > "$TMP/stuck-default.out"
+assert_contains "$TMP/stuck-default.out" 'iter=5 stuck=1' 'stuck guard fires on the 3rd consecutive identical result'
+assert_not_contains "$TMP/stuck-default.out" 'iter=4 stuck=1' 'stuck guard does not fire early on only 2 identical results'
+
+: > "$TMP/stuck-none.record"
+printf 'a\nb\nc\nd\ne\n' | STUCK_N=3 run_script outer-stuck "$TMP/stuck-none.record" "$TMP/home" > "$TMP/stuck-none.out"
+if grep -q 'stuck=1' "$TMP/stuck-none.out"; then fail 'stuck guard never fires when results keep changing'; else pass 'stuck guard never fires when results keep changing'; fi
+
+: > "$TMP/stuck-custom-n.record"
+printf 'x\nx\ny\n' | STUCK_N=2 run_script outer-stuck "$TMP/stuck-custom-n.record" "$TMP/home" > "$TMP/stuck-custom-n.out"
+assert_contains "$TMP/stuck-custom-n.out" 'iter=2 stuck=1' 'custom STUCK_N=2 fires after 2 identical results'
+
+: > "$TMP/stuck-slide.record"
+printf 'a\na\nb\nb\n' | STUCK_N=3 run_script outer-stuck "$TMP/stuck-slide.record" "$TMP/home" > "$TMP/stuck-slide.out"
+if grep -q 'stuck=1' "$TMP/stuck-slide.out"; then fail 'stuck guard requires STUCK_N consecutive identical results, not cumulative'; else pass 'stuck guard requires STUCK_N consecutive identical results, not cumulative'; fi
+
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]
