@@ -119,3 +119,7 @@ Same drift class already caught in `index.md` and `L3-controller.md`'s own fragm
 ## [2026-09-27] lint | L1 and L2 still said "one GraphQL call per tick" — a normal tick makes two
 
 An earlier lint pass (2026-09-26) corrected L2's queue-read contract from `gh issue list --label` to the real `gh api graphql` call, but neither it nor L1's matching "one paginated GraphQL call per tick" line caught the call *count*: `bzr_tick` (`lib/bazaar-common.sh:623-634`) calls `bzr_fetch_issues` once at the top of the tick (to read state for the sweeps), then a second time right after `bzr_sweep_dead_claims`/`role_sweeps` run and before dispatch, so the candidate pick always sees post-sweep labels. Only the `--dry-run` and `--audit` branches make a single call. Fixed `L2-bazaar-system.md`'s "Protocol" and "Request shape" bullets and `L1-bazaar-builder.md` owner-decision 6's superseded-by-implementation note to say "up to two calls per normal tick," with the line citation. No code touched.
+
+## [2026-09-27] lint | L2's own line citation for the fix above was one line short
+
+The "up to two calls per normal tick" fix logged directly above cited `bzr_tick` as `lib/bazaar-common.sh:623-632` in `L2-bazaar-system.md`'s Protocol bullet, but the second `bzr_fetch_issues` call the citation exists to support is on line 633 (`else bzr_sweep_dead_claims; role_sweeps; bzr_fetch_issues || return 0; fi`), one line outside the cited range — this log entry's own citation for the same fact already said `623-634`. Corrected the spec's range to `623-634` to match. No code touched.
