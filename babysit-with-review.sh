@@ -2003,11 +2003,14 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
   fi
 
   # Retry any PR stalled behind a resumable label (review-mcp-outage,
-  # review-codex-outdated, review-codex-no-credits) from a previous run. The
-  # PR is un-drafted and re-reviewed before invoking the implementer. This is
-  # what makes "remove the label, restart the babysitter" (the documented
-  # operator recipe for the two Codex-CLI labels) actually resume the PR
-  # instead of leaving it in draft forever while the loop starts new work.
+  # review-codex-outdated, review-codex-no-credits) from a previous run and
+  # re-review it before invoking the implementer. This is what makes
+  # "remove the label, restart the babysitter" (the documented operator
+  # recipe for the two Codex-CLI labels) actually resume the PR instead of
+  # leaving it in draft forever while the loop starts new work. The PR stays
+  # in draft through the retry — only merge_reviewed_pr() un-drafts it, and
+  # only after a clean review, so an in-progress retry is never briefly
+  # mergeable.
   _retry_pairs=()
   for _label in "${RESUMABLE_STALL_LABELS[@]}"; do
     _retry_pairs+=("$_label $(gh pr list --state open --label "$_label" --limit 1 --json number -q '.[0].number' 2>/dev/null)")
@@ -2019,7 +2022,6 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
     _retry_pr="${_retry_pick#* }"
     echo "[outer] retrying review cycle for PR #$_retry_pr ($_retry_label)" | tee -a "$LOG" >&2
     gh pr edit "$_retry_pr" --remove-label "$_retry_label" >>"$LOG" 2>&1 || true
-    gh pr ready "$_retry_pr" >>"$LOG" 2>&1 || true
     _rc=0
     run_review_cycle "$_retry_pr" || _rc=$?
     if [ "$_rc" -ne 0 ]; then
