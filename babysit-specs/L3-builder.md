@@ -244,7 +244,7 @@ sign-off before `babysit-builder.sh` is built against this spec:
   (`build-ready-for-merge` convergence, `build-max-cycles`, and an ordinary `build-incomplete`
   bail) pass the same generic "PR halted for human merge" string — it does not carry the
   bail's real semantics there, so a human must read the PR's own label to tell those three
-  apart. The fourth path, a PR-branch/worktree-branch mismatch (`babysit-builder.sh:1622`,
+  apart. The fourth path, a PR-branch/worktree-branch mismatch (`babysit-builder.sh:1626`,
   also `build-incomplete`-labelled), passes a distinct "PR quarantined — branch mismatch"
   heading instead, so that one case is self-describing in the ticket comment.
   `build-mcp-outage` is one deliberate exception to the swap: the
@@ -256,11 +256,11 @@ sign-off before `babysit-builder.sh` is built against this spec:
   clears the label a re-selected ticket may open a second PR alongside the quarantined one.
   Owner should confirm the `build-incomplete` → `build-done` swap reads correctly, or
   whether a distinct ticket-side label is preferred. The queue query itself
-  (`gh issue list --label build-ready`, `babysit-builder.sh:1324`; the JQL
-  `labels=build-ready` clause, `babysit-builder.sh:1350`) does filter on
+  (`gh issue list --label build-ready`, `babysit-builder.sh:1328`; the JQL
+  `labels=build-ready` clause, `babysit-builder.sh:1354`) does filter on
   `build-ready` presence alone — but `fetch_github_queue` and `fetch_jira_queue`
   additionally post-filter out any ticket that also carries `build-done` or
-  `build-needs-clarification` (`babysit-builder.sh:1337`, `:1375`), as a safety net
+  `build-needs-clarification` (`babysit-builder.sh:1341`, `:1379`), as a safety net
   for a half-failed swap that added the terminal label without removing
   `build-ready`. The intended path is still the atomic swap (remove `build-ready`,
   add the terminal label in the same operation) once the PR reaches either
@@ -357,7 +357,7 @@ babysit-builder.sh [--repo OWNER/REPO] [--source github|jira|both]
 7. **A terminal ticket is never re-selected.** Every terminal transition (kickback to
    `build-needs-clarification`, or merge-track to `build-done`) removes `build-ready`
    in the same operation that adds the terminal label. `fetch_github_queue` and
-   `fetch_jira_queue` (`babysit-builder.sh:1337`, `:1375`) additionally post-filter
+   `fetch_jira_queue` (`babysit-builder.sh:1341`, `:1379`) additionally post-filter
    out any ticket carrying a terminal label alongside `build-ready`, so even a
    half-failed swap (terminal label added, `build-ready` not removed) does not cause
    re-selection. A ticket only re-enters the queue when a human (or work-prep)
@@ -372,7 +372,7 @@ ticket carries no in-progress marker. This is deliberate, not a defect to fix.
 
 ### Versioning policy
 Companion script to `babysit-with-review.sh`, versioned independently via semver
-(`--version`; current: 0.1.0). Breaking changes to the `build-*` label schema or the
+(`--version`; current: 0.1.1). Breaking changes to the `build-*` label schema or the
 spec-resolution contract require manual migration of any open build PRs.
 
 ## Performance budget
