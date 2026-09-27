@@ -579,6 +579,37 @@ rm -f "$lockfile_path"
 printf '%s\n' "$lockfile_path" | run_script outer-lockfile-removed "$TMP/lockfile-removed.record" "$TMP/home" > "$TMP/lockfile-removed.after.out"
 assert_contains "$TMP/lockfile-removed.after.out" "path=$lockfile_path removed=1" 'lock file removal: removing the stop file mid-run is detected (TC-1.4)'
 
+# Stalled-PR retry-sweep priority: converts the pre-iteration scan that picks
+# which resumable label (review-mcp-outage, review-codex-outdated,
+# review-codex-no-credits) to retry into deterministic coverage. Each
+# outer-retry-sweep input line is three fields (mcp/outdated/credits PR
+# numbers, "-" for none) standing in for what three `gh pr list` calls would
+# return; it drives the real pick_stalled_retry() extracted from the outer
+# loop. No Claude/Codex/gh involved.
+: > "$TMP/retry-sweep-none.record"
+printf -- '- - -\n' | run_script outer-retry-sweep "$TMP/retry-sweep-none.record" "$TMP/home" > "$TMP/retry-sweep-none.out"
+assert_contains "$TMP/retry-sweep-none.out" 'none' 'retry sweep: no resumable label set finds nothing to retry'
+
+: > "$TMP/retry-sweep-mcp-only.record"
+printf -- '42 - -\n' | run_script outer-retry-sweep "$TMP/retry-sweep-mcp-only.record" "$TMP/home" > "$TMP/retry-sweep-mcp-only.out"
+assert_contains "$TMP/retry-sweep-mcp-only.out" 'label=review-mcp-outage pr=42' 'retry sweep: review-mcp-outage alone is picked'
+
+: > "$TMP/retry-sweep-outdated-only.record"
+printf -- '- 96 -\n' | run_script outer-retry-sweep "$TMP/retry-sweep-outdated-only.record" "$TMP/home" > "$TMP/retry-sweep-outdated-only.out"
+assert_contains "$TMP/retry-sweep-outdated-only.out" 'label=review-codex-outdated pr=96' 'retry sweep: review-codex-outdated alone is picked (the label with no prior auto-retry)'
+
+: > "$TMP/retry-sweep-credits-only.record"
+printf -- '- - 12\n' | run_script outer-retry-sweep "$TMP/retry-sweep-credits-only.record" "$TMP/home" > "$TMP/retry-sweep-credits-only.out"
+assert_contains "$TMP/retry-sweep-credits-only.out" 'label=review-codex-no-credits pr=12' 'retry sweep: review-codex-no-credits alone is picked'
+
+: > "$TMP/retry-sweep-priority.record"
+printf -- '42 96 12\n' | run_script outer-retry-sweep "$TMP/retry-sweep-priority.record" "$TMP/home" > "$TMP/retry-sweep-priority.out"
+assert_contains "$TMP/retry-sweep-priority.out" 'label=review-mcp-outage pr=42' 'retry sweep: review-mcp-outage wins priority over both Codex-CLI labels when all three are set'
+
+: > "$TMP/retry-sweep-outdated-over-credits.record"
+printf -- '- 96 12\n' | run_script outer-retry-sweep "$TMP/retry-sweep-outdated-over-credits.record" "$TMP/home" > "$TMP/retry-sweep-outdated-over-credits.out"
+assert_contains "$TMP/retry-sweep-outdated-over-credits.out" 'label=review-codex-outdated pr=96' 'retry sweep: review-codex-outdated wins priority over review-codex-no-credits'
+
 # Blocking-finding count: converts the branch point behind QA-TEST-PLAN.md
 # TC-2.1 (Codex review with N>0 BLOCKING findings triggers the
 # addressing-findings path) and TC-2.2 (zero BLOCKING findings triggers
