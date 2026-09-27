@@ -43,7 +43,7 @@ STUCK <reason>                    # environmental, including reviewer unavailabl
                                   # controller counts an attempt, claim label removed (issue is intake again)
 
 # Agent comment marker (every comment the agent posts starts with this line):
-<!-- bzr-issue-worker phase=verify|questions|spec|review ts=<iso8601> -->
+<!-- bzr-issue-worker phase=verify|questions|review ts=<iso8601> -->
 ```
 
 ### Implementation notes (2026-09-20)
@@ -86,11 +86,11 @@ One sentinel; the issue in exactly one of `bzr-needs-info`, `bzr-spec-review`, `
 2. **normalise** — rewrite the body into the template (`ISSUE-TEMPLATE.md`), original preserved.
 3. **classify** — bug vs feature per the mapping; record the decision and evidence in the spec PR body.
 4. **draft** — in the worktree, write or amend specs per `spec-guide.md`; every unknown is `[ASSUMPTION]` with a flip clause or `[OPEN]` with owner; update `index.md` and append `log.md`. Commit, push, open draft PR. Then create or reconcile sub-issues from the L4 list (marker body, attached via the sub-issues API, listed in the PR body). `DRAFT_DONE`.
-5. **review** (wrapper) — `run_review_cycle --mode spec` from the lib. At 0 BLOCKING: mark PR ready, comment on the issue with the PR link and the one-line summary of what will be built, write `SPEC_REVIEW <pr>` to `$BZR_SENTINEL` (the controller moves `bzr-drafting` → `bzr-spec-review`; see the controller L3's implementation notes, 2026-09-19). On cap or bail: `BLOCKED <reason>` with the reviewer summary posted on the PR.
+5. **review** (wrapper) — `run_review_cycle --mode spec` from the lib. At 0 BLOCKING: mark PR ready, comment on the issue with the PR link, the spec file paths, and the sub-issue list, write `SPEC_REVIEW <pr>` to `$BZR_SENTINEL` (the controller moves `bzr-drafting` → `bzr-spec-review`; see the controller L3's implementation notes, 2026-09-19). On cap or bail: `BLOCKED <reason>` with the reviewer summary posted on the PR.
 
 ### Invariants
 1. The worker never writes `status: ready` and never merges.
-2. No agent comment contains the word "approved" in any case.
+2. No agent comment *claims* approval. The word "approved" itself is permitted inside the worker's own `<!-- bzr- -->`-marked comments when explaining how a human approves (e.g. "comment approved to merge"); `bzr_comment` exempts marker-carrying bodies from the approval-word block for exactly this reason.
 3. Every agent comment begins with the marker line.
 4. Questions are numbered and each names what decision it unblocks.
 5. A re-entry never re-asks a question the human has answered.
@@ -107,7 +107,7 @@ One sentinel; the issue in exactly one of `bzr-needs-info`, `bzr-spec-review`, `
 - Spec review cap hit: `bzr-blocked`, findings summarised on the PR.
 
 ### Idempotency
-Re-entry with an existing `bzr/spec-<issue>` branch resumes: fetch, rebase on main, continue from the last completed phase (phase recorded in the PR body's marker block).
+Resume is binary, not phase-granular: re-entry fetches origin; if the `bzr/spec-<issue>` branch exists with an open PR, the worker skips straight to the review cycle (body not rewritten, classification read from the PR marker); otherwise it restarts at phase 1 (verify). No rebase is performed.
 
 ### Versioning policy
 Prompts versioned with `bazaar-issues.sh`; a prompt change bumps the minor version.
@@ -153,7 +153,7 @@ Composes with [BZR-FEAT-REVIEW-LIB](L3-review-lib.md) (`--mode spec`) and `spec-
 5. **Given** the spec reviewer returns 2 BLOCKING then 0 after revision, **when** the cycle ends, **then** the PR is non-draft, the issue is `bzr-spec-review`, and the issue has a marker comment linking the PR.
 6. **Given** the reviewer keeps a BLOCKING finding that is a design decision, **when** cycle 3 runs, **then** the revision converts it to `[ASSUMPTION]` and the finding clears.
 7. **Given** an issue that duplicates an open issue, **when** verified, **then** `NOT_ACTIONABLE duplicate of #N` and `bzr-blocked`.
-8. **Given** any agent comment, **when** grepped case-insensitively for `approved`, **then** no match.
+8. **Given** any agent comment authored to claim approval (as opposed to a marker comment explaining how to approve), **when** grepped case-insensitively for `approved`, **then** no match.
 9. **Given** a body rewrite, **when** the issue is read back, **then** the original text is present verbatim in the details block.
 10. **Given** a crash mid-draft, **when** the worker re-enters after the dead-pid release, **then** it resumes on the existing branch without a second PR.
 11. **Given** a repo with no `specs/` or `*-specs/` directory, **when** any issue is verified, **then** `NOT_ACTIONABLE no spec corpus` and `bzr-blocked`.

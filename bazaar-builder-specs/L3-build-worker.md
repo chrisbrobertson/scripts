@@ -34,7 +34,7 @@ bazaar-build-worker.sh <issue>    # spawned by bazaar-build.sh; env: BZR_ISSUE B
 
 # Precheck outcome (wrapper, before any model call):
 #   the parent's `Specs:` line (written by the approval sweep) names spec files that exist on origin/main with status: ready
-#   every open sub-issue carries the `<!-- bzr-sub-issue … spec=<L4 ID> -->` marker and that L4 exists, or the parent has no sub-issues and its Specs: line names exactly one L4
+#   every open sub-issue carries the `<!-- bzr-sub-issue … spec=<L4 ID> -->` marker and that L4 exists, or the parent has no sub-issues and its Specs: line names at least one L4 (all named L4s bundle into one unit)
 #   branch does not exist on origin, or exists with a marker PR (resume)
 # Otherwise: SPEC_GAP <what is missing> → bzr-blocked + comment, claim released.
 
@@ -103,7 +103,7 @@ Parent in exactly one of `bzr-pr-ready`, `bzr-blocked`, or back in `bzr-ready`; 
 - Implementer `STUCK`: safety push, back to `bzr-ready`; the controller counts the attempt and escalates on the third.
 - Reviewer unavailable (transport failure after the lib's retries, Codex CLI too old, or Codex workspace out of credits): all three fold into `STUCK reviewer unavailable on unit #<k>: <reason>` (the current sub-issue stays pending in the marker block and resumes next attempt). The controller counts this as an attempt like any other `STUCK`; nothing distinguishes the three causes or exempts them from the attempt counter.
 - Cap hit or bail on sub-issue k: skip per assumption.
-- Push rejected (branch moved by someone else): `STUCK rebase-needed`; human intervention.
+- Push rejected (branch moved by someone else): generic `STUCK push of <branch> failed` / `STUCK final push failed`; no distinguished rebase-needed reason; human intervention.
 
 ### Idempotency
 Resume-safe through the marker block and the branch on origin. A second dispatch on a finished issue finds `bzr-pr-ready` and does nothing (controller never queues it).
