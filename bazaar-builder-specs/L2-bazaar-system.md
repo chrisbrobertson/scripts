@@ -46,7 +46,7 @@ Chris Robertson: the label state machine and claim protocol below are implemente
                │ spawn per issue                  │ spawn per issue
    ┌───────────▼───────────┐          ┌──────────▼────────────┐
    │ issue worker          │          │ build worker          │   workers
-   │  worktree bzr/spec-N  │          │  worktree bzr/N-slug  │   (implementer +
+   │  worktree wt/spec-N   │          │  worktree wt/N        │   (implementer +
    │  verify → classify →  │          │  precheck → plan →    │    reviewer via lib)
    │  draft specs → spec   │          │  per sub-issue:       │
    │  review cycle → PR    │          │   implement → review  │
