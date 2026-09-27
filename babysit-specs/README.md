@@ -80,7 +80,7 @@ scripts" sections) rather than kept in a separate amendments file — no
 ## Key Decisions Documented
 
 1. **Scale:** <10 users at 6mo/18mo (personal/internal tool, not OSS distribution)
-2. **Architecture:** Bash orchestrator with subprocess components (selectable implementer + selectable reviewer + gh + git); v1.1.0, 1,921 lines
+2. **Architecture:** Bash orchestrator with subprocess components (selectable implementer + selectable reviewer + gh + git); v1.1.2, 2,116 lines
 3. **Review convergence:** Prescriptive mode kicks in at cycle 3 (requires "Suggested fix:"); inline planning (not plan mode) at cycle 2+
 4. **MCP resilience:** 3 retries with 0/60s/300s backoff on transport failures
 5. **Merge gate:** PRs merge only after `codex-review=success` status POSTed by `run_review_cycle` (enforced by `setup-branch-protection.sh`); BLOCKING=0 alone does not merge
