@@ -38,10 +38,12 @@ PR for risk, an SRE who notes every deploy and CI failure, and a PM who scans
 every open issue for blockers — and you can DM any of them anytime. That's a
 staff-fleet.
 
-Each agent runs inside **Hermes** (NousResearch's agent framework), uses its
-own Telegram bot as a messaging gateway, maintains long-term memory about the
-service, and fires a cron each morning. The inference comes from **Claude Code
-CLI** (`claude -p`), reached via OAuth — no API key needed.
+Each agent runs inside **Hermes** (NousResearch's agent framework) as its own
+profile, uses its own Telegram bot as a messaging gateway, maintains long-term
+memory about the service, and fires a cron each morning. Inference comes from
+Hermes's native **`openai-codex`** provider — ChatGPT OAuth against
+`https://chatgpt.com/backend-api/codex`, model `gpt-5.5` — already authenticated
+via `hermes auth`; no API key, and (since 2026-05-11) no proxy in front of it.
 
 ### 1.2 Why three agents instead of one
 
@@ -79,17 +81,21 @@ One fleet per service means:
 - **Isolated crons.** Each fleet's morning digests cover exactly one service.
   You don't get a merged `secondbrain` + `meridian` PR list that you have to
   mentally filter.
-- **Independent restarts.** A crashed proxy for `meridian` doesn't affect
+- **Independent restarts.** A crashed gateway for `meridian` doesn't affect
   `secondbrain`. Restart one; the other keeps running.
 - **Clean shutdown.** Retiring a service means `rm -rf ~/staff-fleet/<name>`
-  and deleting a launchd plist. Nothing else is affected.
+  and stopping its three Hermes gateways. Nothing else is affected.
 
 ---
 
 ## 2. Quick Start
 
-Prerequisites: `claude` (Claude Code CLI, logged in), `gh` (GitHub CLI,
-authenticated), `hermes` (Hermes Agent), `python3`.
+Prerequisites: `gh` (GitHub CLI, authenticated), `hermes` (Hermes Agent,
+authenticated with `openai-codex` — run `hermes auth` if `hermes auth status
+openai-codex` doesn't say "logged in"). `new-fleet.sh` defensively checks both
+and refuses to start if either is missing. `python3` is also required (used
+directly to patch Hermes's `gateway.py`) but isn't defensively checked —
+macOS ships it, so this rarely bites.
 
 ### Step 1 — Scaffold the fleet
 
@@ -102,38 +108,48 @@ cd ~/repos/scripts
 ./new-fleet.sh meridian    ~/repos/meridian
 ```
 
-**What it does.** Creates `~/staff-fleet/<fleet-name>/`, writes three Hermes
-profiles (staff-swe/sre/pm) with SOUL.md + config.yaml, registers a port in
-`~/staff-fleet/.port-registry`, writes a launchd plist for the proxy, and
-installs fleet-qualified wrappers in `~/.local/bin/`.
+There is no `--port` or other flag — exactly two positional arguments.
 
-**Success looks like:**
-```
-fleet=secondbrain  repo=/Users/you/repos/secondbrain  port=9001
-  created service-context.md — fill in the placeholders!
-  wrote SOUL.md for staff-swe, staff-sre, staff-pm
-  wrote config.yaml for staff-swe, staff-sre, staff-pm
-  wrote .env templates (fill in TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_USERS)
-  created Hermes profile: staff-swe
-  created Hermes profile: staff-sre
-  created Hermes profile: staff-pm
-  synced SOUL.md + config.yaml into .hermes/profiles/
-  wrote bin wrappers: secondbrain-{swe,sre,pm} (fleet/bin/ and ~/.local/bin/)
-  wrote launchd plist: ~/Library/LaunchAgents/com.staff-fleet.secondbrain.proxy.plist
-  wrote start-gateways.sh
-```
+**What it does** (abbreviated; see [§10](#10-file-layout-reference) for the
+full artifact list):
+- Idempotently patches `~/.hermes/hermes-agent/hermes_cli/gateway.py` so it
+  injects each profile's `.env` (`GH_*`/`TELEGRAM_*`/`OPENAI_*`/`ANTHROPIC_*`/
+  `FLEET_*` keys) into the gateway's launchd `EnvironmentVariables` — Hermes
+  regenerates that plist from a hardcoded template on every `gateway start`,
+  which would otherwise wipe manual edits.
+- Creates `~/staff-fleet/<fleet-name>/`, a `service-context.md` template (only
+  if missing), and per-role `SOUL.md` + `config.yaml` + `.env` under
+  `profiles/staff-{swe,sre,pm}/`.
+- Copies `TELEGRAM_ALLOWED_USERS`, `TELEGRAM_HOME_CHANNEL`, and `GH_TOKEN` from
+  any other fleet already on this machine (same operator, same GitHub token).
+- If run interactively, prompts for each of the three per-agent Telegram bot
+  tokens; if not, leaves `TELEGRAM_BOT_TOKEN` for you to fill in.
+- Creates the three Hermes profiles, syncs `SOUL.md`/`config.yaml` into them,
+  and symlinks `~/.hermes/auth.json` into each so the gateway processes (which
+  run with `HERMES_HOME` set to the profile dir) always see current
+  `openai-codex` credentials.
+- Writes `team-orchestrator.py`, `babysit-driver.sh`, `team-dispatcher.sh`,
+  the `offline-dev` skill, and a PM `spec-review-prompt.txt` — the autonomous
+  dev chain described in [§3.6](#36-the-autonomous-dev-chain).
+- Writes fleet-qualified bin wrappers (`<fleet>-{swe,sre,pm}`) into both
+  `<fleet-dir>/bin/` and `~/.local/bin/`, and writes `start-gateways.sh`.
 
 **Common failure:** `error: 'hermes' not found in PATH`
 → Install Hermes: `curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash`
 
+**Common failure:** `error: Hermes is not authenticated with openai-codex.`
+→ Run `hermes auth` and complete the ChatGPT OAuth flow, then re-run.
+
 **Re-running is safe.** If you run `new-fleet.sh` again on an existing fleet,
 config files are overwritten but Hermes memory and sessions are preserved
-(`.hermes/` is never deleted).
+(`.hermes/` is never deleted), and an existing `service-context.md`/`.env` is
+left untouched.
 
 ### Step 2 — Fix `[REPO]` placeholders in the SOUL files
 
-The SOUL.md templates include `--repo [REPO]` in `gh` command examples.
-Replace with the actual `owner/repo` slug:
+The SOUL.md templates, each role's `config.yaml` `cron:` block, and the PM
+handoff/spec-review prompts all include `--repo [REPO]` in `gh` command
+examples. Replace with the actual `owner/repo` slug everywhere it appears:
 
 ```bash
 # Find your repo slugs:
@@ -141,28 +157,53 @@ cd ~/repos/secondbrain && gh repo view --json nameWithOwner -q .nameWithOwner
 cd ~/repos/meridian    && gh repo view --json nameWithOwner -q .nameWithOwner
 
 # Find all placeholders:
-grep -r '\[REPO\]' ~/staff-fleet/secondbrain/profiles/
+grep -rl '\[REPO\]' ~/staff-fleet/secondbrain/profiles/
 
 # Replace (example — use your actual slug):
 sed -i '' 's/\[REPO\]/yourorg\/secondbrain/g' \
   ~/staff-fleet/secondbrain/profiles/staff-swe/SOUL.md \
   ~/staff-fleet/secondbrain/profiles/staff-sre/SOUL.md \
-  ~/staff-fleet/secondbrain/profiles/staff-pm/SOUL.md
+  ~/staff-fleet/secondbrain/profiles/staff-pm/SOUL.md \
+  ~/staff-fleet/secondbrain/profiles/staff-swe/config.yaml \
+  ~/staff-fleet/secondbrain/profiles/staff-sre/config.yaml \
+  ~/staff-fleet/secondbrain/profiles/staff-pm/config.yaml \
+  ~/staff-fleet/secondbrain/profiles/staff-pm/handoff-prompt.txt \
+  ~/staff-fleet/secondbrain/profiles/staff-pm/spec-review-prompt.txt
 
-# Then sync back into Hermes profiles:
-cp ~/staff-fleet/secondbrain/profiles/staff-swe/SOUL.md \
-   ~/staff-fleet/secondbrain/.hermes/profiles/staff-swe/SOUL.md
-# (repeat for sre and pm)
+# Then sync SOUL.md + config.yaml back into Hermes profiles — new-fleet.sh
+# copied the originals here once at fleet-creation time, and `gateway install`
+# (Step 5) reads config.yaml from THIS location, not the template above:
+for role in swe sre pm; do
+  cp ~/staff-fleet/secondbrain/profiles/staff-${role}/SOUL.md \
+     ~/staff-fleet/secondbrain/.hermes/profiles/staff-${role}/SOUL.md
+  cp ~/staff-fleet/secondbrain/profiles/staff-${role}/config.yaml \
+     ~/staff-fleet/secondbrain/.hermes/profiles/staff-${role}/config.yaml
+done
 ```
 
-**Common failure:** Agents use `gh pr list` without `--repo`, which defaults
-to the cwd and may give wrong results when the proxy is started from a
-different directory.
+The prompt files don't need a separate sync step — `start-gateways.sh` reads
+`handoff-prompt.txt` and `spec-review-prompt.txt` directly from the template
+`profiles/` directory when it registers those cron jobs.
+
+Do this **before** running `start-gateways.sh` (Step 5): the three daily
+crons are created by Hermes from `config.yaml` on first `gateway install`,
+and the two extra cron jobs embed the prompt file's contents as a literal
+argument at creation time. A placeholder left in either copy of `config.yaml`
+at that point, or fixed only after the cron already exists, produces a
+literal "unknown repository [REPO]" error from `gh` — not a
+silently-wrong-repo result, since `terminal.cwd` is already pinned to the
+service repo. Re-registering after the fact means deleting the affected cron
+job (`hermes -p staff-<role> cron remove <job_id>`) and re-running
+`start-gateways.sh`.
 
 ### Step 3 — Fill in `service-context.md`
 
-This is the most important step. The proxy injects this file into every
-inference call. The better this file, the better every agent response.
+This is the most important step. `SOUL.md` instructs each agent to read
+`${FLEET_DIR}/service-context.md` at the start of every session — the
+`filesystem` MCP server in `config.yaml` gives it read access to both the repo
+and the fleet directory. Unlike the old proxy, nothing forces this read to
+happen; it depends on the model following its own system-prompt instruction.
+The better this file, the better every agent response.
 
 ```bash
 $EDITOR ~/staff-fleet/secondbrain/service-context.md
@@ -184,15 +225,20 @@ fleets):
 1. Open Telegram → search `@BotFather` → `/newbot`
 2. Follow prompts; note the token (looks like `123456:ABCdef...`)
 3. Get your Telegram user ID from `@userinfobot`
-4. Fill in the `.env` for each agent:
+4. If `new-fleet.sh` ran interactively it already prompted you for each bot
+   token. Otherwise fill in the `.env` for each agent:
 
 ```bash
 $EDITOR ~/staff-fleet/secondbrain/profiles/staff-swe/.env
 # Set TELEGRAM_BOT_TOKEN=<token>
 # Set TELEGRAM_ALLOWED_USERS=<your-user-id>
+# Set TELEGRAM_HOME_CHANNEL=<your-user-id>  (same as above for a single user)
+# Set GH_TOKEN=<output of: gh auth token>
 ```
 
-Repeat for sre and pm. The `.env` files are never committed to git.
+Repeat for sre and pm — though `TELEGRAM_ALLOWED_USERS`, `TELEGRAM_HOME_CHANNEL`,
+and `GH_TOKEN` are usually already filled in for you (copied from an existing
+fleet on the same machine). The `.env` files are never committed to git.
 
 **Using fewer bots.** If you don't need per-agent identity in Telegram, you
 can reuse one bot token across all three agents in a fleet. They'll all appear
@@ -205,41 +251,60 @@ correct Hermes profile since each runs its own gateway.
 ~/staff-fleet/secondbrain/start-gateways.sh
 ```
 
-This loads the launchd proxy, waits 2 seconds, runs a health check, then
-installs and starts all three Telegram gateways.
+This installs and starts all three Telegram gateways, wires the five staff-pm
+cron jobs (see [§3.6](#36-the-autonomous-dev-chain)), and runs a set of
+pre-flight checks for the autonomous-dev chain (repo remote protocol, clean
+working tree, `claude` CLI on PATH, home-lab-monitor reachability).
 
-**Success looks like:**
+**Success looks like** (trimmed):
 ```
-proxy started on port 9001
-{"status": "ok", "fleet": ".../secondbrain", "repo": ".../secondbrain"}
 --- staff-swe gateway ---
 [hermes gateway install output]
 [hermes gateway start output]
+[hermes gateway status output]
+--- staff-sre gateway ---
 ...
-All gateways started. Verify by DMing each bot:
+--- staff-pm gateway ---
+...
+
+--- team orchestrator wiring ---
+  created staff-pm/prioritize-handoff-prs
+  created staff-pm/team-orchestrator (no-agent, runs daily at 9am)
+  created staff-pm/team-dispatcher (no-agent, every 5 min)
+  created staff-pm/spec-review-pr (triggered on-demand)
+
+--- babysitter chain pre-flight ---
+  OK: home-lab-monitor reachable at http://192.168.1.129:8888
+  OK: this host (yourhost) is registered with the monitor
+
+All gateways started + orchestrator + dispatcher wired. Verify by DMing each bot:
   staff-swe, staff-sre, staff-pm
 Ask each: 'What service do you own and what is your role?'
 ```
+
+Re-running `start-gateways.sh` is idempotent — already-installed gateways and
+already-created cron jobs are skipped with a "already exists" message.
 
 ### Smoke test
 
 Once the gateways are running, verify end-to-end:
 
 ```bash
-# 1. Proxy health
-curl -s http://127.0.0.1:9001/health | python3 -m json.tool
-# Expected: {"status": "ok", "fleet": "...", "repo": "..."}
+# 1. Gateway status
+secondbrain-swe gateway status
+# Expected: "running", not "stopped"
 
-# 2. One-shot CLI round-trip (bypasses Telegram, hits claude -p directly)
+# 2. One-shot CLI round-trip (bypasses Telegram, hits openai-codex directly)
 secondbrain-swe chat -q "what tools do you have access to?"
-# Expected: response mentioning gh, git, Read, Glob, Grep — not an error
+# Expected: response mentioning gh, git, filesystem/terminal — not an error
+
+# 3. Cron wiring — staff-pm should show 5 jobs, staff-swe/sre 1 each
+HERMES_HOME=~/staff-fleet/secondbrain/.hermes hermes -p staff-pm cron list
 ```
 
-If the CLI round-trip returns an error or empty output, check `proxy.log`
-before continuing:
-```bash
-tail -50 ~/staff-fleet/secondbrain/proxy.log
-```
+If the CLI round-trip errors or returns nothing, check `hermes auth status
+openai-codex` first, then the gateway's own logs (`hermes -p staff-swe gateway
+status` and Hermes's own log location for the profile).
 
 ---
 
@@ -251,147 +316,162 @@ tail -50 ~/staff-fleet/secondbrain/proxy.log
 Telegram DM
     │
     ▼
-Hermes Agent  (profile: staff-swe, HERMES_HOME: ~/staff-fleet/secondbrain/.hermes/)
-    │  POST /v1/chat/completions  (OpenAI format)
-    │  includes: messages[], tools[], system messages from SOUL.md
+Hermes Agent  (profile: staff-swe, HERMES_HOME: ~/staff-fleet/secondbrain/.hermes/profiles/staff-swe/)
+    │  system prompt = SOUL.md + Hermes conversation history
+    │  terminal.cwd = the service repo; env_passthrough: GH_TOKEN
+    │  mcp_servers.filesystem → read access to the repo AND the fleet dir
     ▼
-claude-code-proxy  (127.0.0.1:9001, launchd-managed)
-    │  reads service-context.md
-    │  assembles --append-system-prompt
-    │  runs: claude -p --model claude-sonnet-4-6 --append-system-prompt "..."
-    │         --add-dir /path/to/repo --allowedTools "Bash(gh *) ..."
+openai-codex provider  (Hermes-native; https://chatgpt.com/backend-api/codex)
+    │  authenticated via the symlinked auth.json (ChatGPT OAuth, shared across
+    │  fleets from ~/.hermes/auth.json — ​no API key)
     ▼
-claude -p subprocess
-    │  stdin: conversation formatted as "Human: ... \n\nAssistant: ..."
-    │  stdout: model response (text or <tool>{...}</tool> block)
-    ▼
-Claude API  (via OAuth, no API key)
+gpt-5.5
     │
-    ◀── response ──
+    ◀── response / tool call ──
     │
-claude-code-proxy  parses response:
-    │  if <tool> block → return OpenAI tool_calls response
-    │  else → return content response
-    ▼
-Hermes Agent  executes tool call or returns final answer
+Hermes Agent  executes the tool call (gh, git, filesystem read, ...) or
+    returns the final answer
     │
     ▼
 Telegram message to you
 ```
 
-**Arrow 1: Telegram → Hermes.** Hermes's Telegram gateway receives your DM,
-adds it to the conversation history, and fires a `/v1/chat/completions` POST
-with the full message thread plus tool definitions.
+There is no HTTP proxy in this path. Until 2026-05-11, Hermes's `provider:
+custom` pointed at a local `claude-code-proxy.py` that shelled out to
+`claude -p` per request; that proxy had an 8-second stale-connection timeout
+in Hermes it couldn't cleanly override, so every agent response failed
+intermittently. `openai-codex` is a provider Hermes already speaks natively,
+already OAuth-authenticated, and responds in ~5s — no proxy needed.
+`claude-code-proxy.py` is still in this repo but nothing wires it up anymore
+(see [§11](#11-limitations--design-notes)).
 
-**Arrow 2: Hermes → proxy.** Standard OpenAI chat completions format. The
-proxy is an HTTP server (Python `http.server`, ThreadingMixIn). It accepts
-`POST /v1/chat/completions` and `GET /health`.
-
-**Arrow 3: proxy → claude -p.** The proxy assembles a system prompt and
-formats the conversation as `"Human: ...\n\nAssistant: ..."` text, then pipes
-it to `claude -p` as stdin. This is how `claude -p` works in print mode:
-takes a conversation on stdin, returns a response on stdout.
-
-**Arrow 4: claude -p → Claude API.** `claude` uses your OAuth session
-(established via `claude auth login`). No raw API key is ever in the proxy or
-fleet config.
-
-**Arrow 5: proxy parses and wraps.** If the model's response contains a
-`<tool>{...}</tool>` block, the proxy returns an OpenAI `tool_calls` response.
-Otherwise it returns a plain `content` response. Hermes then either executes
-the tool and sends a follow-up request, or delivers the answer to Telegram.
-
-### 3.2 Why a proxy at all
-
-Three constraints collide:
-
-| Constraint | Source |
-|---|---|
-| Hermes requires an OpenAI-compatible HTTP endpoint | Hermes's `provider: custom` uses OpenAI client |
-| `claude -p` is a subprocess, not an HTTP server | Claude Code has no server mode |
-| You want OAuth auth (no raw API key) | Claude Code's `claude auth login` |
-
-`claude-code-proxy.py` is the minimal thing that satisfies all three: an HTTP
-server that accepts OpenAI requests and translates them into `claude -p`
-subprocess calls.
-
-### 3.3 The three-layer system prompt
-
-When the proxy handles a request, it assembles `--append-system-prompt` from
-up to four sources (in order of appending):
-
-```
-[Layer 0] Claude Code's built-in default system prompt
-           (provides tool knowledge, injected automatically by claude -p)
-           ↓
-[Layer 1] Hermes-supplied system messages from your conversation
-           (SOUL.md role definition, personality, etc.)
-           ↓
-[Layer 2] service-context.md content
-           (live per-fleet facts: stack, stakeholders, priorities, risks)
-           ↓
-[Layer 3] Tool definitions + protocol  (only if Hermes sent tools in the request)
-           AVAILABLE TOOLS:
-           - list_prs: ... args=[query]
-           ...
-           TOOL CALLING PROTOCOL
-           When you need to call a tool output exactly this:
-           <tool>{"name":"TOOL_NAME","args":ARGS_JSON}</tool>
-```
-
-Layer 0 is why `--append-system-prompt` is used instead of `--system-prompt`.
-The latter *replaces* Claude's default, which destroys tool knowledge. The
-former *adds to* it. This distinction bit us during development — see
-`claude-code-proxy.py:93-96` for the comment.
-
-### 3.4 Why fleet isolation
+### 3.2 Fleet isolation
 
 | Concern | Mechanism |
 |---|---|
 | Memory bleed between services | Separate `HERMES_HOME` per fleet (`~/staff-fleet/<name>/.hermes/`) |
-| Cron collisions between fleets | Separate launchd job (proxy) + Hermes scheduler per fleet |
-| Port conflicts | Per-fleet port from `~/staff-fleet/.port-registry` (starts at 9001) |
-| Profile name conflicts across fleets | Fleet-qualified bin wrappers (`secondbrain-swe`, not `staff-swe`) |
+| Cron collisions between fleets | Separate `HERMES_HOME` + independent Hermes scheduler per fleet; no shared process |
+| Profile name conflicts across fleets | Fleet-qualified bin wrappers (`secondbrain-swe`, not `staff-swe`) — the generic `~/.local/bin/staff-<role>` is intentionally overwritten with an error message |
+| Credential bleed | `auth.json` is shared (one ChatGPT OAuth session), but each profile's `.env`/bot token/memory is fleet-local |
 
-The port registry is a simple JSON file:
-```json
-{
-  "secondbrain": 9001,
-  "meridian": 9002
-}
+There is no port registry, launchd plist, or per-fleet HTTP server to manage —
+`openai-codex` is an outbound HTTPS call Hermes makes itself; nothing listens
+on a local port for this.
+
+### 3.3 Credentials and env injection
+
+Two separate credential paths feed each gateway process:
+
+- **`openai-codex` auth** — `~/.hermes/auth.json`, symlinked into every
+  profile directory by `new-fleet.sh`. One ChatGPT OAuth session, shared by
+  all fleets and roles on the machine.
+- **`.env` secrets** (`TELEGRAM_BOT_TOKEN`, `GH_TOKEN`, ...) — the gateway
+  process runs under launchd with `HERMES_HOME` set to the profile dir, and
+  Hermes regenerates that launchd plist from a template on every `gateway
+  start`. The `HERMES_FLEET_ENV_INJECTION_PATCH` applied to `gateway.py` by
+  `new-fleet.sh` teaches that template generator to also read the profile's
+  `.env` and add matching keys (`GH_`, `GITHUB_`, `TELEGRAM_`, `OPENAI_`,
+  `ANTHROPIC_`, `FLEET_` prefixes) as plist `EnvironmentVariables`, so they
+  reach both the gateway process and any `terminal` subprocess it spawns.
+  `terminal.env_passthrough: [GH_TOKEN]` in `config.yaml` additionally lets
+  `GH_TOKEN` through Hermes's own subprocess credential-scrubbing filter so
+  the agent's `gh` commands can authenticate — the bot token isn't on that
+  passthrough list, so it's scrubbed from `terminal` subprocess env and
+  output. That scrub only covers the process-env path, though: the `.env`
+  file itself (`~/staff-fleet/<fleet>/.hermes/profiles/staff-*/.env`) lives
+  inside the fleet directory, which is one of the two roots the `filesystem`
+  MCP server (§3.4) is scoped to — so the model can read the bot token
+  directly off disk via a filesystem tool call regardless of the scrub.
+
+### 3.4 Tool access
+
+`config.yaml` wires one MCP server (`filesystem`, scoped to the repo and the
+fleet directory) plus a `terminal` block (`cwd` = the repo, `persistent_shell:
+true`). There is no custom tool-call allowlist layer anymore — the old
+`claude-code-proxy.py`-specific `_ALLOWED_TOOLS`/`--allowedTools` restriction
+doesn't apply to the native `openai-codex` provider. What (if anything) bounds
+which shell commands an agent can run under `terminal:` is Hermes's own
+configuration surface, not something `new-fleet.sh` currently sets — treat
+tighter sandboxing here as an open follow-up if you need it, rather than an
+existing guarantee.
+
+### 3.5 Response format and streaming
+
+`openai-codex` is a real OpenAI-compatible provider Hermes talks to directly;
+there's no custom `<tool>{...}</tool>` regex parsing or single-shot-per-turn
+restriction to work around (that was `claude-code-proxy.py`-specific, see
+`git show 84364ea` for what was removed). Multi-tool-call turns and normal
+provider-level behavior apply.
+
+### 3.6 The autonomous-dev chain
+
+Beyond the three chat/digest agents, `new-fleet.sh` wires a second system: a
+`--no-agent` (no-LLM-cost) cron chain on `staff-pm` that watches for
+actionable GitHub work and drives `babysit-with-review.sh` (from this repo)
+against it, unattended.
+
+```
+team-dispatcher (every 5 min, --no-agent)
+    │  checks home-lab-monitor's distributed lock (GET /api/babysit;
+    │  falls back to a local ~/sisyphus-logs/<fleet>.stop file if
+    │  unreachable) — is a babysitter already running for this fleet
+    │  anywhere on the home-lab?
+    │  if clear AND (open PRs by @me) + (open priority/p1 or /p2 issues) > 0:
+    ▼
+babysit-driver.sh  (spawned via nohup)
+    │  requires `claude` CLI on PATH — this IS still a `claude -p` subprocess,
+    │  just for autonomous coding, unrelated to the staff agents' own
+    │  openai-codex inference above
+    │  runs babysit-with-review.sh against the service repo
+    │  polls gh every 30s for new PRs opened during the run
+    ▼
+new PR opened → labelled `from-babysitter`, Telegram notice sent,
+    staff-pm's `spec-review-pr` cron triggered on-demand
 ```
 
-### 3.5 Tool-call protocol
-
-When Hermes sends tool definitions in a chat completions request, the proxy
-injects the tool specs and a protocol instruction into the system prompt. The
-model is told to emit:
+> **Hardcoded repo path.** `team-dispatcher.sh` and `babysit-driver.sh` both
+> recompute `REPO_PATH="$HOME/repos/${FLEET_NAME}"` at runtime
+> (`new-fleet.sh:836,923`) instead of reusing the `<repo-path>` argument
+> `new-fleet.sh` was invoked with. That argument only flows into
+> generation-time text (SOUL.md, config.yaml, MCP filesystem-server args); the
+> autonomous-dev chain's own scripts ignore it. If your repo doesn't live at
+> `~/repos/<fleet-name>`, the dispatcher and driver will silently no-op
+> (`[[ -d "$REPO_PATH/.git" ]]` fails, so `GH_REPO_SLUG` stays empty and the
+> dispatcher exits without spawning) or, worse, operate on an unrelated
+> checkout that happens to exist at that path. Symlink `~/repos/<fleet-name>`
+> to the real location if your layout differs.
 
 ```
-<tool>{"name":"TOOL_NAME","args":{"arg1":"val1"}}</tool>
+    ▼
+staff-pm (spec-review-pr, LLM-backed)
+    │  judges product correctness (codex, if configured, already covers code
+    │  quality via babysit-with-review.sh's own review cycle)
+    ▼
+PR labelled `spec-passed` or `spec-changes-requested`; verdict comment posted
 ```
 
-The proxy parses this with a regex (`re.search(r"<tool>(.*?)</tool>", ...)`),
-extracts the JSON, and wraps it in OpenAI `tool_calls` format:
+Separately, once a day:
 
-```json
-{
-  "role": "assistant",
-  "content": null,
-  "tool_calls": [{
-    "id": "call_a1b2c3d4",
-    "type": "function",
-    "function": {
-      "name": "list_prs",
-      "arguments": "{\"query\": \"is:open\"}"
-    }
-  }]
-}
+```
+team-orchestrator (09:00, --no-agent, after the 3 morning digests)
+    │  reads each role's latest cron session transcript, extracts trailing
+    │  CONCERN: / HANDOFF: / WORK: marker lines (see the MARKER_FOOTER
+    │  appended to every digest prompt)
+    ├─ CONCERN: <text>        → appended to service-context.md's
+    │                            "## Current Concerns / Risks" section
+    ├─ HANDOFF: pm <reason>   → triggers staff-pm's prioritize-handoff-prs
+    │                            cron (max ONE handoff fired per fleet per
+    │                            day — a loop guard; only "pm" is a wired
+    │                            target today, other roles log "unknown
+    │                            handoff target" and no-op)
+    └─ WORK: #N <reason>      → labels GitHub issue #N priority/p2 (queues
+                                 it for team-dispatcher/babysit-driver above)
 ```
 
-Hermes receives this, executes the tool, and sends the result back as a
-`tool` role message. This is a single-shot pattern: the model generates one
-tool call per turn. Nested tool loops (tool A calls tool B) are not supported.
+The `offline-dev` skill (deployed to all three profiles) documents this whole
+chain to the agents themselves, so their morning digests can reason about
+what to hand off or flag as `WORK:` candidates, and so `staff-swe`/`staff-pm`
+know how to review a `from-babysitter`-labelled PR.
 
 ---
 
@@ -408,6 +488,8 @@ own deployment operations (staff-sre) or roadmap (staff-pm).
 - Reviews changes from the past 24 hours
 - Posts a Telegram digest: notable PRs, risks, wins
 - If nothing notable: says so in one sentence
+- Emits `HANDOFF: pm prioritize-open-prs` if 5+ PRs are open without priority labels
+- Ends with `CONCERN:`/`HANDOFF:`/`WORK:` marker lines for `team-orchestrator` to parse
 
 **Tools available:**
 
@@ -415,8 +497,7 @@ own deployment operations (staff-sre) or roadmap (staff-pm).
 |---|---|
 | `Bash(gh *)` | `gh pr list`, `gh pr view`, `gh pr diff`, `gh run list` |
 | `Bash(git *)` | `git log`, `git diff`, `git show` for local diff inspection |
-| `Read` | Read source files when reviewing a specific change |
-| `Glob` / `Grep` | Find files, search for symbols, check test coverage patterns |
+| filesystem MCP | Read source files when reviewing a specific change, and read `service-context.md` |
 
 **Example interactive transcript** *(illustrative)*:
 
@@ -430,7 +511,7 @@ staff-swe: Three merged. One worth flagging: PR #482 (auth-token-storage-
 
 you: can you check if there's any test for the token encryption path?
 
-staff-swe: [runs Grep for test files touching auth/token]
+staff-swe: [greps for test files touching auth/token]
            Found 2 test files: tests/auth/test_session.py and
            tests/auth/test_login.py. Neither tests the encryption path that
            #482 modifies. test_session.py has a TODO comment: "add encryption
@@ -438,9 +519,10 @@ staff-swe: [runs Grep for test files touching auth/token]
 
 you: draft a comment on PR #482 flagging this?
 
-staff-swe: I don't have write access to post comments (--allowedTools
-           restricts me to read-only gh). I can draft the text and you
-           can paste it:
+staff-swe: My SOUL.md instructs me not to post PR comments without your
+           sign-off — nothing in config actually blocks the `gh` call, so
+           treat that as a behavioral norm, not an enforced permission. I can
+           draft the text and you can paste it:
 
            "This removes the salt-rotation logic added in #387 (post-Q3
            audit). tests/auth/test_session.py has a TODO for an encryption
@@ -453,7 +535,7 @@ staff-swe: I don't have write access to post comments (--allowedTools
 - Production incident diagnosis → staff-sre ("Why did the deploy fail?" — defer)
 - Anything requiring human sign-off → surface and stop, do not act
 
-**Source:** `new-fleet.sh:203-252` (`write_soul_swe`)
+**Source:** `new-fleet.sh:207-255` (`write_soul_swe`)
 
 ### 4.2 staff-sre — Staff Site Reliability Engineer
 
@@ -503,14 +585,17 @@ staff-sre: [runs gh run view 2340]
 - Product priorities / ticket status → staff-pm
 - Write actions on infrastructure → requires human sign-off; staff-sre stops and asks
 
-**Source:** `new-fleet.sh:254-300` (`write_soul_sre`)
+**Source:** `new-fleet.sh:258-305` (`write_soul_sre`)
 
 ### 4.3 staff-pm — Staff Product Manager
 
 **Charter.** Owns the product roadmap, issue tracking, and stakeholder
 coordination. Summarises ticket changes, flags items needing human decisions,
 and maintains awareness of what the team is building and why. Does not own
-code architecture (staff-swe) or operational health (staff-sre).
+code architecture (staff-swe) or operational health (staff-sre). Also carries
+the autonomous-dev chain's `--no-agent` crons (`team-orchestrator`,
+`team-dispatcher`) and the on-demand `prioritize-handoff-prs` /
+`spec-review-pr` crons — see [§3.6](#36-the-autonomous-dev-chain).
 
 **Daily cron** — fires at **8:30 AM PT** (last, after SWE and SRE):
 - `gh issue list --repo <REPO> --state open --limit 30`
@@ -547,7 +632,7 @@ staff-pm: I don't have write access to reassign issues (by design — changes
 - Deploy / incident status → staff-sre
 - Committing to timelines → requires human confirmation; staff-pm stops and says so
 
-**Source:** `new-fleet.sh:303-350` (`write_soul_pm`)
+**Source:** `new-fleet.sh:308-355` (`write_soul_pm`)
 
 ---
 
@@ -557,7 +642,8 @@ staff-pm: I don't have write access to reassign issues (by design — changes
 
 The SRE fires first (7:30 AM) so operations context is already in your
 Telegram before the SWE code-review lands (8:00 AM) and the PM product
-summary rounds out the picture (8:30 AM).
+summary rounds out the picture (8:30 AM). The `team-orchestrator` no-agent
+cron runs at 9:00 AM, after all three.
 
 **7:30 AM — staff-sre Telegram message** *(sample)*:
 ```
@@ -598,18 +684,23 @@ highest-priority daily check. SWE fires second because code-review findings
 feed into the PM's issue triage. PM fires last because it can reference
 ("PR #483 is the implementation of issue #192") what the SWE already reported.
 If all three fired simultaneously, the PM would miss that PR context.
+`team-orchestrator` fires last of all (9:00 AM) so it has all three digests'
+markers to parse.
 
 ### 5.3 Where logs land
 
 | Log | Location | What's in it |
 |---|---|---|
-| Proxy stdout/stderr | `~/staff-fleet/<fleet>/proxy.log` | HTTP request lines, `claude -p` stderr, crashes |
-| Hermes session | `~/staff-fleet/<fleet>/.hermes/sessions/` | Full conversation turns for each session |
-| Hermes cron | `~/staff-fleet/<fleet>/.hermes/cron/` | Cron execution records |
+| Hermes session | `~/staff-fleet/<fleet>/.hermes/profiles/staff-<role>/sessions/` | Full conversation turns for each session |
+| Hermes cron | `~/staff-fleet/<fleet>/.hermes/profiles/staff-<role>/cron/` | Cron execution records |
+| `team-orchestrator` | `~/staff-fleet/<fleet>/logs/orchestrator.log` | What it parsed from each role's latest session and what it fired |
+| `babysit-driver` | `~/sisyphus-logs/<fleet>-driver-*.log` | Autonomous babysitter run output, one file per invocation |
+| `team-dispatcher` state | `~/staff-fleet/<fleet>/.dispatcher-state.json` | Last spawn time and the PR/issue counts that triggered it |
 
-To watch the proxy live during a test:
+To watch the orchestrator or a driver run live:
 ```bash
-tail -f ~/staff-fleet/secondbrain/proxy.log
+tail -f ~/staff-fleet/secondbrain/logs/orchestrator.log
+tail -f ~/sisyphus-logs/secondbrain-driver-*.log
 ```
 
 ### 5.4 Silent failure modes
@@ -619,10 +710,15 @@ stopped working without alerting you:
 
 - **No Telegram digest by 9 AM** — cron fired but produced empty output
   (empty model response), or the gateway died overnight
-- **"ok" health check but empty responses** — the proxy is up but `claude -p`
-  is returning empty or timing out; check `proxy.log` for 180s timeout lines
 - **Telegram bot shows "offline"** — the Hermes gateway process died;
   run `<fleet>-<role> gateway status` and restart if needed
+- **`hermes auth status openai-codex` stops saying "logged in"** — the shared
+  ChatGPT OAuth session expired; every fleet's every agent fails until you
+  re-run `hermes auth`
+- **No `from-babysitter` PRs ever appear despite open `priority/p1`/`p2`
+  issues** — check `~/sisyphus-logs/<fleet>.stop` (a stale stop-file blocks
+  `team-dispatcher` from spawning) and whether home-lab-monitor considers a
+  babysitter already "running" for this fleet on some other host
 
 A simple monitoring approach: set a Telegram message reminder at 9:30 AM to
 check that all three digests arrived. If any are missing, check gateways first.
@@ -661,7 +757,7 @@ secondbrain-pm  chat -q "show me open P0 issues"
 
 **Direct Hermes command (bypasses the wrapper, useful for debugging):**
 ```bash
-HERMES_HOME=~/staff-fleet/secondbrain/.hermes \
+HERMES_HOME=~/staff-fleet/secondbrain/.hermes/profiles/staff-swe \
   hermes -p staff-swe chat -q "what tools do you have?"
 ```
 
@@ -756,14 +852,6 @@ noise. Ask the right specialist.
 staff-sre can see CI runs and workflow results, but not app-level metrics,
 error rates, or APM data unless you add an MCP server for it.
 
-### 6.5 Tool calls visible to the user
-
-In rare cases (usually when there's a system prompt assembly issue) you might
-see raw `<tool>{...}</tool>` blocks in the agent's Telegram messages or CLI
-output. This means the proxy failed to parse the tool call and returned it
-as plain text. Check `proxy.log` for JSON parse errors or `claude -p`
-invocation failures.
-
 ---
 
 ## 7. Fleet Management
@@ -772,12 +860,9 @@ invocation failures.
 
 ```bash
 ./new-fleet.sh <name> <path-to-repo>
-# Optional: specify port explicitly
-./new-fleet.sh <name> <path-to-repo> --port 9005
 ```
 
-Ports are auto-allocated sequentially from 9001. The registry is at
-`~/staff-fleet/.port-registry`.
+There is no port to allocate — `openai-codex` needs no local listener.
 
 ### Re-run on an existing fleet (update config)
 
@@ -790,25 +875,13 @@ Re-running `new-fleet.sh` on an existing fleet is safe and idempotent:
 | service-context.md preserved | Only created if missing |
 | .env preserved | Never overwritten — your tokens are safe |
 | .hermes/ preserved | Memory and sessions untouched |
+| team-orchestrator.py / babysit-driver.sh / team-dispatcher.sh / offline-dev skill / spec-review-prompt.txt | Overwritten every run |
 
 After re-running, sync config back into live profiles:
 ```bash
 # Already done automatically by new-fleet.sh, but if you edit manually:
 cp ~/staff-fleet/secondbrain/profiles/staff-swe/config.yaml \
    ~/staff-fleet/secondbrain/.hermes/profiles/staff-swe/config.yaml
-```
-
-### Stop / start the proxy
-
-```bash
-# Stop:
-launchctl unload ~/Library/LaunchAgents/com.staff-fleet.secondbrain.proxy.plist
-
-# Start:
-launchctl load -w ~/Library/LaunchAgents/com.staff-fleet.secondbrain.proxy.plist
-
-# Check if running:
-launchctl list | grep staff-fleet
 ```
 
 ### Stop / start a Telegram gateway
@@ -841,55 +914,74 @@ cp ~/staff-fleet/secondbrain/profiles/staff-swe/config.yaml \
 ```
 The agent is still reachable via CLI and Telegram; it just won't fire on a schedule.
 
+To pause only the autonomous-dev chain (leave the chat/digest agents running),
+use the dispatcher's stop-file — `~/sisyphus-logs/<fleet-name>.stop` — but the
+correct action depends on whether a babysitter is currently running:
+
+- **No babysitter running.** `team-dispatcher.sh` refuses to spawn one while
+  this file exists (`new-fleet.sh:953`). `touch` it to block future spawns;
+  `rm` it to allow them again.
+- **A babysitter is already running.** `rm`-ing the stop-file only stops the
+  *current* run — it does not pause the chain. `team-dispatcher` is a Hermes
+  cron job that still ticks every 5 minutes, and if open `priority/p1`/`p2`
+  work remains once the current babysitter exits, the very next tick spawns
+  a fresh one. To actually pause the chain while a babysitter is running:
+
+  1. **Pause `team-dispatcher` first**, so nothing can respawn once the
+     current run exits:
+     ```bash
+     JOB_ID=$(HERMES_HOME=~/staff-fleet/<fleet>/.hermes hermes -p staff-pm cron list \
+       | awk '/^  [a-f0-9]{12} \[/{id=$1} /Name:/{sub(/^[[:space:]]+Name:[[:space:]]+/,""); if ($0=="team-dispatcher") {print id; exit}}')
+     HERMES_HOME=~/staff-fleet/<fleet>/.hermes hermes -p staff-pm cron pause "$JOB_ID"
+     ```
+  2. **Then `rm` the stop-file.** The running babysitter created and owns
+     this file itself as its run-lock (`babysit-with-review.sh:243`); its
+     `EXIT` trap deletes it on exit. `touch`-ing it is a no-op — the file
+     already exists, and the loop only checks for *absence* to detect a stop
+     request. Removing it makes the loop notice on its next check
+     (`babysit-with-review.sh:1751-1752`) and exit gracefully — this can take
+     as long as the iteration currently in progress.
+  3. **Verify it actually exited** before declaring the chain paused. Don't
+     `pgrep` for the fleet name — the driver launches `babysit-with-review.sh`
+     with no fleet-identifying argument at all (`new-fleet.sh:877`; it selects
+     the repo via its working directory, not argv), so a name-based pattern
+     can report "exited" while the run is still committing, pushing, or
+     merging a reviewed PR. Use the actual PID instead, taken from the
+     **current** run's driver log line `babysitter PID=...`
+     (`new-fleet.sh:876`):
+     ```bash
+     BABYSIT_PID=12345 # from this run's "babysitter PID=..." line in the driver log
+     while kill -0 "$BABYSIT_PID" 2>/dev/null; do
+       sleep 2
+     done
+     echo "babysitter has exited"
+     ```
+
+  Don't try to "resume" by touching the stop-file back — the exit trap has
+  already removed it. To resume, `hermes -p staff-pm cron resume "$JOB_ID"`
+  (same `HERMES_HOME`); the dispatcher will spawn a fresh babysitter on its
+  next tick if work is still open, which recreates its own stop-file as its
+  run-lock.
+
 ### Remove a fleet entirely
 
 ```bash
-# 1. Unload launchd
-launchctl unload ~/Library/LaunchAgents/com.staff-fleet.secondbrain.proxy.plist
-rm ~/Library/LaunchAgents/com.staff-fleet.secondbrain.proxy.plist
+# 1. Stop the three gateways
+for role in swe sre pm; do
+  secondbrain-${role} gateway stop
+done
 
 # 2. Remove runtime data
 rm -rf ~/staff-fleet/secondbrain
 
 # 3. Remove bin wrappers
 rm ~/.local/bin/secondbrain-swe ~/.local/bin/secondbrain-sre ~/.local/bin/secondbrain-pm
-
-# 4. Remove port-registry entry
-python3 -c "
-import json
-path = '$HOME/staff-fleet/.port-registry'
-r = json.load(open(path))
-del r['secondbrain']
-json.dump(r, open(path, 'w'), indent=2)
-"
 ```
 
-### List all fleets and ports
+### List all fleets
 
 ```bash
-cat ~/staff-fleet/.port-registry
-# {"secondbrain": 9001, "meridian": 9002}
-```
-
-### Migrate a fleet to a new port
-
-```bash
-# 1. Update port registry
-python3 -c "
-import json
-path = '$HOME/staff-fleet/.port-registry'
-r = json.load(open(path))
-r['secondbrain'] = 9010
-json.dump(r, open(path, 'w'), indent=2)
-"
-
-# 2. Re-run new-fleet.sh with explicit port (overwrites plist and config.yaml)
-./new-fleet.sh secondbrain ~/repos/secondbrain --port 9010
-
-# 3. Reload launchd and restart gateways
-launchctl unload ~/Library/LaunchAgents/com.staff-fleet.secondbrain.proxy.plist
-launchctl load -w ~/Library/LaunchAgents/com.staff-fleet.secondbrain.proxy.plist
-~/staff-fleet/secondbrain/start-gateways.sh
+ls ~/staff-fleet/
 ```
 
 ---
@@ -898,9 +990,9 @@ launchctl load -w ~/Library/LaunchAgents/com.staff-fleet.secondbrain.proxy.plist
 
 ### 8.1 service-context.md
 
-This file is injected into every inference call. It's the primary lever for
-improving agent responses. Edit it at least weekly; after major incidents,
-launches, or stakeholder changes.
+`SOUL.md` instructs each agent to read this file at the start of every
+session — it's the primary lever for improving agent responses. Edit it at
+least weekly; after major incidents, launches, or stakeholder changes.
 
 **Section-by-section guide:**
 
@@ -911,7 +1003,7 @@ launches, or stakeholder changes.
 | Human Stakeholders | Who to involve and when | Agents cite these in recommendations ("ask @alice before merging auth changes") |
 | Current Quarter Priorities | Top 3 priorities | PM uses this to triage blockers; SWE uses it to flag when a risky PR conflicts with priorities |
 | Recent History | Last 30 days of significant events | Prevents agents from being surprised by things that just happened |
-| Current Concerns / Risks | Known risks | SWE and SRE proactively watch for these in their digests |
+| Current Concerns / Risks | Known risks | SWE and SRE proactively watch for these in their digests; `team-orchestrator` also appends `CONCERN:` markers here automatically |
 | Role Boundaries | Who owns what | Keeps agents in lane; critical for hand-off behaviour |
 | Escalation Rules | When to involve a human | Prevents agents from acting autonomously on things that need sign-off |
 | Write Capabilities | What agents may DO | Explicit permission list; agents default to read-only unless listed here |
@@ -1018,6 +1110,23 @@ The config lives at
 `~/staff-fleet/<fleet>/profiles/staff-<role>/config.yaml` (canonical) and
 `~/staff-fleet/<fleet>/.hermes/profiles/staff-<role>/config.yaml` (live).
 
+**Model provider** — Hermes's native `openai-codex`, no local endpoint:
+```yaml
+model:
+  provider: openai-codex
+  base_url: https://chatgpt.com/backend-api/codex
+  default: gpt-5.5
+```
+
+**Terminal / credential passthrough:**
+```yaml
+terminal:
+  cwd: /path/to/repo
+  persistent_shell: true
+  env_passthrough:
+    - GH_TOKEN   # only this key crosses Hermes's subprocess credential scrub
+```
+
 **Cron schedule** — uses standard cron syntax, America/Los_Angeles timezone:
 ```yaml
 cron:
@@ -1052,79 +1161,51 @@ cp ~/staff-fleet/secondbrain/profiles/staff-swe/config.yaml \
    ~/staff-fleet/secondbrain/.hermes/profiles/staff-swe/config.yaml
 ```
 
-### 8.4 `_ALLOWED_TOOLS` — the proxy allowlist
+### 8.4 Tool access — no proxy allowlist anymore
 
-Defined at `claude-code-proxy.py:42`:
-```python
-_ALLOWED_TOOLS = "Bash(gh *) Bash(git *) Bash(date *) Bash(echo *) Read Glob Grep"
-```
-
-This is the `--allowedTools` flag passed to every `claude -p` invocation.
-Only commands matching these patterns can be executed.
-
-**Adding a tool:**
-```python
-_ALLOWED_TOOLS = "Bash(gh *) Bash(git *) Bash(date *) Bash(echo *) Read Glob Grep Bash(curl *)"
-```
-
-**Security trade-offs:**
-
-| Addition | Risk |
-|---|---|
-| `Bash(curl *)` | Agent can make outbound HTTP requests; prompt injection via external URLs is possible |
-| `Edit` / `Write` | Agent can modify files in `--add-dir`; only add if you explicitly want write capability |
-| `Bash(rm *)` | Obvious; don't add without very specific scoping |
-| `Bash(npm *)` | Can install packages; potential supply-chain risk |
-
-Default is intentionally minimal: agents read GitHub and the repo, nothing more.
+Before 2026-05-11, `claude-code-proxy.py:42` hardcoded an `_ALLOWED_TOOLS`
+allowlist (`Bash(gh *) Bash(git *) ... Read Glob Grep`) passed as
+`--allowedTools` to every `claude -p` call. That mechanism doesn't exist for
+the native `openai-codex` provider — `new-fleet.sh` doesn't currently set an
+equivalent hard restriction. What an agent can actually reach is bounded only
+by `terminal.cwd`, `env_passthrough`, and whichever `mcp_servers` are listed
+in `config.yaml`. If you need a stricter guarantee (e.g. explicitly deny
+`Bash(rm *)` or outbound `curl`), that's an open gap in the current scaffold,
+not a documented, tested control — don't assume one exists.
 
 ---
 
 ## 9. Troubleshooting
 
-### Proxy not responding
+### `hermes` gateway not responding
 
-**Symptom:** `curl http://127.0.0.1:9001/health` hangs or returns `Connection refused`
+**Symptom:** `secondbrain-swe chat -q "..."` hangs, errors, or times out;
+`secondbrain-swe gateway status` shows anything other than "running"
 
 **Diagnosis:**
 ```bash
-launchctl list | grep staff-fleet.secondbrain
-# If missing → not loaded
-# If PID="-" → crashed
-
-tail -50 ~/staff-fleet/secondbrain/proxy.log
+secondbrain-swe gateway status
+hermes auth status openai-codex   # shared across all fleets — check this first
 ```
 
 **Fixes:**
-- Not loaded: `launchctl load -w ~/Library/LaunchAgents/com.staff-fleet.secondbrain.proxy.plist`
-- Crashed with `python3: No such file or directory` → the plist uses `/usr/bin/python3`; ensure it exists (`which python3`)
-- Port already in use: pick a new port with `--port N` and re-run `new-fleet.sh`
-
-### "claude: command not found" from launchd
-
-**Symptom:** `proxy.log` contains `FileNotFoundError: [Errno 2] claude` or similar
-
-**Cause:** launchd runs with a minimal `PATH` that doesn't include where `claude` is installed (`~/.local/bin` or `/usr/local/bin`).
-
-**Fix:** Add a `PATH` env var to the plist. Edit the generated plist and add:
-```xml
-<key>EnvironmentVariables</key>
-<dict>
-  <key>PATH</key>
-  <string>/usr/local/bin:/usr/bin:/bin:/Users/chrisrobertson/.local/bin</string>
-</dict>
-```
-Then reload: `launchctl unload ... && launchctl load -w ...`
+- Not running: `secondbrain-swe gateway start`
+- Not authenticated: `hermes auth` (re-does the ChatGPT OAuth flow)
+- Still failing: check whether `~/.hermes/hermes-agent/hermes_cli/gateway.py`
+  still carries the `HERMES_FLEET_ENV_INJECTION_PATCH` marker (a Hermes
+  upgrade may have replaced the file); re-run `new-fleet.sh` to re-apply it
 
 ### Agent claims it has no tools / ignores `gh` output
 
 **Symptom:** `staff-swe` says "I don't have access to GitHub tools" or ignores tool results
 
-**Cause 1:** `--allowedTools` not passed → check `claude-code-proxy.py:87-92` ensures `_ALLOWED_TOOLS` is in the cmd.
+**Cause 1:** `GH_TOKEN` isn't reaching the `gh` subprocess. Check
+`terminal.env_passthrough` includes `GH_TOKEN` in `config.yaml`, and that the
+profile's `.env` actually has it set (`gh auth token` to get a fresh one).
 
-**Cause 2:** `--system-prompt` was used instead of `--append-system-prompt` (replaces Claude's default, destroying tool knowledge). The current proxy uses `--append-system-prompt`; if you've modified it, revert.
-
-**Cause 3:** The `<tool>{...}</tool>` block is not being emitted by the model. Add a debug `print(response, file=sys.stderr)` after line 101 of the proxy to see what claude -p is returning.
+**Cause 2:** The `filesystem` MCP server failed to start (check its `command`/
+`args` in `config.yaml` — it shells out to `npx`, which needs Node.js on PATH
+for the gateway process, not just your interactive shell).
 
 ### Telegram gateway silent
 
@@ -1154,7 +1235,7 @@ secondbrain-swe gateway status
 
 **Diagnosis:**
 ```bash
-HERMES_HOME=~/staff-fleet/secondbrain/.hermes hermes -p staff-swe cron list
+HERMES_HOME=~/staff-fleet/secondbrain/.hermes/profiles/staff-swe hermes -p staff-swe cron list
 # Check the next-fire time; verify timezone in config.yaml
 ```
 
@@ -1162,28 +1243,48 @@ HERMES_HOME=~/staff-fleet/secondbrain/.hermes hermes -p staff-swe cron list
 - Hermes gateway not running (cron requires the gateway process)
 - Timezone mismatch: `config.yaml` has `timezone: America/Los_Angeles` but you expected UTC
 - Cron block commented out during a previous tuning session
+- For `team-orchestrator`/`team-dispatcher`/`prioritize-handoff-prs`/
+  `spec-review-pr`: these aren't auto-seeded from `config.yaml` like the 3
+  digest crons — they're created explicitly by `start-gateways.sh`. If you
+  never ran it (or ran it before the profile existed), they won't be there;
+  re-run `start-gateways.sh`.
 
-### Port collision on new fleet
-
-**Symptom:** proxy.log shows `OSError: [Errno 48] Address already in use`
+### `team-dispatcher` never spawns a babysitter despite open work
 
 **Diagnosis:**
 ```bash
-cat ~/staff-fleet/.port-registry
-lsof -i :9001  # check what's using the port
+cat ~/sisyphus-logs/secondbrain.stop 2>/dev/null && echo "stop-file present"
+pgrep -f babysit-with-review.sh   # if this prints a PID, the stop-file is that run's active lock — don't remove it; see "Pause crons without disabling agents" instead
+curl -s http://192.168.1.129:8888/api/babysit | python3 -m json.tool
+gh pr list --repo yourorg/secondbrain --state open --author @me --json number
+gh issue list --repo yourorg/secondbrain --state open --label priority/p1 --json number
+gh issue list --repo yourorg/secondbrain --state open --label priority/p2 --json number
 ```
 
-**Fix:** Re-run with explicit port: `./new-fleet.sh <name> <repo> --port 9005`
+**Common causes:**
+- A stale `~/sisyphus-logs/<fleet>.stop` file from a previous manual pause
+- home-lab-monitor reports a babysitter already `running`/`backoff` for this
+  fleet on another host (by design — only one babysitter per project at a time)
+- No open PR by the authenticated user AND no `priority/p1`/`p2` issues — this
+  is the "no actionable work" no-op case, not a bug
+- `claude` CLI missing on PATH for the dispatcher's environment — check
+  `~/sisyphus-logs/<fleet>-dispatcher-*.log`
 
-### Model returns empty or hits 180s timeout
+### `team-orchestrator` isn't appending CONCERN markers / firing handoffs
 
-**Symptom:** Agent gives no response; proxy.log shows `RuntimeError: claude -p exited 1` or a timeout
+**Diagnosis:**
+```bash
+tail -50 ~/staff-fleet/secondbrain/logs/orchestrator.log
+```
 
-**Cause 1:** The prompt is too long (conversation history + service-context.md + SOUL). Reduce context: enable Hermes compression (`compression.enabled: true` in config.yaml) or shorten service-context.md.
-
-**Cause 2:** The `claude -p` subprocess timed out. 180s is the hard limit (proxy.py:98). Long PR reviews with many tool calls can exceed this. Lower `max_turns` in config.yaml or split the query.
-
-**Cause 3:** Claude API rate limit or auth issue. Check: `claude -p --model claude-sonnet-4-6 < /dev/null` — if this errors, it's an auth or quota problem, not the proxy.
+**Common causes:**
+- The role's latest cron session was already processed (state cached in
+  `.team-orchestrator-state.json`) — only a NEW session triggers re-parsing
+- A `HANDOFF:` was already fired for this fleet today (max one per day)
+- `HANDOFF: swe ...` or `HANDOFF: sre ...` — only `pm` is a wired target
+  today; other targets log "unknown handoff target" and no-op
+- The digest prompt's `MARKER_FOOTER` instructions weren't followed by the
+  model — markers must be the literal last lines of the response
 
 ### service-context.md not picked up
 
@@ -1191,17 +1292,14 @@ lsof -i :9001  # check what's using the port
 
 **Diagnosis:**
 ```bash
-# Verify the proxy is reading from the right location
-curl -s http://127.0.0.1:9001/health
-# "fleet" field should be ~/staff-fleet/secondbrain, not some other path
-
-# Verify the file exists at that path
-ls ~/staff-fleet/secondbrain/service-context.md
+ls ~/staff-fleet/secondbrain/service-context.md   # confirm it exists
+secondbrain-swe chat -q "read ~/staff-fleet/secondbrain/service-context.md and summarize it"
 ```
 
-The proxy reads `FLEET_DIR/service-context.md` where `FLEET_DIR` is argv[2].
-If the plist was generated with the wrong path, re-run `new-fleet.sh` and
-reload launchd.
+Unlike the old proxy, nothing forces this file to be read every session —
+it's a `SOUL.md` instruction the model has to act on. If the summarize test
+above fails, check that the `filesystem` MCP server's `args` in `config.yaml`
+actually include the fleet directory (`${FLEET_DIR}`), not just the repo.
 
 ---
 
@@ -1211,22 +1309,28 @@ reload launchd.
 
 ```
 ~/staff-fleet/
-├── .port-registry                    ← JSON: fleet-name → port
-│
 ├── secondbrain/
-│   ├── service-context.md            ← injected into every inference; edit weekly
-│   ├── proxy.log                     ← stdout+stderr from claude-code-proxy
+│   ├── service-context.md            ← agents are told to read this every session; edit weekly
 │   ├── start-gateways.sh             ← one-time setup; safe to re-run
+│   ├── team-orchestrator.py          ← parses CONCERN/HANDOFF/WORK markers, fires handoffs
+│   ├── babysit-driver.sh             ← spawns and monitors babysit-with-review.sh
+│   ├── team-dispatcher.sh            ← every-5-min distributed-lock check + spawn
+│   ├── .team-orchestrator-state.json ← last-processed session per role, handoff-fired date
+│   ├── .dispatcher-state.json        ← last dispatcher spawn decision
+│   ├── logs/
+│   │   └── orchestrator.log
 │   │
 │   ├── profiles/                     ← canonical (human-editable) copies
 │   │   ├── staff-swe/
 │   │   │   ├── SOUL.md               ← role definition
 │   │   │   ├── config.yaml           ← cron, model, MCP, max_turns
-│   │   │   └── .env                  ← TELEGRAM_BOT_TOKEN (never commit)
+│   │   │   └── .env                  ← TELEGRAM_BOT_TOKEN, GH_TOKEN (never commit)
 │   │   ├── staff-sre/
 │   │   │   └── (same shape)
 │   │   └── staff-pm/
-│   │       └── (same shape)
+│   │       ├── (same shape)
+│   │       ├── handoff-prompt.txt        ← stashed for start-gateways.sh's cron create
+│   │       └── spec-review-prompt.txt    ← stashed for start-gateways.sh's cron create
 │   │
 │   ├── bin/                          ← fleet-local wrappers (same as ~/.local/bin)
 │   │   ├── secondbrain-swe
@@ -1238,9 +1342,17 @@ reload launchd.
 │       │   ├── staff-swe/            ← live copies; synced from profiles/ by new-fleet.sh
 │       │   │   ├── SOUL.md
 │       │   │   ├── config.yaml
-│       │   │   └── .env
+│       │   │   ├── .env
+│       │   │   ├── auth.json         ← symlink → ~/.hermes/auth.json (openai-codex creds)
+│       │   │   └── skills/
+│       │   │       └── offline-dev.md
 │       │   ├── staff-sre/
+│       │   │   └── (same shape)
 │       │   └── staff-pm/
+│       │       ├── (same shape)
+│       │       └── scripts/
+│       │           ├── team-orchestrator-secondbrain.sh  ← --script wrapper for cron
+│       │           └── team-dispatcher-secondbrain.sh    ← --script wrapper for cron
 │       ├── memory/                   ← Hermes long-term memory files
 │       ├── sessions/                 ← conversation history per session
 │       └── gateways/                 ← Telegram gateway state
@@ -1253,7 +1365,7 @@ reload launchd.
 ```
 ~/repos/scripts/
 ├── new-fleet.sh                      ← run this to provision a fleet
-├── claude-code-proxy.py              ← the HTTP proxy; manages its own process
+├── claude-code-proxy.py              ← orphaned; nothing wires this up anymore
 ├── docs/
 │   └── STAFF-FLEET.md                ← this file
 └── CLAUDE.md                         ← Claude Code instructions for this repo
@@ -1276,31 +1388,57 @@ logs via `gh run list`, but has no access to application metrics, error rates,
 APM data, or log aggregators. It notes this explicitly in every digest. To add
 monitoring: wire a monitoring MCP server in staff-sre's `config.yaml`.
 
-**PM and SRE are read-only by default.** staff-swe can comment on PRs (if
-explicitly granted in `service-context.md` Write Capabilities). PM can draft
-issue comments. SRE has no write capability until explicitly granted. This is
-intentional; write access for AI agents should be incremental and deliberate.
+**PM and SRE are read-only by default — as an instruction, not an enforced
+boundary.** Nothing in `config.yaml` restricts which `gh` subcommands an agent
+can run (see §3.4 and the note below); "read-only by default" means SOUL.md
+and `service-context.md`'s Write Capabilities section tell the agent not to
+write unless explicitly granted there. staff-swe can comment on PRs (if
+explicitly granted). PM can draft issue comments. SRE has no write capability
+until explicitly granted. This is intentional; write access for AI agents
+should be incremental and deliberate — but it's a norm the agent is expected
+to follow, not one it's technically prevented from breaking.
 
-**Tool-call parsing is single-shot per turn.** The proxy parses one
-`<tool>{...}</tool>` block per model response. Hermes handles the multi-turn
-loop (tool → result → next tool), but each individual `claude -p` invocation
-produces at most one tool call. If the model tries to emit multiple tool calls
-in one response (a pattern some OpenAI models support), only the first is
-parsed.
+**No documented tool-call allowlist.** The pre-2026-05-11 proxy hardcoded a
+tool allowlist (`_ALLOWED_TOOLS`); the native `openai-codex` provider has no
+equivalent configured by `new-fleet.sh` today (see [§8.4](#84-tool-access--no-proxy-allowlist-anymore)).
+This is a real reduction in the explicit-allowlist guarantee the original
+design had, traded for reliability — revisit if you need a hard boundary.
 
-**180-second subprocess timeout.** Each `claude -p` call has a hard 3-minute
-timeout (proxy.py line 98). A deeply-branching cron that needs many tool calls
-(e.g., review 20 PRs with diffs) may hit this. Mitigation: lower `max_turns`,
-narrow the cron prompt, or raise the timeout constant.
+**`HANDOFF:` only supports the `pm` target today.** `team-orchestrator.py`'s
+`HANDOFF_TARGETS` dict has exactly one entry (`"pm": ("staff-pm",
+"prioritize-handoff-prs")`). A digest emitting `HANDOFF: swe ...` or `HANDOFF:
+sre ...` logs "unknown handoff target" and does nothing.
 
-**No streaming.** The proxy buffers the full `claude -p` response before
-returning it to Hermes. Long responses (big PR reviews) are delivered all at
-once. There's no token-by-token streaming to Telegram.
+**At most one handoff fires per fleet per day.** A loop guard in
+`team-orchestrator.py` (`handoff_triggered_date`) prevents cascading handoffs;
+if multiple roles emit `HANDOFF:` markers on the same day, only the first
+queued one actually fires.
 
-**Cost: 3 cron invocations per fleet per day.** Each invocation calls
-`claude -p` once, plus once per tool call. A typical morning digest might
-involve 3–6 total `claude -p` calls per agent. At Claude Sonnet pricing this
-is cheap; at scale (many fleets) it adds up.
+**`WORK:` markers aren't verified before labelling.** Any role can emit
+`WORK: #N <reason>` and `team-orchestrator` labels issue `#N` `priority/p2`
+unconditionally — there's no check that `#N` is well-scoped or even exists
+in the expected repo beyond what `_derive_gh_repo` resolves from the PM
+profile's own cron `workdir`.
+
+**One babysitter per project at a time, enforced across the whole home-lab.**
+`team-dispatcher.sh` treats "already running" as a hard stop, checked via
+home-lab-monitor's `/api/babysit` with a local-stop-file fallback if that's
+unreachable. If home-lab-monitor is down AND you also manually started
+`babysit-with-review.sh` on another host, you can get two babysitters running
+against the same repo — the local fallback only protects the current host.
+
+**Duplicate PRs are possible.** If `babysit-driver.sh`'s spawned
+`babysit-with-review.sh` crashes mid-run, `team-dispatcher` will simply
+re-spawn on the next 5-minute tick if work still looks open — the same
+accepted-duplicate-PR trade-off `babysit-builder.sh` makes (see
+`babysit-specs/L3-builder.md`).
+
+**`gateway.py` patch is version-fragile.** `new-fleet.sh`'s
+`HERMES_FLEET_ENV_INJECTION_PATCH` does a literal string match against two
+anchors in Hermes's installed `gateway.py`. A Hermes upgrade that reformats
+that function breaks the patch silently (it prints "anchors not found" and
+exits 1, so it fails loud, not silently — but only if you're watching
+`new-fleet.sh`'s own output during that run).
 
 **Telegram bot tokens are per-agent (3 per fleet).** You can reuse one bot
 token across all three agents in a fleet if you don't need per-agent identity
@@ -1333,71 +1471,77 @@ boundaries.
 **gateway** — The Hermes subsystem that connects a profile to a messaging
 platform (Telegram). `hermes -p staff-swe gateway start` starts the listener.
 
-**cron** — A scheduled prompt in `config.yaml` that Hermes fires at a given
-time. Each agent has one daily cron that produces the morning digest.
+**cron** — A scheduled prompt (or, with `--no-agent`, a scheduled script) in
+`config.yaml`/created via `hermes cron create` that Hermes fires at a given
+time.
 
 **MCP** — Model Context Protocol. A standard for connecting agents to external
 data sources (filesystems, GitHub, databases, monitoring tools). Our configs
 include an MCP filesystem server; others can be added.
 
-**launchd** — macOS's init system. Used to keep the claude-code-proxy running
-as a background service, automatically restarted on crash.
+**`openai-codex`** — Hermes's native provider for ChatGPT/Codex-backed
+inference (`https://chatgpt.com/backend-api/codex`), authenticated via
+`hermes auth` (OAuth). Replaced the custom `claude-code-proxy.py` bridge on
+2026-05-11 (`84364ea`). Model used here: `gpt-5.5`.
 
-**claude -p** — Claude Code CLI in print mode. Takes a conversation on stdin,
-returns the model's response on stdout. Uses OAuth; no API key.
+**`claude -p`** — Claude Code CLI in print mode. No longer used for staff-agent
+inference (that's `openai-codex`/`gpt-5.5` now); still used, separately, by
+`babysit-with-review.sh` for the autonomous-dev chain's actual code changes
+(see [§3.6](#36-the-autonomous-dev-chain)).
 
-**--append-system-prompt** — Claude Code flag that adds text to Claude's
-default system prompt without replacing it. Critical: `--system-prompt`
-replaces the default (destroying tool knowledge); `--append-system-prompt`
-augments it.
+**`team-orchestrator.py`** — No-agent daily cron (9:00 AM) on `staff-pm` that
+parses `CONCERN:`/`HANDOFF:`/`WORK:` markers from each role's latest digest
+and acts on them.
 
-**--allowedTools** — Claude Code flag restricting which tools the model can
-invoke. E.g. `Bash(gh *)` allows only `bash` commands starting with `gh`.
+**`babysit-driver.sh`** — Spawns and monitors `babysit-with-review.sh`,
+labelling and announcing any PR it opens.
 
-**.port-registry** — A JSON file at `~/staff-fleet/.port-registry` mapping
-fleet names to proxy ports. Used by `new-fleet.sh` to allocate non-colliding
-ports.
+**`team-dispatcher.sh`** — No-agent 5-minute cron on `staff-pm` that spawns
+`babysit-driver.sh` when there's actionable GitHub work and no babysitter is
+already running for this fleet (checked via home-lab-monitor's distributed
+lock).
 
----
+**`from-babysitter`** — Label `babysit-driver.sh` applies to any PR it detects
+the babysitter opened, triggering `staff-pm`'s on-demand spec-review.
+
+**auth.json** — `~/.hermes/auth.json`, the shared ChatGPT OAuth credential
+file; `new-fleet.sh` symlinks it into every profile.
 
 ## Appendix B: Source References
 
 All line numbers reference the current files in `~/repos/scripts/`.
 
-### `claude-code-proxy.py`
-
-| Lines | Content |
-|---|---|
-| 1–20 | Module docstring, usage, and imports |
-| 32–38 | CLI arg parsing (PORT, FLEET_DIR, REPO_PATH) |
-| 42 | `_ALLOWED_TOOLS` constant — the tool allowlist |
-| 44–49 | `_TOOL_PROTOCOL` — the tool-call format instruction injected into system prompt |
-| 52–54 | `_service_context()` — reads `service-context.md` on every request |
-| 57–64 | `_tool_defs_text()` — formats Hermes tool definitions as plain text |
-| 67–83 | `_format_conversation()` — converts OpenAI messages to "Human: / Assistant:" text |
-| 86–101 | `_call_claude()` — subprocess invocation of `claude -p` with all flags |
-| 104–111 | `_parse_tool_call()` — regex parse of `<tool>{...}</tool>` |
-| 114–160 | `_completions()` — main request handler: assembles prompt, calls claude, formats response |
-| 163–164 | `_ThreadingHTTPServer` — ThreadingMixIn for concurrent request handling |
-
 ### `new-fleet.sh`
 
 | Lines | Content |
 |---|---|
-| 7–17 | Header comment — directory layout and prerequisites |
-| 32–49 | Arg parsing and path setup |
-| 53–69 | Prerequisite checks (claude, gh, hermes, python3, proxy file) |
-| 75–119 | Port allocation from `.port-registry` |
-| 124–129 | Directory structure creation |
-| 131–199 | `service-context.md` template (only created if missing) |
-| 203–252 | `write_soul_swe()` — staff-swe SOUL.md |
-| 254–300 | `write_soul_sre()` — staff-sre SOUL.md |
-| 303–350 | `write_soul_pm()` — staff-pm SOUL.md |
-| 360–403 | `write_config()` — config.yaml generator |
-| 421–423 | Cron schedule constants (7:30 SRE, 8:00 SWE, 8:30 PM) |
-| 429–442 | `.env` templates |
-| 447–468 | Hermes profile creation and config sync |
-| 478–505 | Bin wrapper generation (fleet-qualified + global, generic wrapper poisoning) |
-| 510–542 | launchd plist generation |
-| 546–583 | `start-gateways.sh` template |
-| 585–619 | Next-steps summary printed on completion |
+| 1–21 | Header comment — directory layout and prerequisites |
+| 25–38 | Arg parsing (exactly 2 positional args) |
+| 44–62 | Prerequisite checks (`gh`, `hermes`) and `hermes auth status openai-codex` pre-flight |
+| 64–121 | `HERMES_FLEET_ENV_INJECTION_PATCH` — idempotent patch of Hermes's `gateway.py` |
+| 123–199 | Directory structure + `service-context.md` template (only created if missing) |
+| 207–255 | `write_soul_swe()` — staff-swe SOUL.md |
+| 258–305 | `write_soul_sre()` — staff-sre SOUL.md |
+| 308–355 | `write_soul_pm()` — staff-pm SOUL.md |
+| 365–412 | `write_config()` — config.yaml generator (`provider: openai-codex`, `default: gpt-5.5`) |
+| 414–464 | Cron schedule constants and digest/handoff prompt text (7:30 SRE, 8:00 SWE, 8:30 PM) |
+| 477–517 | `.env` templates + cross-fleet auto-populate of shared values |
+| 519–538 | Interactive Telegram bot-token prompting (falls back to a note if non-interactive) |
+| 542–563 | Hermes profile creation and SOUL/config sync |
+| 567–574 | `auth.json` symlink into each profile |
+| 581–808 | `team-orchestrator.py` template — CONCERN/HANDOFF/WORK marker parsing |
+| 812–823 | Orchestrator's `--script` wrapper (installed under `staff-pm/scripts/`) |
+| 831–908 | `babysit-driver.sh` template |
+| 916–974 | `team-dispatcher.sh` template — distributed lock + spawn logic |
+| 979–984 | Dispatcher's `--script` wrapper |
+| 986–1049 | `offline-dev` skill, deployed to all three profiles |
+| 1051–1070 | PM `spec-review-prompt.txt` template |
+| 1072–1108 | Bin wrapper generation (fleet-qualified + global, generic wrapper poisoning) |
+| 1110–1267 | `start-gateways.sh` template — gateway install/start, 5-cron wiring, pre-flight checks |
+| 1269–1330 | Final provisioning summary printed on completion |
+
+### `claude-code-proxy.py`
+
+Orphaned as of `84364ea` (2026-05-11) — no longer invoked by anything in this
+repo. Left in place for reference; see `git show 84364ea` for exactly what
+`new-fleet.sh` stopped doing with it.
