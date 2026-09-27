@@ -29,13 +29,18 @@ Implementing engineer: understand the iteration lifecycle, sentinel protocol, an
 ```bash
 # Entry point (with selectable implementer/reviewer harnesses)
 MAX_ITER=50 SLEEP_SEC=10 STUCK_N=3 babysit-with-review.sh \
+  [-h|--help] [--version] \
   [--implementer claude|codex] [--implementer-model MODEL] [--implementer-effort LEVEL] \
   [--reviewer claude|codex] [--reviewer-model MODEL] [--reviewer-effort LEVEL] \
-  [--repo-base PATH] [--version] PROJECT [GOAL_DESCRIPTION]
+  [--repo-base PATH]
 
-# Also accepts REPO_BASE env var; autodetects ~/repos then ~/repo if neither set.
+# No positional arguments. Run from inside the project root — PROJECT is
+# derived from `basename "$PWD"`, not passed on the command line, and there is
+# no freeform goal-description argument. Also accepts REPO_BASE env var;
+# autodetects ~/repos then ~/repo if neither set.
 # All switches accept both --name value and --name=value forms.
-# Invalid harness value or missing option value: exit 2 before any side effects.
+# Invalid harness value, missing option value, or any positional/unknown
+# argument: exit 2 before any side effects.
 
 # Sentinels (output by implementer in final message — trimmed last line)
 HANDOFF_REVIEW 123        # triggers review cycle for PR #123

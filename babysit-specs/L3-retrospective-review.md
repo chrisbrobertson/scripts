@@ -105,10 +105,13 @@ Design decisions:
 
 ### Request shape
 ```bash
-run-retrospective-review.sh [--repo OWNER/REPO] [--dry-run] [--no-issues] PR_NUMBER [PR_NUMBER ...]
+run-retrospective-review.sh [--repo OWNER/REPO] [--dry-run] [--no-issues]
+                             [--label LABEL ...] PR_NUMBER [PR_NUMBER ...]
 # --repo: optional; auto-detected via `gh repo view` when omitted
+# --label: repeatable; adds an extra label to every created issue
 # PR_NUMBER: merged PR number (open PRs are skipped with a note)
-# Unknown flags: exit 2 with usage message
+# Unknown flags: exit 2 with a one-line "Unknown argument: <flag>" error
+#   (no usage text — usage/help is only printed via -h|--help)
 ```
 
 ### Response shape
