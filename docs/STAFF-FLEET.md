@@ -1253,7 +1253,8 @@ HERMES_HOME=~/staff-fleet/secondbrain/.hermes/profiles/staff-swe hermes -p staff
 
 **Diagnosis:**
 ```bash
-cat ~/sisyphus-logs/secondbrain.stop 2>/dev/null && echo "stop-file present — remove it"
+cat ~/sisyphus-logs/secondbrain.stop 2>/dev/null && echo "stop-file present"
+pgrep -f babysit-with-review.sh   # if this prints a PID, the stop-file is that run's active lock — don't remove it; see "Pause crons without disabling agents" instead
 curl -s http://192.168.1.129:8888/api/babysit | python3 -m json.tool
 gh pr list --repo yourorg/secondbrain --state open --author @me --json number
 gh issue list --repo yourorg/secondbrain --state open --label priority/p1 --json number
