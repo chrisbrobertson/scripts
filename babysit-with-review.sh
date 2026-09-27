@@ -2031,21 +2031,31 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
   if [ -n "$_retry_pick" ]; then
     _retry_label="${_retry_pick%% *}"
     _retry_pr="${_retry_pick#* }"
-    echo "[outer] retrying review cycle for PR #$_retry_pr ($_retry_label)" | tee -a "$LOG" >&2
-    gh pr edit "$_retry_pr" --remove-label "$_retry_label" >>"$LOG" 2>&1 || true
-    _rc=0
-    run_review_cycle "$_retry_pr" || _rc=$?
-    if [ "$_rc" -ne 0 ]; then
-      case "$_rc" in
-        2) echo "Halting: codex MCP outage persists for PR #$_retry_pr; retries exhausted. See $LOG" | tee -a "$LOG" >&2 ;;
-        3) echo "Halting: Codex version incompatibility for PR #$_retry_pr; upgrade CLI before restarting. See $LOG" | tee -a "$LOG" >&2 ;;
-        4) echo "Halting: Codex workspace out of credits for PR #$_retry_pr; add credits then restart. See $LOG" | tee -a "$LOG" >&2 ;;
-        *) echo "Halting: review cycle returned unexpected rc=$_rc for PR #$_retry_pr. See $LOG" | tee -a "$LOG" >&2 ;;
-      esac
-      break
+    if ! reviewer_binary_available; then
+      # Don't remove the label yet: run_review_cycle's own CLI-missing check
+      # (reviewer_binary_available, above run_review_cycle's checkout step)
+      # returns success without reviewing anything, and this is the only
+      # place the stalled label gets re-attached. Removing it first would
+      # leave the PR unlabelled and undiscoverable by the next retry sweep.
+      echo "[outer] $REVIEWER CLI still unavailable; leaving PR #$_retry_pr labelled $_retry_label for a later retry" | tee -a "$LOG" >&2
+      unset _retry_pick _retry_label _retry_pr
+    else
+      echo "[outer] retrying review cycle for PR #$_retry_pr ($_retry_label)" | tee -a "$LOG" >&2
+      gh pr edit "$_retry_pr" --remove-label "$_retry_label" >>"$LOG" 2>&1 || true
+      _rc=0
+      run_review_cycle "$_retry_pr" || _rc=$?
+      if [ "$_rc" -ne 0 ]; then
+        case "$_rc" in
+          2) echo "Halting: codex MCP outage persists for PR #$_retry_pr; retries exhausted. See $LOG" | tee -a "$LOG" >&2 ;;
+          3) echo "Halting: Codex version incompatibility for PR #$_retry_pr; upgrade CLI before restarting. See $LOG" | tee -a "$LOG" >&2 ;;
+          4) echo "Halting: Codex workspace out of credits for PR #$_retry_pr; add credits then restart. See $LOG" | tee -a "$LOG" >&2 ;;
+          *) echo "Halting: review cycle returned unexpected rc=$_rc for PR #$_retry_pr. See $LOG" | tee -a "$LOG" >&2 ;;
+        esac
+        break
+      fi
+      unset _retry_pick _retry_label _retry_pr _rc
+      continue
     fi
-    unset _retry_pick _retry_label _retry_pr _rc
-    continue
   fi
   unset _retry_pick
 
