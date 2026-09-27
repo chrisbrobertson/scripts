@@ -40,7 +40,8 @@ All eleven open decisions from the first draft were answered the same day and fo
 3. **Skip mechanics:** revert the sub-issue's commit range, label the sub-issue `bzr-blocked`, skip dependents; a revert conflict is the one case that halts the whole issue (build-worker L3).
 4. **Second round** after a merge with skipped sub-issues uses branch suffix `-rN`; invariant is one open PR per issue at a time (build-worker L3).
 5. **Draft-time sub-issues are reconciled on every spec revision** (issue-worker L3).
-6. **Sub-issue POST payload** is from the REST docs, not yet exercised (L2).
+
+(A sixth item — the sub-issue POST payload shape — was resolved and dropped 2026-09-27: `L2-bazaar-system.md` line 74 records it as verified against live GitHub 2026-09-20, matching the shipped `bzr_create_sub_issue` in `lib/bazaar-common.sh`.)
 
 ## Key Decisions Documented
 
@@ -61,7 +62,7 @@ All eleven open decisions from the first draft were answered the same day and fo
 
 ## Next Steps
 
-1. Owner glances at the six remaining assumptions above; none blocks phase 1.
+1. Owner glances at the five remaining assumptions above; none blocks phase 1.
 2. ~~Phase 1: extract the lib with the harness green.~~ Done 2026-09-19.
 3. ~~Phases 2-4: controllers and both workers.~~ Done 2026-09-20.
 4. ~~Pilot the issue loop on one repo; write the operator guide; update `CLAUDE.md`.~~ Done: pilot run 4 converged on bazaar-chat/bazaar#745 (PR #761) 2026-09-20; `docs/BAZAAR-BUILDER.md` and `CLAUDE.md` both shipped. Still open: the owner has not yet approved PR #761, so the build loop has not been piloted, and `babysit-builder.sh` / `babysit-work-prep.sh` are not yet retired.
