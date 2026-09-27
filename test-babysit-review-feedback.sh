@@ -20,6 +20,11 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "SKIP: jq not on PATH; this harness needs it to exercise the real gh --jq filters" >&2
   exit 0
 fi
+# Resolve jq's absolute path now, before run_feedback() restricts PATH to
+# "$TMP/bin:/usr/bin:/bin" for the stubbed subshell — a jq installed elsewhere
+# (e.g. Homebrew's /opt/homebrew/bin or /usr/local/bin) would otherwise vanish
+# from the stub's PATH even though this preflight check passed.
+JQ_BIN=$(command -v jq)
 
 mkdir -p "$TMP/bin"
 
@@ -64,11 +69,11 @@ if [ "\$1" = "pr" ] && [ "\$2" = "view" ]; then
     comments) data='$COMMENTS_JSON' ;;
     *) data='{}' ;;
   esac
-  printf '%s' "\$data" | jq -r "\$jq_filter"
+  printf '%s' "\$data" | "$JQ_BIN" -r "\$jq_filter"
   exit 0
 fi
 if [ "\$1" = "api" ]; then
-  printf '%s' '$INLINE_JSON' | jq -r "\$jq_filter"
+  printf '%s' '$INLINE_JSON' | "$JQ_BIN" -r "\$jq_filter"
   exit 0
 fi
 exit 0
