@@ -26,7 +26,7 @@ Like pulling a copy-pasted retry-and-review routine out of three scripts into on
 Implementing agent: extract per the function map below, port the recording-stub harness first, and diff behaviour against the builder. Chris Robertson: confirm that the builder copy is the source of truth where copies differ.
 
 ## API surface fragment
-*Implemented 2026-09-19 in `lib/bazaar-review.sh` v0.1.0 (1,188 lines); harness `test-bazaar-review-lib.sh`, 59 cases green.*
+*Implemented 2026-09-19 in `lib/bazaar-review.sh` v0.1.0 (1,188 lines at the time; 1,194 as of 2026-09-26). Harness `test-bazaar-review-lib.sh`, 59 cases green at the time; 62 as of 2026-09-26 (harness totals are point-in-time snapshots, not a live figure — see `index.md`).*
 ```bash
 source "$SCRIPTS_DIR/lib/bazaar-review.sh"
 
