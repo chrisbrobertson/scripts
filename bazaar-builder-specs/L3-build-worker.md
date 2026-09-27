@@ -50,7 +50,7 @@ bazaar-build-worker.sh <issue>    # spawned by bazaar-build.sh; env: BZR_ISSUE B
 - Order is deterministic first (`Blocked by #n`, L4 `depends_on`, number); the plan pass may reorder only with a permutation of the unit set, else the deterministic order stands.
 - Skip = one `git revert --no-commit` over the unit's range plus one commit (a plain `revert` refuses empty commits), `bzr-blocked` on the sub-issue with the last review, dependents skipped without a model call; a revert conflict is the single whole-issue halt.
 - Rounds: an open build PR is resumed on its branch; otherwise round = highest merged round + 1 and the branch carries `-rN`.
-- `Closes #<parent>` is written only when no unit was skipped, so a partial merge leaves the parent open for the controller's merged-PR sweep.
+- `Closes #<parent>` is written only once every unit has converged and none was skipped; any unit still pending or skipped leaves the parent as `Refs #<parent>`, so a partial merge leaves the parent open for the controller's merged-PR sweep.
 
 ## Consumer
 [BZR-FEAT-CONTROLLER](L3-controller.md) (role build). Output consumed by the human merger.
@@ -78,11 +78,11 @@ bazaar-build-worker.sh <issue>    # spawned by bazaar-build.sh; env: BZR_ISSUE B
 One issue number, already labelled `bzr-building`.
 
 ### Response shape
-Parent in exactly one of `bzr-pr-ready`, `bzr-blocked`, or back in `bzr-ready`; a PR on `bzr/<issue>-<slug>` (or `-rN`) whose body contains `Closes #<sub>` for every converged sub-issue, `Closes #<issue>` only when nothing was skipped, and a `<!-- bzr-build state=… -->` marker block recording per sub-issue: pending, converged (SHA range), or skipped (reason).
+Parent in exactly one of `bzr-pr-ready`, `bzr-blocked`, or back in `bzr-ready`; a PR on `bzr/<issue>-<slug>` (or `-rN`) whose body contains `Closes #<sub>` for every converged sub-issue, `Closes #<issue>` only once every unit has converged and none was skipped (otherwise `Refs #<issue>`), and a `<!-- bzr-build-state {…} -->` marker block recording per sub-issue: pending, converged (SHA range), or skipped (reason).
 
 ### Phases
 0. **precheck** (bash): as in the surface fragment. Also: working tree of the worktree clean, `origin/main` fetched.
-1. **plan** (implementer, short): posts the ordered plan as an issue comment, `PLAN_POSTED`. Skipped when there are no sub-issues.
+1. **plan** (implementer, short): posts the ordered plan as an issue comment, `PLAN_POSTED`. Skipped whenever there is only one unit to build (no sub-issues, or exactly one).
 2. **implement sub-issue k** (implementer): reads its L4, implements, tests, commits with `Refs #<sub>`, pushes, `UNIT_DONE`. The wrapper (not the implementer) opens the draft PR after the push, on k=1 and every k after.
 3. **review** (lib, `--mode code`): convergent cycle per k. Converged → update marker block, next k. Not converged (cap or bail) → skip per the assumption above, next eligible k.
 4. **finish**: after the last k, if at least one converged: post `codex-review=success`, mark PR ready, comment a summary (converged and skipped lists) on the parent, write `PR_READY <pr>` to `$BZR_SENTINEL` (the controller moves `bzr-building` → `bzr-pr-ready`). If every sub-issue was skipped: close the PR and write `BLOCKED <reason>` (controller escalates). The PR body carries `<!-- bzr-build issue=N round=R -->` so the controller's merged-PR sweep can find it.
@@ -94,7 +94,7 @@ Parent in exactly one of `bzr-pr-ready`, `bzr-blocked`, or back in `bzr-ready`; 
 4. Sub-issues are implemented in the posted order; the order is never changed silently (a re-plan posts a new comment).
 5. Every sub-issue's commits are reviewed at least once before the next sub-issue starts.
 6. The `codex-review` status is posted only at finish, when every commit left on the branch has converged (skipped work is reverted, so the head reflects reviewed code only).
-7. The PR body's `Closes #` list equals the set of converged sub-issues, plus the parent iff nothing was skipped.
+7. The PR body's `Closes #` list equals the set of converged sub-issues, plus the parent iff every unit has converged (nothing pending or skipped) — otherwise the parent line reads `Refs #<issue>`.
 8. Resume never re-implements a sub-issue recorded as converged in the marker block.
 9. A skipped sub-issue leaves no commits on the branch head (its range is reverted) and carries `bzr-blocked` with the last reviewer findings.
 
@@ -148,7 +148,7 @@ Composes with [BZR-FEAT-REVIEW-LIB](L3-review-lib.md) (`--mode code`), `setup-br
 ## Acceptance tests
 1. **Given** a `bzr-ready` issue whose spec is still `status: review`, **when** dispatched, **then** precheck fails with `SPEC_GAP`, no model call, issue `bzr-blocked`.
 2. **Given** an issue with three sub-issues where #12 says "Blocked by #11", **when** planned, **then** the posted order has #11 before #12.
-3. **Given** the plan, **when** sub-issue 1 completes, **then** a draft PR exists with `Closes #<parent>` and `Closes #<sub1>` and one review cycle has run.
+3. **Given** the plan, **when** sub-issue 1 completes, **then** a draft PR exists with `Closes #<sub1>` and `Refs #<parent>` (not yet `Closes #<parent>`, since sub-issues 2 and 3 are still pending) and one review cycle has run.
 4. **Given** sub-issue 2 of 3 hits the review cap, **when** the worker skips it, **then** its commits are reverted, sub-issue 2 is `bzr-blocked` with the findings, sub-issue 3 is implemented, and the finish comment lists 2 as skipped.
 5. **Given** that PR merges and a human clears `bzr-blocked` on sub-issue 2, **when** the merged sweep runs and the parent is re-dispatched, **then** round 2 builds only sub-issue 2 on `…-r2` and sub-issues 1 and 3 are untouched.
 6. **Given** all sub-issues converge, **when** finish runs, **then** `codex-review=success` is on the head SHA, the PR is ready with `Closes` for the parent and every sub-issue, and the parent is `bzr-pr-ready`.
