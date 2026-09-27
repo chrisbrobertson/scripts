@@ -941,10 +941,20 @@ correct action depends on whether a babysitter is currently running:
      request. Removing it makes the loop notice on its next check
      (`babysit-with-review.sh:1751-1752`) and exit gracefully — this can take
      as long as the iteration currently in progress.
-  3. **Verify it actually exited** before declaring the chain paused:
+  3. **Verify it actually exited** before declaring the chain paused. Don't
+     `pgrep` for the fleet name — the driver launches `babysit-with-review.sh`
+     with no fleet-identifying argument at all (`new-fleet.sh:877`; it selects
+     the repo via its working directory, not argv), so a name-based pattern
+     can report "exited" while the run is still committing, pushing, or
+     merging a reviewed PR. Use the actual PID instead, taken from the
+     **current** run's driver log line `babysitter PID=...`
+     (`new-fleet.sh:876`):
      ```bash
-     pgrep -f "babysit-with-review.sh.*<fleet>" || echo "babysitter has exited"
-     tail -5 ~/sisyphus-logs/<fleet>-driver-*.log   # look for its exit line
+     BABYSIT_PID=12345 # from this run's "babysitter PID=..." line in the driver log
+     while kill -0 "$BABYSIT_PID" 2>/dev/null; do
+       sleep 2
+     done
+     echo "babysitter has exited"
      ```
 
   Don't try to "resume" by touching the stop-file back — the exit trap has
