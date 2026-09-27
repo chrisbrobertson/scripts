@@ -87,6 +87,25 @@ if [ -n "$out" ]; then printf '%s\n' "${STUB_FINAL_RESULT:-FINAL_RESULT}" > "$ou
 exit "${STUB_RC:-0}"
 STUB
   chmod +x "$bin/claude" "$bin/codex"
+  # Minimal gh stub: the outer loop's stalled-PR retry sweep runs `gh pr
+  # list` at the top of every iteration regardless of BABYSIT_TEST_MODE, so
+  # gh must resolve to *something* even in tests that don't care about it.
+  # `pr list` succeeds with empty stdout ("no PR found for this label" — see
+  # babysit-with-review.sh's gh-pr-list-failure handling, which now treats a
+  # non-zero exit there as a lookup failure rather than "no stalled PR").
+  # Every other subcommand fails, preserving the old "gh not on PATH"
+  # behavior these tests otherwise rely on (e.g. the preflight default-branch
+  # lookup's `|| echo main` fallback).
+  cat > "$bin/gh" <<'STUB'
+#!/bin/bash
+printf '%s\n' 'CALL=gh' >> "$RECORD"
+printf '<%s>\n' "$@" >> "$RECORD"
+if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+  exit 0
+fi
+exit 1
+STUB
+  chmod +x "$bin/gh"
 }
 
 run_script() {
@@ -97,9 +116,9 @@ run_script() {
 }
 
 # Isolated repo with a bare "origin" remote and one commit on branch "main",
-# already pushed (not ahead/behind). gh is not on PATH in these tests, so the
-# pre-flight default-branch lookup falls back to its "main" default, matching
-# this fixture's branch name.
+# already pushed (not ahead/behind). The stubbed gh fails every subcommand
+# except `pr list` (see make_stubs), so the pre-flight default-branch lookup
+# falls back to its "main" default, matching this fixture's branch name.
 make_preflight_repo() {
   local dir="$1"
   git init -q --bare "$dir/origin.git"
@@ -130,7 +149,8 @@ run_preflight() {
 
 # Runs the real outer loop (no BABYSIT_TEST_MODE — an empty value skips the
 # test-hook dispatch the same as unset) against a real repo directory, with
-# claude/codex/gh stubbed on PATH. Used for QA-TEST-PLAN.md TC-1.1, which
+# claude/codex stubbed on PATH and gh stubbed to no-op (see make_stubs). Used
+# for QA-TEST-PLAN.md TC-1.1, which
 # needs the actual per-iteration worktree/branch-rename mechanics, not a
 # pure-function extraction. MAX_ITER/SLEEP_SEC are set by the caller via env.
 run_single_iteration() {
@@ -579,6 +599,37 @@ rm -f "$lockfile_path"
 printf '%s\n' "$lockfile_path" | run_script outer-lockfile-removed "$TMP/lockfile-removed.record" "$TMP/home" > "$TMP/lockfile-removed.after.out"
 assert_contains "$TMP/lockfile-removed.after.out" "path=$lockfile_path removed=1" 'lock file removal: removing the stop file mid-run is detected (TC-1.4)'
 
+# Stalled-PR retry-sweep priority: converts the pre-iteration scan that picks
+# which resumable label (review-mcp-outage, review-codex-outdated,
+# review-codex-no-credits) to retry into deterministic coverage. Each
+# outer-retry-sweep input line is three fields (mcp/outdated/credits PR
+# numbers, "-" for none) standing in for what three `gh pr list` calls would
+# return; it drives the real pick_stalled_retry() extracted from the outer
+# loop. No Claude/Codex/gh involved.
+: > "$TMP/retry-sweep-none.record"
+printf -- '- - -\n' | run_script outer-retry-sweep "$TMP/retry-sweep-none.record" "$TMP/home" > "$TMP/retry-sweep-none.out"
+assert_contains "$TMP/retry-sweep-none.out" 'none' 'retry sweep: no resumable label set finds nothing to retry'
+
+: > "$TMP/retry-sweep-mcp-only.record"
+printf -- '42 - -\n' | run_script outer-retry-sweep "$TMP/retry-sweep-mcp-only.record" "$TMP/home" > "$TMP/retry-sweep-mcp-only.out"
+assert_contains "$TMP/retry-sweep-mcp-only.out" 'label=review-mcp-outage pr=42' 'retry sweep: review-mcp-outage alone is picked'
+
+: > "$TMP/retry-sweep-outdated-only.record"
+printf -- '- 96 -\n' | run_script outer-retry-sweep "$TMP/retry-sweep-outdated-only.record" "$TMP/home" > "$TMP/retry-sweep-outdated-only.out"
+assert_contains "$TMP/retry-sweep-outdated-only.out" 'label=review-codex-outdated pr=96' 'retry sweep: review-codex-outdated alone is picked (the label with no prior auto-retry)'
+
+: > "$TMP/retry-sweep-credits-only.record"
+printf -- '- - 12\n' | run_script outer-retry-sweep "$TMP/retry-sweep-credits-only.record" "$TMP/home" > "$TMP/retry-sweep-credits-only.out"
+assert_contains "$TMP/retry-sweep-credits-only.out" 'label=review-codex-no-credits pr=12' 'retry sweep: review-codex-no-credits alone is picked'
+
+: > "$TMP/retry-sweep-priority.record"
+printf -- '42 96 12\n' | run_script outer-retry-sweep "$TMP/retry-sweep-priority.record" "$TMP/home" > "$TMP/retry-sweep-priority.out"
+assert_contains "$TMP/retry-sweep-priority.out" 'label=review-mcp-outage pr=42' 'retry sweep: review-mcp-outage wins priority over both Codex-CLI labels when all three are set'
+
+: > "$TMP/retry-sweep-outdated-over-credits.record"
+printf -- '- 96 12\n' | run_script outer-retry-sweep "$TMP/retry-sweep-outdated-over-credits.record" "$TMP/home" > "$TMP/retry-sweep-outdated-over-credits.out"
+assert_contains "$TMP/retry-sweep-outdated-over-credits.out" 'label=review-codex-outdated pr=96' 'retry sweep: review-codex-outdated wins priority over review-codex-no-credits'
+
 # Blocking-finding count: converts the branch point behind QA-TEST-PLAN.md
 # TC-2.1 (Codex review with N>0 BLOCKING findings triggers the
 # addressing-findings path) and TC-2.2 (zero BLOCKING findings triggers
@@ -664,7 +715,8 @@ assert_contains "$TMP/review-head-empty-pre.out" 'pre= post= unchanged=0' 'HEAD 
 # run_single_iteration): claude is stubbed to rename the worktree's
 # placeholder branch (as the real implementer prompt instructs) and return a
 # sentinel-free result, so the loop completes iter 1 cleanly and stops on
-# MAX_ITER without ever touching gh.
+# MAX_ITER without a HANDOFF_REVIEW (the stalled-PR retry sweep still calls
+# the stubbed `gh pr list` at the top of the iteration; see make_stubs).
 make_preflight_repo "$TMP/single-iter" >/dev/null 2>&1
 mkdir -p "$TMP/single-iter/home"
 : > "$TMP/single-iter.record"

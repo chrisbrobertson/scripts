@@ -19,17 +19,25 @@
 #   MAX_REVIEW_CYCLES  default 6    max reviewer/implementer cycles per PR
 #
 # MCP-outage resilience: when Codex is selected as reviewer and cannot reach
-# its backend, the wrapper
-# retries up to 3 times (0 / 60s / 300s back-off), labels the PR
-# `review-mcp-outage`, and halts. On the next babysitter run the pre-iter
-# scan retries the labelled PR automatically before running the implementer.
-# `review-incomplete` = human action required; `review-mcp-outage` = auto-retry.
-# `review-codex-outdated` = Codex CLI too old for model; upgrade CLI then remove label.
-# `review-codex-no-credits` = Codex workspace out of credits; add credits then remove label.
+# its backend, the wrapper retries up to 3 times (0 / 60s / 300s back-off),
+# labels the PR `review-mcp-outage`, and halts. `review-codex-outdated` and
+# `review-codex-no-credits` label and halt the same way for their own
+# failure classes. All three halt the wrapper — there is no in-process
+# retry once a label is applied. At the top of every outer iteration
+# (i.e. after the operator addresses the cause and restarts the wrapper),
+# the pre-iter scan retries whichever labelled PR it finds first (in that
+# priority order) automatically before running the implementer. The label
+# itself must NOT be removed by hand: the sweep finds the stalled PR by
+# that label and removes it itself; removing it manually leaves the PR
+# stuck in draft with nothing to find it.
+# `review-incomplete` = human action required, no auto-retry.
+# `review-mcp-outage` = transport failure, often transient; restart the wrapper to retry.
+# `review-codex-outdated` = Codex CLI too old for model; upgrade CLI then restart.
+# `review-codex-no-credits` = Codex workspace out of credits; add credits then restart.
 
 set -uo pipefail
 
-VERSION="1.1.2"
+VERSION="1.2.0"
 
 usage() {
   cat <<'EOF'
@@ -73,10 +81,15 @@ PR labels used by the review cycle:
   review-incomplete      Human intervention required; wrapper will NOT retry.
   review-mcp-outage      Codex MCP backend was unreachable; wrapper retries
                          automatically at the top of each outer iteration.
-  review-codex-outdated  Codex CLI is too old for the configured model; run
-                         \`codex update\`, remove this label, then restart.
-  review-codex-no-credits  Codex workspace has no credits; add credits, remove
-                           this label, then restart.
+  review-codex-outdated  Codex CLI is too old for the configured model; the
+                         wrapper halts when this happens, so run
+                         \`codex update\` then restart it — the retry sweep
+                         finds the PR by this label at the top of the first
+                         outer iteration and resumes it automatically. Do
+                         NOT remove the label yourself.
+  review-codex-no-credits  Codex workspace has no credits; same as above —
+                           the wrapper has already halted, so add credits
+                           then restart. Do NOT remove the label yourself.
 
 Logs land in ~/sisyphus-logs/<project>-<timestamp>-<pid>.log.
 
@@ -990,7 +1003,7 @@ fail_review_cycle_codex_outdated() {
 
   gh label create review-codex-outdated \
     --color e4e669 \
-    --description "Babysit codex review stalled by CLI version incompatibility; upgrade Codex then remove label" \
+    --description "Babysit codex review stalled by CLI version incompatibility; upgrade Codex then restart" \
     --force >>"$LOG" 2>&1 || true
 
   # Fail-closed: if we can't draft the PR, halt — it must not remain mergeable.
@@ -1012,7 +1025,7 @@ Reason: ${reason}
 
 The Codex CLI is too old for the configured model. No code-quality review took place.
 
-To resume: upgrade the Codex CLI (\`codex update\`), then remove the \`review-codex-outdated\` label and restart the babysitter."
+The babysitter has halted — this is not recoverable while it's running. To resume: upgrade the Codex CLI (\`codex update\`), then restart the babysitter. Do NOT remove the \`review-codex-outdated\` label yourself — the stalled-PR retry sweep finds this PR by that label, removes it, and re-runs the review automatically on the next start; removing it manually leaves the PR stuck in draft."
   printf '%s\n' "$body" \
     | gh pr comment "$pr_num" --body-file - >>"$LOG" 2>&1 \
     || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
@@ -1031,7 +1044,7 @@ fail_review_cycle_codex_no_credits() {
 
   gh label create review-codex-no-credits \
     --color d93f0b \
-    --description "Babysit codex review stalled: workspace out of credits; add credits then remove label" \
+    --description "Babysit codex review stalled: workspace out of credits; add credits then restart" \
     --force >>"$LOG" 2>&1 || true
 
   # Fail-closed: if we can't draft the PR, halt — it must not remain mergeable.
@@ -1053,7 +1066,7 @@ Reason: ${reason}
 
 The Codex workspace has no credits remaining. No code-quality review took place.
 
-To resume: add credits to the Codex workspace, then remove the \`review-codex-no-credits\` label and restart the babysitter."
+The babysitter has halted — this is not recoverable while it's running. To resume: add credits to the Codex workspace, then restart the babysitter. Do NOT remove the \`review-codex-no-credits\` label yourself — the stalled-PR retry sweep finds this PR by that label, removes it, and re-runs the review automatically on the next start; removing it manually leaves the PR stuck in draft."
   printf '%s\n' "$body" \
     | gh pr comment "$pr_num" --body-file - >>"$LOG" 2>&1 \
     || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
@@ -1661,6 +1674,29 @@ review_head_unchanged() {
   [ -n "$pre_sha" ] && [ "$pre_sha" = "$post_sha" ]
 }
 
+# Priority-ordered labels that mark a review cycle stalled in a way an
+# operator can resolve without abandoning the PR (as opposed to
+# review-incomplete, which always requires a human to pick the work back up).
+RESUMABLE_STALL_LABELS=(review-mcp-outage review-codex-outdated review-codex-no-credits)
+
+# Given one "<label> <pr_num_or_empty>" pair per entry in
+# RESUMABLE_STALL_LABELS (in the same order, as gh would return them), pick
+# the first label with a non-empty PR number. Echoes "<label> <pr_num>" and
+# returns 0, or returns 1 if none are set. Pure — no gh/git — so callers and
+# BABYSIT_TEST_MODE=outer-retry-sweep can drive it deterministically.
+pick_stalled_retry() {
+  local pair label pr
+  for pair in "$@"; do
+    label="${pair%% *}"
+    pr="${pair#* }"
+    if [ -n "$pr" ] && [ "$pr" != "$label" ]; then
+      echo "$label $pr"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Narrow deterministic test hook for argument and provider-command regression
 # coverage. Normal execution is unchanged when BABYSIT_TEST_MODE is unset.
 # outer-preflight is handled separately below: it needs the real pre-flight
@@ -1773,6 +1809,27 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight
           echo "pre=$_pre post=$_post unchanged=1"
         else
           echo "pre=$_pre post=$_post unchanged=0"
+        fi
+      done
+      ;;
+    outer-retry-sweep)
+      # Each stdin line is three space-separated PR numbers (or empty fields,
+      # written as "-"), one per label in RESUMABLE_STALL_LABELS order,
+      # standing in for what three `gh pr list --label ... -q .[0].number`
+      # calls would return. Prints "label=<l> pr=<n>" for the first stalled
+      # label found, or "none" — using the real pick_stalled_retry(). No
+      # Claude/Codex/gh involved.
+      while IFS=' ' read -r _mcp _outdated _credits; do
+        [ "$_mcp" = "-" ] && _mcp=""
+        [ "$_outdated" = "-" ] && _outdated=""
+        [ "$_credits" = "-" ] && _credits=""
+        if _pick=$(pick_stalled_retry \
+            "review-mcp-outage $_mcp" \
+            "review-codex-outdated $_outdated" \
+            "review-codex-no-credits $_credits"); then
+          echo "label=${_pick%% *} pr=${_pick#* }"
+        else
+          echo "none"
         fi
       done
       ;;
@@ -1951,28 +2008,84 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
     break
   fi
 
-  # Retry any PR stalled by a previous codex MCP transport failure.
-  # The PR is un-drafted and re-reviewed before invoking the implementer.
-  _mcp_pr=$(gh pr list --state open --label review-mcp-outage --limit 1 --json number -q '.[0].number' 2>/dev/null || echo "")
-  if [ -n "$_mcp_pr" ]; then
-    echo "[outer] retrying review cycle for PR #$_mcp_pr (review-mcp-outage)" | tee -a "$LOG" >&2
-    gh pr edit "$_mcp_pr" --remove-label review-mcp-outage >>"$LOG" 2>&1 || true
-    gh pr ready "$_mcp_pr" >>"$LOG" 2>&1 || true
-    _rc=0
-    run_review_cycle "$_mcp_pr" || _rc=$?
-    if [ "$_rc" -ne 0 ]; then
-      case "$_rc" in
-        2) echo "Halting: codex MCP outage persists for PR #$_mcp_pr; retries exhausted. See $LOG" | tee -a "$LOG" >&2 ;;
-        3) echo "Halting: Codex version incompatibility for PR #$_mcp_pr; upgrade CLI before restarting. See $LOG" | tee -a "$LOG" >&2 ;;
-        4) echo "Halting: Codex workspace out of credits for PR #$_mcp_pr; add credits then remove label and restart. See $LOG" | tee -a "$LOG" >&2 ;;
-        *) echo "Halting: review cycle returned unexpected rc=$_rc for PR #$_mcp_pr. See $LOG" | tee -a "$LOG" >&2 ;;
-      esac
+  # Retry any PR stalled behind a resumable label (review-mcp-outage,
+  # review-codex-outdated, review-codex-no-credits) from a previous run.
+  # The label search here is the ONLY way a stalled PR is found again, so
+  # the label must still be on the PR when this runs — operators must NOT
+  # remove it manually; the documented recovery is "fix the underlying
+  # cause, then restart" for all three labels (the wrapper halts on all of
+  # them — see rc=2/3/4 handling below and at the HANDOFF_REVIEW call site —
+  # so none of them resolve on their own without a restart).
+  # Removing the label yourself makes this search silently find nothing, leaving the
+  # PR in draft forever (see #82/#104). The PR stays in draft through the
+  # review itself; only merge_reviewed_pr() un-drafts it, and only after a
+  # clean review, so an in-progress retry is never briefly mergeable.
+  _retry_pairs=()
+  _retry_lookup_failed=0
+  for _label in "${RESUMABLE_STALL_LABELS[@]}"; do
+    if ! _pr_num=$(gh pr list --state open --label "$_label" --limit 1 --json number -q '.[0].number' 2>>"$LOG"); then
+      # A GitHub API failure here must NOT be treated as "no stalled PR" —
+      # that would let new implementation work start while a real stalled
+      # PR sits unlabelled-for-discovery, silently defeating the retry gate.
+      echo "[outer] WARNING: gh pr list failed while checking for PRs labelled $_label; skipping new work this iteration" | tee -a "$LOG" >&2
+      _retry_lookup_failed=1
       break
     fi
-    unset _mcp_pr _rc
+    _retry_pairs+=("$_label $_pr_num")
+  done
+  if [ "$_retry_lookup_failed" -eq 1 ]; then
+    unset _retry_pairs _label _pr_num _retry_lookup_failed
+    sleep "$SLEEP_SEC"
     continue
   fi
-  unset _mcp_pr
+  unset _retry_lookup_failed
+  _retry_pick=$(pick_stalled_retry "${_retry_pairs[@]}") || _retry_pick=""
+  unset _retry_pairs _label
+  if [ -n "$_retry_pick" ]; then
+    _retry_label="${_retry_pick%% *}"
+    _retry_pr="${_retry_pick#* }"
+    if ! reviewer_binary_available; then
+      # Don't remove the label yet: run_review_cycle's own CLI-missing check
+      # (reviewer_binary_available, above run_review_cycle's checkout step)
+      # returns success without reviewing anything, and this is the only
+      # place the stalled label gets re-attached. Removing it first would
+      # leave the PR unlabelled and undiscoverable by the next retry sweep.
+      echo "[outer] $REVIEWER CLI still unavailable; leaving PR #$_retry_pr labelled $_retry_label for a later retry" | tee -a "$LOG" >&2
+      unset _retry_pick _retry_label _retry_pr
+      # Don't fall through to new work: a PR is stuck awaiting review, and
+      # starting an implementer pass would let new unreviewed work pile up
+      # behind it instead of resolving the stall first (see PR #104 review).
+      sleep "$SLEEP_SEC"
+      continue
+    else
+      echo "[outer] retrying review cycle for PR #$_retry_pr ($_retry_label)" | tee -a "$LOG" >&2
+      if ! gh pr edit "$_retry_pr" --remove-label "$_retry_label" >>"$LOG" 2>&1; then
+        # Don't run the review cycle with a stale resumable label still on
+        # the PR: if the review then bails to review-incomplete (a bail the
+        # sweep must NOT retry), the leftover resumable label would make the
+        # next sweep retry it anyway. Skip to next iteration and try the
+        # removal again rather than risk that state.
+        echo "[outer] WARNING: failed to remove $_retry_label from PR #$_retry_pr; retrying removal next iteration" | tee -a "$LOG" >&2
+        unset _retry_pick _retry_label _retry_pr
+        sleep "$SLEEP_SEC"
+        continue
+      fi
+      _rc=0
+      run_review_cycle "$_retry_pr" || _rc=$?
+      if [ "$_rc" -ne 0 ]; then
+        case "$_rc" in
+          2) echo "Halting: codex MCP outage persists for PR #$_retry_pr; retries exhausted. See $LOG" | tee -a "$LOG" >&2 ;;
+          3) echo "Halting: Codex version incompatibility for PR #$_retry_pr; upgrade CLI before restarting. See $LOG" | tee -a "$LOG" >&2 ;;
+          4) echo "Halting: Codex workspace out of credits for PR #$_retry_pr; add credits then restart. See $LOG" | tee -a "$LOG" >&2 ;;
+          *) echo "Halting: review cycle returned unexpected rc=$_rc for PR #$_retry_pr. See $LOG" | tee -a "$LOG" >&2 ;;
+        esac
+        break
+      fi
+      unset _retry_pick _retry_label _retry_pr _rc
+      continue
+    fi
+  fi
+  unset _retry_pick
 
   STATE=$(collect_state)
   PROMPT="${STATE}
@@ -2073,7 +2186,7 @@ ${BASE_PROMPT}"
         case "$_rc" in
           2) echo "Halting: codex MCP transport outage on PR #$pr_num; retries exhausted. See $LOG" | tee -a "$LOG" >&2 ;;
           3) echo "Halting: Codex version incompatibility on PR #$pr_num; upgrade CLI before restarting. See $LOG" | tee -a "$LOG" >&2 ;;
-          4) echo "Halting: Codex workspace out of credits on PR #$pr_num; add credits then remove label and restart. See $LOG" | tee -a "$LOG" >&2 ;;
+          4) echo "Halting: Codex workspace out of credits on PR #$pr_num; add credits then restart. See $LOG" | tee -a "$LOG" >&2 ;;
           *) echo "Halting: review cycle returned unexpected rc=$_rc for PR #$pr_num. See $LOG" | tee -a "$LOG" >&2 ;;
         esac
         break
