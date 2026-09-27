@@ -55,7 +55,7 @@ Like a Kanban board with two swim-lanes (Refine, Build) where a dumb dispatcher 
 
 ## Business case
 - **Value:** removes the two hand steps that stall the current pipeline (deciding what to build next; splitting a ticket into build units) and makes the human's only job "answer questions on the issue, approve the spec, merge the PR".
-- **Cost model:** per issue, one issue-worker run (Sonnet-class, plus up to 4 spec-review cycles) and one build-worker run (Sonnet/Opus per stage, plus up to 6 review cycles per sub-issue). Controller cost is near zero (Haiku, one short call per dispatch, none when the queue has one candidate).
+- **Cost model:** per issue, one issue-worker run (Sonnet-class, plus up to 6 spec-review cycles, raised from 4 on 2026-09-20) and one build-worker run (Sonnet/Opus per stage, plus up to 6 review cycles per sub-issue). Controller cost is near zero (Haiku, one short call per dispatch, none when the queue has one candidate).
 - **Success metric:** median wall-clock from issue opened to `bzr-pr-ready` under 24h with at most one human touch in between.
 
 ## Approvers

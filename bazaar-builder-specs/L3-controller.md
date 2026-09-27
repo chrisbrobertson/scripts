@@ -120,12 +120,12 @@ For each open issue in `bzr-spec-review` whose spec PR (branch `bzr/spec-<issue>
 Interrupted after step 3: detected as "PR merged, issue still `bzr-spec-review`", resumes at step 4.
 
 ### Attempt handling (both scripts)
-A worker exit that is transient (`STUCK`, reviewer transport failure after the lib's own retries, crash without sentinel) makes the controller: post `bzr-attempt n=K`, return the issue to its queue state (issue side: remove the claim label so it has no `bzr-*` label; build side: `bzr-building` → `bzr-ready`), and, if `K ≥ MAX_ATTEMPTS`, add `bzr-blocked` and post `bzr-escalated`. Reviewer-outdated and no-credits are not attempts: the controller comments on the PR, leaves the issue in its queue state, and exits 1 for the operator.
+A worker exit that is transient (`STUCK`, crash without sentinel) makes the controller: post `bzr-attempt n=K`, return the issue to its queue state (issue side: remove the claim label so it has no `bzr-*` label; build side: `bzr-building` → `bzr-ready`), and, if `K ≥ MAX_ATTEMPTS`, add `bzr-blocked` and post `bzr-escalated`. Reviewer transport failure, Codex CLI too old, and Codex workspace out of credits all fold into the same generic `STUCK reviewer unavailable: <reason>` sentinel at the worker (see [BZR-FEAT-BUILD-WORKER](L3-build-worker.md) / [BZR-FEAT-ISSUE-WORKER](L3-issue-worker.md)) and so count as an ordinary attempt like any other `STUCK` — there is no separate "exits 1 for the operator" path in the shipped code; an outdated CLI or empty credits burns attempts and can escalate to `bzr-blocked` exactly like a transient transport failure.
 
 ### Invariants
 1. A controller never edits code or PR contents, and never edits spec text except the approval-authorised status flip.
 2. At most `--workers` worker processes per controller.
-3. Claim order: add claim label, remove prior state label if any, post claim marker. Spawn only after all three succeed; on partial failure revert and log.
+3. Claim order: add claim label, remove prior state label if any (`bzr_transition`, reverted and logged on failure — the worker is never spawned). The worker is then spawned in the background and posts its own claim marker after it starts, with failure silently ignored (`bzr_post_claim ... || true`); the marker is not a precondition for spawning.
 4. Labels are re-read immediately before claiming; a candidate claimed since the queue read is skipped.
 5. No claim is ever released on elapsed time.
 6. The model may only return an issue number from the candidate list; anything else falls back to sort order.

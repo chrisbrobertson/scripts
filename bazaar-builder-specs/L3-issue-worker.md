@@ -28,15 +28,19 @@ Implementing agent: build the worker prompt set and its bash wrapper in `bazaar-
 ## API surface fragment
 *Implemented 2026-09-20: `bazaar-issue-worker.sh` v0.1.0; `test-bazaar-issue-worker.sh` 39 cases green.*
 ```bash
-# Invoked by the controller; not a user-facing command.
-bazaar-worker-issue <issue>       # env from controller: BZR_REPO BZR_WORKTREE BZR_BRANCH BZR_LOG
+# Spawned by bazaar-issues.sh; not a user-facing command.
+bazaar-issue-worker.sh <issue>    # env from controller: BZR_ISSUE BZR_REPO BZR_REPO_DIR BZR_HOME BZR_HOST BZR_LOG
+                                  # DEFAULT_BRANCH BZR_SENTINEL SCRIPTS_DIR BZR_APPROVERS IMPLEMENTER* REVIEWER*
+                                  # MAX_SPEC_REVIEW_CYCLES
                                   # branch: bzr/spec-<issue>   worktree: $BZR_HOME/<repo>/wt/spec-<issue>
 
-# Sentinels (last line of the implementer transcript, bare):
+# Sentinel (last line of $BZR_SENTINEL, bare):
+SPEC_REVIEW <pr>                  # spec PR non-draft, review converged; controller moves bzr-drafting → bzr-spec-review
 NEEDS_INFO <n>                    # n questions posted; issue → bzr-needs-info
-SPEC_PR <pr_number>               # spec PR open (draft); wrapper runs the spec review cycle
 NOT_ACTIONABLE <reason>           # question, duplicate, no spec corpus, won't-fix candidate; issue → bzr-blocked + comment
-STUCK <reason>                    # environmental; controller counts an attempt, claim label removed (issue is intake again)
+BLOCKED <reason>                  # spec-only violation, endless bounce, or review cap/bail; issue → bzr-blocked
+STUCK <reason>                    # environmental, including reviewer unavailable (transport/outdated/no-credits);
+                                  # controller counts an attempt, claim label removed (issue is intake again)
 
 # Agent comment marker (every comment the agent posts starts with this line):
 <!-- bzr-issue-worker phase=verify|questions|spec|review ts=<iso8601> -->
@@ -75,13 +79,13 @@ STUCK <reason>                    # environmental; controller counts an attempt,
 One issue number, already labelled `bzr-drafting` by the controller.
 
 ### Response shape
-One sentinel; the issue in exactly one of `bzr-needs-info`, `bzr-spec-review`, `bzr-blocked`, or unlabelled (intake again); for `SPEC_PR`, an open non-draft PR on branch `bzr/spec-<issue>` whose body links the issue with `Refs #<issue>` (not `Closes`, the issue must stay open).
+One sentinel; the issue in exactly one of `bzr-needs-info`, `bzr-spec-review`, `bzr-blocked`, or unlabelled (intake again); for `SPEC_REVIEW`, an open non-draft PR on branch `bzr/spec-<issue>` whose body links the issue with `Refs #<issue>` (not `Closes`, the issue must stay open).
 
 ### Phases
 1. **verify** — read issue, comments, linked issues, referenced files. Produce the checklist. If unresolved gaps: post one comment with numbered questions, `NEEDS_INFO`. On a re-entry after a bounce, read the human's replies first and do not repeat answered questions.
 2. **normalise** — rewrite the body into the template (`ISSUE-TEMPLATE.md`), original preserved.
 3. **classify** — bug vs feature per the mapping; record the decision and evidence in the spec PR body.
-4. **draft** — in the worktree, write or amend specs per `spec-guide.md`; every unknown is `[ASSUMPTION]` with a flip clause or `[OPEN]` with owner; update `index.md` and append `log.md`. Commit, push, open draft PR. Then create or reconcile sub-issues from the L4 list (marker body, attached via the sub-issues API, listed in the PR body). `SPEC_PR`.
+4. **draft** — in the worktree, write or amend specs per `spec-guide.md`; every unknown is `[ASSUMPTION]` with a flip clause or `[OPEN]` with owner; update `index.md` and append `log.md`. Commit, push, open draft PR. Then create or reconcile sub-issues from the L4 list (marker body, attached via the sub-issues API, listed in the PR body). `DRAFT_DONE`.
 5. **review** (wrapper) — `run_review_cycle --mode spec` from the lib. At 0 BLOCKING: mark PR ready, comment on the issue with the PR link and the one-line summary of what will be built, write `SPEC_REVIEW <pr>` to `$BZR_SENTINEL` (the controller moves `bzr-drafting` → `bzr-spec-review`; see the controller L3's implementation notes, 2026-09-19). On cap or bail: `BLOCKED <reason>` with the reviewer summary posted on the PR.
 
 ### Invariants
@@ -99,7 +103,7 @@ One sentinel; the issue in exactly one of `bzr-needs-info`, `bzr-spec-review`, `
 - Cannot read issue (`gh` fails): `STUCK`, claim released.
 - Issue is a sub-issue or closed: `NOT_ACTIONABLE`.
 - Duplicate of an open issue (agent finds it): `NOT_ACTIONABLE duplicate of #N`; human decides.
-- Spec review transport failure after the lib's retries: PR stays draft, `STUCK reviewer-unavailable`; the controller counts an attempt and the issue is intake again; re-entry resumes the existing branch and PR.
+- Reviewer unavailable (transport failure after the lib's retries, Codex CLI too old, or Codex workspace out of credits): all three fold into `STUCK reviewer unavailable: <reason>`; PR stays draft, the controller counts an attempt and the issue is intake again; re-entry resumes the existing branch and PR. Nothing distinguishes the three causes at the controller.
 - Spec review cap hit: `bzr-blocked`, findings summarised on the PR.
 
 ### Idempotency
@@ -109,7 +113,7 @@ Re-entry with an existing `bzr/spec-<issue>` branch resumes: fetch, rebase on ma
 Prompts versioned with `bazaar-issues.sh`; a prompt change bumps the minor version.
 
 ## Performance budget
-Verify + normalise + classify: 3-10 min Sonnet-class. Draft: 10-30 min. Review cycles: 1-7 min reviewer plus 5-15 min revision each, up to 4. Cost per issue: roughly $2-10 depending on cycles.
+Verify + normalise + classify: 3-10 min Sonnet-class. Draft: 10-30 min. Review cycles: 1-7 min reviewer plus 5-15 min revision each, up to 6 (`MAX_SPEC_REVIEW_CYCLES`, raised from 4 on 2026-09-20). Cost per issue: roughly $2-10 depending on cycles.
 
 ## Security model
 Inherits `gh` auth. The worker can edit issue bodies and open PRs but cannot merge (no code path) and, with branch protection, cannot push to main.
