@@ -82,9 +82,11 @@ SPEC_GAP                    # labels build-needs-clarification, posts gap commen
 build-incomplete            # cycle bailed for a human-action reason; ticket also swapped
                              # to build-done so it is not rebuilt into a duplicate PR
 build-mcp-outage            # reviewer transport failure; ticket KEEPS build-ready, the
-                             # run halts, and the next run's outage sweep resumes this PR
-build-codex-outdated        # Codex CLI too old; operator upgrades, removes label, re-runs
-build-codex-no-credits      # Codex workspace out of credits; operator tops up, re-runs
+                             # run halts, and the next run's stalled-PR sweep resumes this PR
+build-codex-outdated        # Codex CLI too old; ticket KEEPS build-ready, the run halts;
+                             # operator upgrades and re-runs, the sweep resumes this PR itself
+build-codex-no-credits      # Codex workspace out of credits; ticket KEEPS build-ready, the
+                             # run halts; operator tops up and re-runs, the sweep resumes this PR
 
 # Exit codes
 0   # Completed normally, including a run that builds zero tickets and a run that
@@ -112,7 +114,7 @@ one — any ticket (GitHub or Jira) carrying that label is eligible work.
 ## What we know
 Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOUS-DEV
 (owner-approved 2026-08-27), plus mechanics directly inherited from the shipped
-`babysit-with-review.sh` v1.1.2 implementation this script mirrors:
+`babysit-with-review.sh` v1.2.0 implementation this script mirrors:
 
 - **`build-ready` label is the work source, ticket type is not constrained.** The
   build queue is any ticket — GitHub issue or Jira issue, sub-ticket or otherwise —
@@ -164,12 +166,15 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
 - **MCP resilience is reused unchanged.** The same retry-with-backoff (0/60s/300s) and
   telltale detection from `ASF-FEAT-MCP-RESILIENCE` applies when `--reviewer codex`.
   Two run-level additions follow from the queue shape:
-  - **Outage sweep runs before the queue is read.** A PR quarantined
-    `build-mcp-outage` by a previous run is resumed first — its head branch is fetched
-    into a reconstructed worktree, the label is removed, the PR is un-drafted, and the
-    build cycle restarts. Ordering matters: that PR's ticket is still `build-ready`, so
-    reading the queue first would rebuild it into the duplicate PR the sweep exists to
-    avoid.
+  - **Stalled-PR sweep runs before the queue is read.** A PR quarantined behind any of
+    the three resumable labels (`build-mcp-outage`, `build-codex-outdated`,
+    `build-codex-no-credits`) by a previous run is resumed first — its head branch is
+    fetched into a reconstructed worktree, its label is removed, the PR is un-drafted,
+    and the build cycle restarts. All three are swept the same way: the sweep runs
+    after `reviewer_preflight` has already passed for the current run, so a still-live
+    Codex-CLI/credits problem halts before the sweep is ever reached. Ordering matters:
+    each of these PRs' tickets is still `build-ready`, so reading the queue first would
+    rebuild any of them into the duplicate PR the sweep exists to avoid.
   - **Reviewer pre-flight is a run-level fatal, not a per-PR bail.** The Codex
     compatibility/credits probe runs once at startup and exits 1 on failure, before any
     implementer time is spent. `babysit-with-review.sh` probes per review cycle because
@@ -247,13 +252,17 @@ sign-off before `babysit-builder.sh` is built against this spec:
   apart. The fourth path, a PR-branch/worktree-branch mismatch (`babysit-builder.sh:1626`,
   also `build-incomplete`-labelled), passes a distinct "PR quarantined — branch mismatch"
   heading instead, so that one case is self-describing in the ticket comment.
-  `build-mcp-outage` is one deliberate exception to the swap: the
-  ticket keeps `build-ready` because the outage sweep at the top of the next run resumes
-  that PR before the queue is read. `build-codex-outdated` and `build-codex-no-credits` are
-  also exceptions in the shipped code — `mark_ticket_done` is never reached on those paths
-  either, so the ticket keeps `build-ready` there too — but unlike the MCP-outage path
-  neither has an automatic resume sweep: the run halts entirely, and once the operator
-  clears the label a re-selected ticket may open a second PR alongside the quarantined one.
+  The three resumable quarantine labels (`build-mcp-outage`, `build-codex-outdated`,
+  `build-codex-no-credits` — everything except `build-incomplete`) are exceptions to the
+  swap: the ticket keeps `build-ready` because the stalled-PR sweep at the top of the
+  next run resumes that PR before the queue is read (`mark_ticket_done` is never reached
+  on any of these three paths). This was asymmetric in an earlier revision of the
+  shipped code — only
+  `build-mcp-outage` had a resume sweep, so a `build-codex-outdated`/
+  `build-codex-no-credits` PR was never resumed and its ticket could be rebuilt into a
+  second PR once an operator cleared the label — but `resume_stalled_prs` now sweeps
+  all three labels identically, closing that gap (mirrors the equivalent fix for
+  `babysit-with-review.sh`'s outer loop, `ASF-FEAT-OUTER-LOOP`, see #104).
   Owner should confirm the `build-incomplete` → `build-done` swap reads correctly, or
   whether a distinct ticket-side label is preferred. The queue query itself
   (`gh issue list --label build-ready`, `babysit-builder.sh:1328`; the JQL
@@ -376,7 +385,7 @@ ticket carries no in-progress marker. This is deliberate, not a defect to fix.
 
 ### Versioning policy
 Companion script to `babysit-with-review.sh`, versioned independently via semver
-(`--version`; current: 0.1.1). Breaking changes to the `build-*` label schema or the
+(`--version`; current: 0.2.0). Breaking changes to the `build-*` label schema or the
 spec-resolution contract require manual migration of any open build PRs.
 
 ## Performance budget

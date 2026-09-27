@@ -17,7 +17,7 @@
 
 set -uo pipefail
 
-VERSION="0.1.1"
+VERSION="0.2.0"
 
 usage() {
   cat <<'EOF'
@@ -63,8 +63,8 @@ Labels (all in the `build-*` namespace):
   build-max-cycles           PR exhausted MAX_REVIEW_CYCLES with findings open.
   build-incomplete           Build cycle bailed; manual review required.
   build-mcp-outage           Reviewer transport failure; retried next run.
-  build-codex-outdated       Codex CLI too old; upgrade then remove the label.
-  build-codex-no-credits     Codex workspace out of credits; add credits.
+  build-codex-outdated       Codex CLI too old; upgrade then re-run (auto-resumed).
+  build-codex-no-credits     Codex workspace out of credits; add credits, re-run.
 
 Exit codes: 0 completed, 1 fatal/pre-flight failure, 2 invalid arguments.
 EOF
@@ -916,7 +916,7 @@ ensure_build_labels() {
   gh label create build-mcp-outage --repo "$REPO" --color 0075CA \
     --description "Builder review stalled by MCP transport failure; retried next run" --force >/dev/null 2>&1 || return 1
   gh label create build-codex-outdated --repo "$REPO" --color e4e669 \
-    --description "Builder review blocked: Codex CLI too old; upgrade then remove label" --force >/dev/null 2>&1 || return 1
+    --description "Builder review blocked: Codex CLI too old; upgrade then re-run, auto-resumed" --force >/dev/null 2>&1 || return 1
   gh label create build-codex-no-credits --repo "$REPO" --color d93f0b \
     --description "Builder review blocked: Codex workspace out of credits" --force >/dev/null 2>&1 || return 1
 }
@@ -1062,14 +1062,14 @@ fail_build_cycle_codex_outdated() {
   quarantine_pr "$1" build-codex-outdated "Codex version incompatibility — review blocked" "$2" \
     "The Codex CLI is too old for the configured model. No code-quality review took place.
 
-To resume: upgrade the Codex CLI (\`codex update\`), then remove the \`build-codex-outdated\` label and re-run the builder."
+To resume: upgrade the Codex CLI (\`codex update\`), then re-run the builder. Do NOT remove the \`build-codex-outdated\` label yourself — the stalled-PR sweep finds this PR by that label, removes it, and re-runs the build cycle automatically on the next run; removing it manually leaves the ticket's \`build-ready\` label in place and risks a duplicate PR on the next run instead."
 }
 
 fail_build_cycle_codex_no_credits() {
   quarantine_pr "$1" build-codex-no-credits "Codex workspace out of credits — review blocked" "$2" \
     "The Codex workspace has no credits remaining. No code-quality review took place.
 
-To resume: add credits to the Codex workspace, then remove the \`build-codex-no-credits\` label and re-run the builder."
+To resume: add credits to the Codex workspace, then re-run the builder. Do NOT remove the \`build-codex-no-credits\` label yourself — the stalled-PR sweep finds this PR by that label, removes it, and re-runs the build cycle automatically on the next run; removing it manually leaves the ticket's \`build-ready\` label in place and risks a duplicate PR on the next run instead."
 }
 
 # Stamp the builder marker into a PR body so a later run can map the PR back to
@@ -1678,34 +1678,52 @@ safety_push_worktree() {
     || echo "[build] WARNING: safety-push failed for $BUILD_BRANCH" >&2
 }
 
-# ---------- outage sweep ----------
+# ---------- stalled-PR sweep ----------
 
-# Re-run the build cycle for PRs a previous run quarantined as build-mcp-outage.
-# Runs BEFORE the queue is read: those tickets are still build-ready, and reading
-# the queue first would rebuild them into duplicate PRs.
-resume_outage_prs() {
-  local raw_file="$TMP_ROOT/outage-prs.json" records="$TMP_ROOT/outage-records"
-  if ! gh pr list --repo "$REPO" --state open --label build-mcp-outage --limit 20 \
-    --json number,headRefName,body > "$raw_file" 2>> "$LOG"; then
-    echo "[build] WARNING: could not list build-mcp-outage PRs" >&2
-    return 0
-  fi
-  python3 - "$raw_file" > "$records" <<'PY'
+# All labels a previous run may have parked a PR under while a review cycle
+# could not complete. Every one of these must be swept here: the source
+# ticket keeps its `build-ready` label until mark_ticket_done runs (which only
+# happens on a resumed PR's clean halt), so any label this sweep doesn't
+# search for leaves the ticket eligible for fetch_github_queue/fetch_jira_queue
+# to rebuild into a SECOND PR for the same ticket on this very run (see #104,
+# the equivalent fix in babysit-with-review.sh's outer loop — resume_stalled_prs
+# is the build-loop counterpart of that sweep).
+RESUMABLE_BUILD_STALL_LABELS=(build-mcp-outage build-codex-outdated build-codex-no-credits)
+
+# Re-run the build cycle for PRs a previous run quarantined behind any label in
+# RESUMABLE_BUILD_STALL_LABELS. Runs BEFORE the queue is read: those tickets are
+# still build-ready, and reading the queue first would rebuild them into
+# duplicate PRs. Safe to resume all three the same way here: this only runs
+# after reviewer_preflight() has already passed for the current run (see the
+# call site), so a genuine outdated-CLI/no-credits condition would have halted
+# before we ever reach this sweep.
+resume_stalled_prs() {
+  local raw_file="$TMP_ROOT/stalled-prs.json" records="$TMP_ROOT/stalled-records" label
+  : > "$records"
+  for label in "${RESUMABLE_BUILD_STALL_LABELS[@]}"; do
+    if ! gh pr list --repo "$REPO" --state open --label "$label" --limit 20 \
+      --json number,headRefName,body > "$raw_file" 2>> "$LOG"; then
+      echo "[build] WARNING: could not list $label PRs" >&2
+      continue
+    fi
+    python3 - "$raw_file" "$label" >> "$records" <<'PY'
 import json, re, sys
 marker = re.compile(r"<!-- babysit-builder\s+source=(\S+)\s+ticket=(\S+)\s+-->", re.I)
+label = sys.argv[2]
 with open(sys.argv[1], encoding="utf-8") as fh:
     prs = json.load(fh)
 for pr in prs:
     match = marker.search(pr.get("body") or "")
     source, ticket = (match.group(1), match.group(2)) if match else ("", "")
-    print("\t".join([str(pr.get("number") or ""), pr.get("headRefName") or "", source, ticket]))
+    print("\t".join([str(pr.get("number") or ""), pr.get("headRefName") or "", source, ticket, label]))
 PY
+  done
 
-  local pr_num head_ref source ticket cycle_rc
+  local pr_num head_ref source ticket label cycle_rc
   # fd 3: the harnesses inherit stdin, and would otherwise consume this file.
-  while IFS=$'\t' read -r -u 3 pr_num head_ref source ticket; do
+  while IFS=$'\t' read -r -u 3 pr_num head_ref source ticket label; do
     [ -n "$pr_num" ] && [ -n "$head_ref" ] || continue
-    echo "[build] resuming build cycle for PR #$pr_num (build-mcp-outage)"
+    echo "[build] resuming build cycle for PR #$pr_num ($label)"
     if ! git fetch origin "$head_ref" >> "$LOG" 2>&1; then
       echo "[build] WARNING: could not fetch origin/$head_ref for PR #$pr_num; skipped" >&2
       continue
@@ -1719,7 +1737,7 @@ PY
     fi
     printf '%s\n' "$BUILD_DIR" >> "$WORKTREE_LIST"
 
-    gh pr edit "$pr_num" --repo "$REPO" --remove-label build-mcp-outage >> "$LOG" 2>&1 || true
+    gh pr edit "$pr_num" --repo "$REPO" --remove-label "$label" >> "$LOG" 2>&1 || true
     gh pr ready "$pr_num" --repo "$REPO" >> "$LOG" 2>&1 || true
 
     cycle_rc=0
@@ -1769,14 +1787,14 @@ if [ "$DRY_RUN" -eq 0 ]; then
   esac
   unset _probe_rc
 
-  resume_outage_prs
+  resume_stalled_prs
   if [ "$HALT_RC" -ne 0 ]; then
     case "$HALT_RC" in
-      2) echo "Halting: reviewer MCP outage persists; the PR is labelled build-mcp-outage and will be retried next run. See $LOG" >&2 ;;
-      3) echo "Halting: Codex version incompatibility; upgrade the CLI, remove build-codex-outdated, then re-run. See $LOG" >&2 ;;
-      4) echo "Halting: Codex workspace out of credits; add credits, remove build-codex-no-credits, then re-run. See $LOG" >&2 ;;
+      2) echo "Halting: reviewer MCP outage persists; the PR stays labelled build-mcp-outage and will be retried next run. See $LOG" >&2 ;;
+      3) echo "Halting: Codex version incompatibility; upgrade the CLI (codex update), then re-run — the stalled-PR sweep finds the build-codex-outdated PR itself. See $LOG" >&2 ;;
+      4) echo "Halting: Codex workspace out of credits; add credits, then re-run — the stalled-PR sweep finds the build-codex-no-credits PR itself. See $LOG" >&2 ;;
     esac
-    echo "Builder halted during outage sweep."
+    echo "Builder halted during stalled-PR sweep."
     exit 0
   fi
 fi
@@ -1815,9 +1833,9 @@ while IFS=$'\t' read -r -u 3 ticket_source ticket_key title_b64 body_b64 url_b64
   build_ticket "$ticket_source" "$ticket_key" "$title" "$body" "$ticket_url"
   if [ "$HALT_RC" -ne 0 ]; then
     case "$HALT_RC" in
-      2) echo "Halting: reviewer MCP outage; the PR is labelled build-mcp-outage and will be retried next run. See $LOG" >&2 ;;
-      3) echo "Halting: Codex version incompatibility; upgrade the CLI, remove build-codex-outdated, then re-run. See $LOG" >&2 ;;
-      4) echo "Halting: Codex workspace out of credits; add credits, remove build-codex-no-credits, then re-run. See $LOG" >&2 ;;
+      2) echo "Halting: reviewer MCP outage; the PR stays labelled build-mcp-outage and will be retried next run. See $LOG" >&2 ;;
+      3) echo "Halting: Codex version incompatibility; upgrade the CLI (codex update), then re-run — the stalled-PR sweep finds the build-codex-outdated PR itself. See $LOG" >&2 ;;
+      4) echo "Halting: Codex workspace out of credits; add credits, then re-run — the stalled-PR sweep finds the build-codex-no-credits PR itself. See $LOG" >&2 ;;
     esac
     break
   fi
