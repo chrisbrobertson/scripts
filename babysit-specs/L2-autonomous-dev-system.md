@@ -109,9 +109,10 @@ From the existing implementation:
   ```bash
   claude -p "<prompt>" \
     --model <cycle-default or IMPLEMENTER_MODEL> \
+    [--effort LEVEL] \
     --dangerously-skip-permissions \
     --output-format stream-json \
-    [--effort LEVEL]
+    --verbose
   ```
   Cycle defaults: `claude-sonnet-5` (cycles 1–3), `claude-opus-4-8` (cycles 4+), overridable via `IMPLEMENTER_MODEL`.
 - **Response shape:** JSON stream with events ending in `{"type": "result", "result": "<text>"}`
@@ -141,7 +142,7 @@ From the existing implementation:
   ```
 - **Response shape:** Markdown passing `valid_review_structure` (see ASF-FEAT-MCP-RESILIENCE for the full awk contract)
 - **Retry policy:** 3 attempts with 0 / 60s / 300s delays on MCP transport failure
-- **MCP failure telltales:** `Transport send error:`, `tool call failed for \`codex_apps/`, `error sending request for url (https://chatgpt\.com/`
+- **MCP failure telltales:** `Transport send error:`, `tool call error: tool call failed for \`codex_apps/`, `error sending request for url (https://chatgpt\.com/`
 - **Idempotency:** Idempotent within a review cycle (same PR state → same review)
 
 ### Orchestrator → Claude Code CLI (reviewer role, optional)
@@ -151,7 +152,7 @@ From the existing implementation:
   ```bash
   claude -p "<prompt>" --permission-mode plan \
     [--model MODEL] [--effort LEVEL] \
-    --output-format stream-json
+    --output-format stream-json --verbose
   ```
 - **Response shape:** Same markdown structure as Codex reviewer; `valid_review_structure` applies
 - **No MCP retry:** Claude reviewer failures take the generic `review-incomplete` path
