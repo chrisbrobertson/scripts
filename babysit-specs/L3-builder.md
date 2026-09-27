@@ -174,6 +174,12 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
     compatibility/credits probe runs once at startup and exits 1 on failure, before any
     implementer time is spent. `babysit-with-review.sh` probes per review cycle because
     it interleaves with implementation; builder knows its whole queue up front.
+    `reviewer_preflight` (`babysit-builder.sh:885`) only special-cases `compat_re`
+    (return 3) and `credits_re` (return 4); it does not retry on `mcp_re` the way
+    `codex_review_with_retry` does mid-cycle. A transient MCP transport blip at
+    startup is therefore indistinguishable from any other probe failure — it falls
+    through to the generic non-zero-exit case and kills the whole run (`exit 1`)
+    rather than being retried with backoff.
 - **No auto-merge, ever.** Unlike `babysit-with-review.sh`, no code path calls
   `gh pr merge`. The halt condition (BLOCKING=0 convergence, or max cycles exhausted)
   ends the ticket's processing with a PR comment summarizing the reviewer's final
