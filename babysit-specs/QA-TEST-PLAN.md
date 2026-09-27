@@ -1,13 +1,14 @@
 # QA Test Plan — babysit-with-review.sh
 
 **Owner:** qa-lead  
-**Status:** Test Suite 4 automated and passing (144/144, last run 2026-09-27), now
+**Status:** Test Suite 4 automated and passing (151/151, last run 2026-09-27), now
 including automated pre-flight coverage for TC-1.2, lock-file-collision coverage
 for TC-1.3/TC-1.3b, lock-file-removal coverage for TC-1.4, sentinel-detection
 coverage for TC-1.5/TC-1.6, and MAX_ITER-exhaustion coverage for TC-1.8 (see
-Suite 1), plus a separate `test-babysit-review-feedback.sh` harness covering
-the `collect_pr_feedback()` filter (TC-2.10/TC-2.11, see Suite 2); Test Suites
-1-3 otherwise remain manual smoke tests against live Claude/Codex/gh, not yet
+Suite 1), plus blocking-count coverage for TC-2.1/TC-2.2 and a separate
+`test-babysit-review-feedback.sh` harness covering the `collect_pr_feedback()`
+filter (TC-2.10/TC-2.11, see Suite 2); Test Suites 1-3 otherwise remain
+manual smoke tests against live Claude/Codex/gh, not yet
 executed  
 **Priority:** Medium (internal tool, existing implementation to verify)
 
@@ -220,6 +221,16 @@ actually run before every commit.
 **Reference:** L3-review-cycle.md Acceptance Tests (lines 184-196)
 
 ### TC-2.1: Review Cycle with BLOCKING Issues
+**Status: automated (blocking-count only), not manual (added 2026-09-27).**
+`review-blocking-count` in `test-babysit-with-review-cli.sh` drives the real
+`count_blocking()` (the function whose output branches `run_review_cycle`
+between "addressing findings" and auto-merge) over review markdown on stdin —
+covering a single real finding and multiple findings with an indented
+continuation line, counted once each. The `[claude] addressing findings...`
+log line and the cycle-repeats behavior are not exercised by this harness (no
+Claude/Codex/gh involved); the manual steps below remain the acceptance
+reference for those.
+
 **Given:** PR #123 with BLOCKING issues  
 **When:** Review cycle runs  
 **Then:** 
@@ -238,6 +249,14 @@ actually run before every commit.
 ---
 
 ### TC-2.2: Zero BLOCKING Findings — Auto-Merge
+**Status: automated (blocking-count only), not manual (added 2026-09-27).**
+Same `review-blocking-count` harness as TC-2.1: covers a sole `- (none)`
+bullet under `## BLOCKING` counting as zero, a review with no `## BLOCKING`
+heading at all counting as zero, and non-blocking bullets under
+`## RECOMMENDED` not leaking into the count. The actual `gh pr merge` and PR
+state transition are not exercised by this harness; the manual steps below
+remain the acceptance reference for those.
+
 **Given:** Codex returns 0 BLOCKING findings  
 **When:** Cycle completes  
 **Then:** PR is merged via `gh pr merge --squash [--auto]`

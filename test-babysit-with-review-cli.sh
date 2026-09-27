@@ -547,5 +547,36 @@ rm -f "$lockfile_path"
 printf '%s\n' "$lockfile_path" | run_script outer-lockfile-removed "$TMP/lockfile-removed.record" "$TMP/home" > "$TMP/lockfile-removed.after.out"
 assert_contains "$TMP/lockfile-removed.after.out" "path=$lockfile_path removed=1" 'lock file removal: removing the stop file mid-run is detected (TC-1.4)'
 
+# Blocking-finding count: converts the branch point behind QA-TEST-PLAN.md
+# TC-2.1 (Codex review with N>0 BLOCKING findings triggers the
+# addressing-findings path) and TC-2.2 (zero BLOCKING findings triggers
+# auto-merge) into deterministic coverage. review-blocking-count feeds a
+# review markdown document on stdin through the real count_blocking()
+# function used by run_review_cycle; no Claude/Codex/gh involved.
+: > "$TMP/blocking-count-none-bullet.record"
+printf '## BLOCKING\n- (none)\n\n## RECOMMENDED\n- (none)\n' \
+  | run_script review-blocking-count "$TMP/blocking-count-none-bullet.record" "$TMP/home" > "$TMP/blocking-count-none-bullet.out"
+assert_contains "$TMP/blocking-count-none-bullet.out" '0' 'blocking count: a sole "- (none)" bullet under BLOCKING counts as zero (TC-2.2)'
+
+: > "$TMP/blocking-count-one.record"
+printf '## BLOCKING\n- undefined variable used at line 42\n\n## RECOMMENDED\n- (none)\n' \
+  | run_script review-blocking-count "$TMP/blocking-count-one.record" "$TMP/home" > "$TMP/blocking-count-one.out"
+assert_contains "$TMP/blocking-count-one.out" '1' 'blocking count: a single real BLOCKING bullet counts as one (TC-2.1)'
+
+: > "$TMP/blocking-count-multi.record"
+printf '## BLOCKING\n- finding one\n  indented continuation detail\n- finding two\n\n## RECOMMENDED\n- (none)\n' \
+  | run_script review-blocking-count "$TMP/blocking-count-multi.record" "$TMP/home" > "$TMP/blocking-count-multi.out"
+assert_contains "$TMP/blocking-count-multi.out" '2' 'blocking count: multiple BLOCKING bullets count once each, ignoring indented continuation lines (TC-2.1)'
+
+: > "$TMP/blocking-count-other-sections.record"
+printf '## BLOCKING\n- (none)\n\n## RECOMMENDED\n- non-blocking finding\n- another one\n' \
+  | run_script review-blocking-count "$TMP/blocking-count-other-sections.record" "$TMP/home" > "$TMP/blocking-count-other-sections.out"
+assert_contains "$TMP/blocking-count-other-sections.out" '0' 'blocking count: bullets under RECOMMENDED are not counted as BLOCKING'
+
+: > "$TMP/blocking-count-no-section.record"
+printf '## RECOMMENDED\n- (none)\n\n## INFORMATION\n- (none)\n' \
+  | run_script review-blocking-count "$TMP/blocking-count-no-section.record" "$TMP/home" > "$TMP/blocking-count-no-section.out"
+assert_contains "$TMP/blocking-count-no-section.out" '0' 'blocking count: a review with no BLOCKING heading at all counts as zero'
+
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]

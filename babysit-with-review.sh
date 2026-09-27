@@ -1669,6 +1669,13 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight
       # so callers don't have to smuggle it past this script's own CLI parser.
       collect_pr_feedback "${TEST_PR_NUM:-7}"
       ;;
+    review-blocking-count)
+      # Drives the real count_blocking() over a review markdown document on
+      # stdin (QA-TEST-PLAN.md TC-2.1/TC-2.2: the blocking-count check that
+      # decides between "addressing findings" and "auto-merge"). No
+      # Claude/Codex/gh involved.
+      count_blocking
+      ;;
     *)
       echo "Unknown BABYSIT_TEST_MODE: $BABYSIT_TEST_MODE" >&2
       exit 2
