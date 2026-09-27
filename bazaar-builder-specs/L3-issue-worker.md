@@ -26,7 +26,7 @@ Like a product analyst refining a ticket into a PRD and a task list, then handin
 Implementing agent: build the worker prompt set and its bash wrapper in `bazaar-issues.sh`. Chris Robertson: confirm the template.
 
 ## API surface fragment
-*Implemented 2026-09-20: `bazaar-issue-worker.sh` v0.1.0; `test-bazaar-issue-worker.sh` 39 cases green.*
+*Implemented 2026-09-20: `bazaar-issue-worker.sh` v0.1.0; `test-bazaar-issue-worker.sh` 46 cases green.*
 ```bash
 # Spawned by bazaar-issues.sh; not a user-facing command.
 bazaar-issue-worker.sh <issue>    # env from controller: BZR_ISSUE BZR_REPO BZR_REPO_DIR BZR_HOME BZR_HOST BZR_LOG
