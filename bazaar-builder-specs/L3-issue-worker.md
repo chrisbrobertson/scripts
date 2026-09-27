@@ -23,7 +23,7 @@ Given one claimed issue, the issue worker verifies that the issue is actionable,
 Like a product analyst refining a ticket into a PRD and a task list, then handing it to the lead for sign-off.
 
 ## Reader & next action
-Implementing agent: build the worker prompt set and its bash wrapper in `bazaar-issues.sh`. Chris Robertson: confirm the template.
+Implementing agent: build the worker prompt set and its bash wrapper in `bazaar-issue-worker.sh`. Chris Robertson: confirm the template.
 
 ## API surface fragment
 *Implemented 2026-09-20: `bazaar-issue-worker.sh` v0.1.0; `test-bazaar-issue-worker.sh` 46 cases green.*
