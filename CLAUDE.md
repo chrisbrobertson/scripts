@@ -40,6 +40,7 @@ empirical tests (`test-*`). No formal test suite, no build step, no CI.
 | `test-babysit-with-review-cli.sh` | Deterministic CLI regression harness for babysit-with-review.sh using recording stubs (`BABYSIT_TEST_MODE`) |
 | `test-babysit-review-feedback.sh` | Recording-stub coverage for `collect_pr_feedback()`'s CodeRabbit-inclusion / self-posted-exclusion filter (QA-TEST-PLAN.md TC-2.10/TC-2.11); `gh` stub on PATH forwards the script's real `--json`/`-q`/`--jq` args to the real `jq` binary against canned fixtures, so the actual embedded filters run |
 | `test-babysit-review-merge-draft.sh` | Recording-stub coverage for `merge_reviewed_pr()` — the zero-blocking-findings merge path always calls `gh pr ready` (best-effort) before `gh pr merge`, since a PR can reach that path still marked draft (see #82/#60) |
+| `test-babysit-review-stalled-retry.sh` | Recording-stub coverage for the outer loop's stalled-PR retry sweep (all three resumable labels, see #82/#104): sweep removes the label itself only once the reviewer CLI is confirmed available, never un-drafts before the re-review completes, defers (leaving the label in place) rather than starting new implementer work when the reviewer is still unavailable, and skips the review cycle if the label-removal `gh pr edit` call itself fails |
 | `test-llm-routing.py` | Empirical test: model-alias forwarding + OAuth rejection by Anthropic |
 | `test-codex-review.sh` | Codex review helper |
 | `prs` | `gh pr list` with CI rollup and review state |
