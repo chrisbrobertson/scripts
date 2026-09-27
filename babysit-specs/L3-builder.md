@@ -3,7 +3,7 @@ spec_type: feature
 id: ASF-FEAT-BUILDER
 status: review
 owners: [Chris Robertson]
-depends_on: [ASF-SYS-AUTONOMOUS-DEV, ASF-FEAT-REVIEW-CYCLE, ASF-FEAT-MCP-RESILIENCE, ASF-FEAT-WORK-PREP]
+depends_on: [ASF-SYS-AUTONOMOUS-DEV, ASF-FEAT-REVIEW-CYCLE, ASF-FEAT-MCP-RESILIENCE]
 parent_l1: ASF-PROD-BABYSIT-WITH-REVIEW
 parent_l2: ASF-SYS-AUTONOMOUS-DEV
 fit_check: passed
@@ -183,8 +183,8 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
   script, and vice versa — no shared state, no collision risk between the two loops
   running concurrently on the same repo.
 - **Shared infrastructure, independent process.** Same `REPO_BASE` auto-detection,
-  same selectable-implementer/selectable-reviewer plumbing (`ASF-FEAT-SELECTABLE-IMPLEMENTER`,
-  `ASF-FEAT-SELECTABLE-REVIEWER`), own stop file
+  same selectable-implementer/selectable-reviewer plumbing (`ASF-TASK-SELECTABLE-IMPLEMENTER`,
+  `ASF-TASK-SELECTABLE-REVIEWER`), own stop file
   (`~/sisyphus-logs/<project>-builder.stop`) so it runs concurrently with
   `babysit-with-review.sh` and `babysit-work-prep.sh` without lock contention.
 - **Single-process-per-project locking, not per-ticket claiming.** The shipped
