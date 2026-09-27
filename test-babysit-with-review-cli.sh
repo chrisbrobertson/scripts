@@ -490,5 +490,23 @@ assert_contains "$TMP/sentinel-none.out" 'NONE' 'sentinel: ordinary output with 
 printf 'STOP\nbut then kept talking' | run_script outer-sentinel "$TMP/sentinel-mid-text.record" "$TMP/home" > "$TMP/sentinel-mid-text.out"
 assert_contains "$TMP/sentinel-mid-text.out" 'NONE' 'sentinel: STOP is only honored on the final line, not mid-output'
 
+# MAX_ITER exhaustion: converts QA-TEST-PLAN.md Suite 1 TC-1.8 (loop exits
+# with "Hit MAX_ITER" after MAX_ITER iterations without an earlier STOP) into
+# deterministic coverage. outer-maxiter feeds simulated post-iteration
+# counters through the real maxiter_exhausted() function extracted from the
+# outer loop; no Claude/Codex/gh involved.
+: > "$TMP/maxiter-reached.record"
+printf '1\n2\n3\n4\n5\n' | MAX_ITER=5 run_script outer-maxiter "$TMP/maxiter-reached.record" "$TMP/home" > "$TMP/maxiter-reached.out"
+assert_contains "$TMP/maxiter-reached.out" 'iter=5 exhausted=1' 'max-iter: exhaustion fires once iter reaches MAX_ITER'
+assert_not_contains "$TMP/maxiter-reached.out" 'iter=4 exhausted=1' 'max-iter: exhaustion does not fire before MAX_ITER'
+
+: > "$TMP/maxiter-not-reached.record"
+printf '4\n' | MAX_ITER=5 run_script outer-maxiter "$TMP/maxiter-not-reached.record" "$TMP/home" > "$TMP/maxiter-not-reached.out"
+assert_contains "$TMP/maxiter-not-reached.out" 'iter=4 exhausted=0' 'max-iter: an early break (iter < MAX_ITER) is not exhaustion'
+
+: > "$TMP/maxiter-past.record"
+printf '6\n' | MAX_ITER=5 run_script outer-maxiter "$TMP/maxiter-past.record" "$TMP/home" > "$TMP/maxiter-past.out"
+assert_contains "$TMP/maxiter-past.out" 'iter=6 exhausted=1' 'max-iter: uses >= so a counter past MAX_ITER still counts as exhausted'
+
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]
