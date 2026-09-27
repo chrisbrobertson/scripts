@@ -71,21 +71,21 @@ Chris Robertson: the label state machine and claim protocol below are implemente
 - `gh api repos/{owner}/{repo}/issues/{n}/sub_issues` (GET) and GraphQL `subIssues` / `subIssuesSummary` / `parent` work for this account (probed 2026-09-19, read only).
 - Agent and human share one GitHub login here, so comment authorship carries no information.
 - `babysit-builder.sh` posts a `codex-review=success` commit status at convergence; `setup-branch-protection.sh` makes that status required on main. Both are reused unchanged.
+- Creating a sub-issue relationship is `POST /repos/{owner}/{repo}/issues/{parent}/sub_issues` with `sub_issue_id` set to the child's numeric `id` (not its `number`); verified against live GitHub 2026-09-20 (`bzr_create_sub_issue`, `lib/bazaar-common.sh`).
 
 ## What we assume
-- [ASSUMPTION] Creating a sub-issue relationship is `POST /repos/{owner}/{repo}/issues/{parent}/sub_issues` with `sub_issue_id` set to the child's numeric `id` (not its `number`), per GitHub REST docs; not yet exercised here. Flips if: the endpoint needs a different payload or a feature flag on the repo, in which case the approval sweep falls back to a tasklist in the parent body.
 - [ASSUMPTION] One controller process per repo per role; `--workers N` bounds concurrent workers inside that process. Flips if: the staff-fleet dispatcher wants to run controllers on several hosts for one repo, which would need the home-lab-monitor lock added to the claim step.
 - [ASSUMPTION] A claim is a label (`bzr-drafting` or `bzr-building`) plus a comment `<!-- bzr-claim role=… host=… pid=… ts=… -->`. It is released only when the controller on that host finds the pid dead. There is no time limit. Flips if: a worker hangs forever (pid alive, no progress), in which case the operator kills it and the next tick releases the claim; an automatic no-progress detector would be a new feature.
-- [ASSUMPTION] Worktrees live under `~/.bazaar/<owner>-<repo>/wt/<issue>` and logs under `~/.bazaar/<owner>-<repo>/logs/`, outside the repo checkout so the operator's working tree is never touched. Flips if: the operator wants worktrees beside the repo as the ASF scripts do.
+- [ASSUMPTION] Worktrees live under `~/.bazaar/<owner>-<repo>/wt/<issue>` for the build worker and `~/.bazaar/<owner>-<repo>/wt/spec-<issue>` for the issue worker, and logs under `~/.bazaar/<owner>-<repo>/logs/`, outside the repo checkout so the operator's working tree is never touched. Flips if: the operator wants worktrees beside the repo as the ASF scripts do.
 - [ASSUMPTION] Transient failures are counted per issue and role with `bzr-attempt` marker comments; the third escalates to `bzr-blocked`. Flips if: see L1.
 - [ASSUMPTION] Spec review and code review share one `run_review_cycle` with a `--mode` switch; only prompts and the "what to do at convergence" hook differ. Flips if: extraction shows the two loops differ in control flow, not only in text.
 
 ## Cross-component contracts
 
 ### Controller → GitHub (queue read)
-- **Protocol:** `gh issue list --label <state> --state open --json number,title,labels,createdAt,updatedAt --limit 1000`, plus `gh api graphql` for `parent` to exclude sub-issues from the issue-role queue.
-- **Request shape:** one query per queue label per tick.
-- **Response shape:** JSON array; controller sorts by priority label (`P0`..`P3`, then none) then `createdAt` ascending.
+- **Protocol:** one paginated `gh api graphql` call per tick fetches every open issue (`number title createdAt body labels(first:50) parent{number}`), cached to a shared JSON file; each controller filters and sorts that JSON client-side in `python3` rather than issuing per-label `gh` queries.
+- **Request shape:** one GraphQL call per tick, shared by both controllers when they run against the same cache; `parent` is used to exclude sub-issues from both role queues.
+- **Response shape:** cached JSON array; each controller's `bzr_candidates` filters by label/role and sorts by priority label (`P0`..`P3`, then none) then `createdAt` ascending.
 - **Retry policy:** a failed `gh` call skips the tick; three consecutive failures halt the controller with exit 1.
 - **Idempotency:** read-only.
 
@@ -96,16 +96,19 @@ Chris Robertson: the label state machine and claim protocol below are implemente
 - **Retry policy:** none by the controller; the label state decides whether the issue is requeued.
 - **Idempotency:** a re-spawn on the same issue must find its prior branch and PR and resume, not restart.
 
-### Worker → GitHub (state write)
-- **Protocol:** `gh issue edit --add-label/--remove-label`, `gh issue comment`, `gh pr create/edit/comment`, `gh api` for sub-issues and commit status.
+### Controller → GitHub (state write)
+- **Protocol:** `gh issue edit --add-label/--remove-label` via `bzr_transition`, called only by the controllers (never by workers).
 - **Invariant:** every state transition is one add plus one remove in that order, so an interrupted write leaves the issue with two labels (detectable) rather than none (lost).
+
+### Worker → GitHub (state write)
+- **Protocol:** `gh issue comment`, `gh pr create/edit/comment`, `gh api` for sub-issues and commit status. The worker never edits labels on the parent issue — that is the controller's job exclusively — with one exception: the build worker may add `bzr-blocked` to a skipped sub-issue (not the parent).
 
 ### Worker → lib/bazaar-review.sh
 - **Protocol:** sourced bash library, see [BZR-FEAT-REVIEW-LIB](L3-review-lib.md).
 
 ### Human → system
 - **Bounce reply:** any new comment on an issue in `bzr-needs-info` whose body lacks the `<!-- bzr-` marker and is newer than the agent's last marker comment requeues the issue (controller removes `bzr-needs-info`, so the issue is intake again).
-- **Approval:** a comment on the spec PR matching `\bapproved\b` (case-insensitive) or a GitHub review with state `APPROVED`, from a login in `BZR_APPROVERS` (default: the authenticated user). Agent comments never contain that word; this is an invariant of the issue worker.
+- **Approval:** implemented as `pr_is_approved` in `bazaar-issues.sh` (the controller, not the issue worker) — a GitHub review with state `APPROVED`, or a comment matching `\bapproved\b` (case-insensitive) with negated forms (`not approved`, `unapproved`, etc.) excluded and marker/bot comments (`<!-- bzr-`, `**Codex review`, `**Claude review`, `**bazaar`, `**babysit` prefixes) excluded, from a login in `BZR_APPROVERS` (default: the authenticated user; `"*"` matches any login).
 - **Merge:** the human merges the build PR. Merge closes the parent issue via `Closes #N` in the PR body.
 
 ## SLOs and latency budgets
@@ -118,7 +121,7 @@ Deferred. Observed ASF numbers: one implementer pass 5-30 min; one reviewer pass
 - **Model backend down:** workers exit STUCK; issues return to queue as one attempt each; a long outage escalates every touched issue after three.
 
 ## bazaar-infra.yaml dependencies
-N/A. External: `gh` (authenticated), `git`, `claude` CLI, `codex` CLI (only when a role selects codex), `jq`.
+N/A. External: `gh` (authenticated), `git`, `claude` CLI, `codex` CLI (only when a role selects codex), `python3` (all JSON parsing runs through it; the hosts have no `jq`).
 
 ## Compliance posture
 Single-user, self-hosted. Code and issue text go to Anthropic and OpenAI per the selected harnesses, as today. No PII beyond what is already in the repo's issues.
@@ -130,9 +133,9 @@ Single-user, self-hosted. Code and issue text go to Anthropic and OpenAI per the
 - Compliance: N/A
 
 ## Failure modes & blast radius
-- **Two controllers of the same role on one repo:** both read the same queue. Blast: double claim race. Mitigation: label claim is checked again immediately before spawn, and the worker aborts if the claim comment it posted is not the newest claim comment.
+- **Two controllers of the same role on one repo:** both read the same queue. Blast: double claim race. Mitigation: label claim is checked again immediately before spawn (invariant 4). There is no worker-side claim-comment check; the claim comment itself is posted by the controller inside the spawn subshell, before the worker runs.
 - **Claim released while the worker is alive:** cannot happen by time; only a wrong pid check could do it. Blast: conflicting pushes on one issue. Mitigation: pid check uses `kill -0` plus the process start time recorded in the marker, so a recycled pid is not mistaken for the worker.
-- **Label deleted by hand:** the issue re-enters intake and a second spec draft starts. Blast: a duplicate spec PR. Mitigation: the issue worker checks for an existing `bzr/spec-<n>` branch and resumes it; `--audit` lists unlabelled issues that have a `bzr/` branch or claim comment.
+- **Label deleted by hand:** the issue re-enters intake and a second spec draft starts. Blast: a duplicate spec PR. Mitigation: the issue worker checks for an existing `bzr/spec-<n>` branch and resumes it.
 - **Lib extraction regresses the review cycle:** every worker affected. Mitigation: the recording-stub harness (`BABYSIT_TEST_MODE` pattern) is ported to the lib before either worker uses it.
 
 # Bounds
@@ -159,7 +162,7 @@ Deferred. Informally tracked from logs: dispatches per tick, dead-pid releases, 
 Deferred.
 
 ## Audit checkpoints
-- `--audit` on either script (read-only): issues with two `bzr-*` labels, claims naming dead pids, `bzr/` branches with no open PR, open PRs with no `bzr-*` parent issue, sub-issue markers whose L4 no longer exists.
+- `--audit` on either script (read-only, `bzr_audit_common` plus per-role `role_audit`): issues carrying more than one `bzr-*` label, claims naming dead pids, and (per role) `bzr-spec-review` issues with no PR on `bzr/spec-<n>` (issues) or `bzr-pr-ready` issues with no build PR referencing them (build). There is no orphan-branch, orphan-PR, or stale-sub-issue-marker scan yet — that would be new work, not a shipped check.
 
 ## Capacity headroom triggers
 - Queue depth of `bzr-ready` above `2 × workers` for 24h → raise `--workers` or add a host.
