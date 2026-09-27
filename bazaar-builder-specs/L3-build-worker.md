@@ -119,7 +119,7 @@ Per sub-issue: 10-40 min implement plus 1-7 min per review cycle times up to 6. 
 Inherits `gh` auth and branch protection. The worker's only write to main-adjacent state is the commit status, and only at finish.
 
 ## Telemetry contract
-`[build:<n>] phase=<p> sub=<k>/<K> …`, `review cycle=<c> blocking=<b>`, `sentinel=<word>`. Sink: `$BZR_HOME/<repo>/logs/build-<n>-<ts>.log`.
+Log lines carry the tag `[build-worker]` (set via `BZR_LOG_TAG`, not `[build:<n>]`); the issue number is in the message body as `#<n>`, e.g. `[build-worker] #123 round=1 new branch bzr/123-slug`, `[build-worker] #123 unit #2 converged after 2 cycle(s)`, `[build-worker] #123 sentinel=PR_READY`. Phase is recorded as a marker comment (`<!-- bzr-build-worker phase=<p> ts=<t> -->`), not as a log line. Review-cycle detail comes from the shared review lib's `run_review_cycle --mode code`: `[review:code] cycle=<c>/<max> blocking=<b> recommended=<r> new=<n> recurrence=<r>`. Sink: `$BZR_HOME/<repo>/logs/build-<n>-<ts>.log`.
 
 ## Verifiers
 - Tech lead: Chris Robertson
