@@ -117,14 +117,19 @@ SOURCE_EXTENSIONS = {
 
 
 def find_referenced_files(body):
-    """Backtick-quoted source-file paths mentioned in a spec's body, e.g. `babysit-builder.sh`.
+    """Backtick-quoted source-file paths mentioned in a spec's body, e.g. `babysit-builder.sh`
+    or a line-anchored reference like `babysit-builder.sh:1324` / `lib/foo.sh:64-93`.
 
     Fallback signal for corpora (like this repo's) whose spec-guide schema has no
     `components:` frontmatter field — specs here name the scripts they document
-    inline instead.
+    inline instead. The optional `:LINE`, `:LINE-LINE`, or `:LINE,LINE` suffix is
+    stripped before the extension/existence check; specs in this repo cite line
+    numbers heavily (e.g. `babysit-with-review.sh:1131`) and a colon inside the
+    backticks otherwise breaks the match entirely, leaving the spec's impl status
+    unresolvable (`?`) even though the referenced file exists.
     """
     refs = set()
-    for m in re.finditer(r"`([\w./-]+)`", body):
+    for m in re.finditer(r"`([\w./-]+)(?::[\d,-]+)?`", body):
         token = m.group(1)
         if token.startswith("./"):
             token = token[2:]

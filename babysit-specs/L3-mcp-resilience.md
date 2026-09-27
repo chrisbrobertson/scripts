@@ -103,7 +103,7 @@ codex_review_with_retry "<codex_prompt>"
 
 ### `valid_review_structure` contract
 
-The function `valid_review_structure` (awk, babysit-with-review.sh) validates TMP_REVIEW. It passes (returns 0) iff ALL of:
+The function `valid_review_structure` (awk, `babysit-with-review.sh`) validates TMP_REVIEW. It passes (returns 0) iff ALL of:
 - File is non-empty
 - Optionally: exactly one `## ADJUDICATION` heading, appearing *before* any other heading; if present, must have ≥1 bullet
 - Exactly one `## BLOCKING` heading, followed by exactly one `## RECOMMENDED`, followed by exactly one `## INFORMATION` (in that order)
