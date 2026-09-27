@@ -1,8 +1,9 @@
 # QA Test Plan — babysit-with-review.sh
 
 **Owner:** qa-lead  
-**Status:** Test Suite 4 automated and passing (112/112, last run 2026-09-27); Test
-Suites 1-3 (manual smoke tests against live Claude/Codex/gh) still not executed  
+**Status:** Test Suite 4 automated and passing (130/130, last run 2026-09-27), now
+including automated pre-flight coverage for TC-1.2 (see Suite 1); Test Suites 1-3
+otherwise remain manual smoke tests against live Claude/Codex/gh, not yet executed  
 **Priority:** Medium (internal tool, existing implementation to verify)
 
 ## Test Strategy
@@ -43,6 +44,16 @@ Suites 1-3 (manual smoke tests against live Claude/Codex/gh) still not executed
 ---
 
 ### TC-1.2: Pre-flight Check — Unstaged Changes
+**Status: automated, not manual (added 2026-09-27).** The full pre-flight gate —
+unstaged modifications, staged-uncommitted changes, untracked non-ignored files,
+auto-switch off a non-default branch, ahead/diverged/behind-then-fast-forward
+against origin — now has deterministic coverage in
+`test-babysit-with-review-cli.sh` via `BABYSIT_TEST_MODE=outer-preflight`, which
+runs the real pre-flight block (git state only; no live Claude/Codex/gh) against
+disposable repos with a bare `origin` remote and exits before the outer loop's
+first iteration. This TC's manual steps below remain as the original acceptance
+reference; the automated cases are the ones that actually run before every commit.
+
 **Given:** Unstaged changes in working tree  
 **When:** `./babysit-with-review.sh` starts  
 **Then:** 
@@ -446,8 +457,10 @@ were drafted (2026-06-28). It is deterministic and requires no live Claude/Codex
 calls, so — unlike Suites 1-3 — it runs in CI-suitable time and is expected to pass
 before every commit that touches harness selection or review-structure validation.
 
-**Run:** `./test-babysit-with-review-cli.sh` — last run 2026-09-27, 112 assertions,
-0 failed.
+**Run:** `./test-babysit-with-review-cli.sh` — last run 2026-09-27, 130 assertions,
+0 failed. 18 of those are the Suite 1 pre-flight cases (TC-1.2) added the same day;
+everything else below is selectable-implementer/reviewer and review-structure
+coverage.
 
 **Coverage (paraphrased from the harness's own assertions, not a numbered TC list —
 add TC IDs here if this suite is ever split into individually-run cases):**
