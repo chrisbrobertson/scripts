@@ -90,7 +90,7 @@ Chris Robertson: the label state machine and claim protocol below are implemente
 - **Idempotency:** read-only.
 
 ### Controller → worker (spawn)
-- **Protocol:** subprocess with env `BZR_ROLE`, `BZR_ISSUE`, `BZR_REPO`, `BZR_WORKTREE`, `BZR_BRANCH`, `BZR_LOG`, harness/model/effort variables.
+- **Protocol:** subprocess with env `BZR_ROLE`, `BZR_ISSUE`, `BZR_REPO`, `BZR_REPO_DIR`, `BZR_HOME`, `BZR_HOST`, `BZR_LOG`, `DEFAULT_BRANCH`, `BZR_SENTINEL`, `SCRIPTS_DIR`, `BZR_APPROVERS`, harness/model/effort variables (`IMPLEMENTER*`, `REVIEWER*`, `MAX_REVIEW_CYCLES`, `MAX_SPEC_REVIEW_CYCLES`). There is no `BZR_WORKTREE`/`BZR_BRANCH`; the worker derives its own worktree and branch path from `BZR_REPO_DIR` and `BZR_ISSUE` (see the L3s).
 - **Request shape:** exactly one issue number.
 - **Response shape:** worker exit code plus the last line of its transcript, one sentinel (see L3s).
 - **Retry policy:** none by the controller; the label state decides whether the issue is requeued.
