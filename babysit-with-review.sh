@@ -25,11 +25,14 @@
 # `review-codex-no-credits` label and halt the same way for their own
 # failure classes. At the top of every outer iteration, the pre-iter scan
 # retries whichever labelled PR it finds first (in that priority order)
-# automatically before running the implementer — this is what resumes the
-# PR once the operator fixes the underlying cause and restarts (or waits
-# for the next outer iteration). The label itself must NOT be removed by
-# hand: the sweep finds the stalled PR by that label and removes it itself;
-# removing it manually leaves the PR stuck in draft with nothing to find it.
+# automatically before running the implementer. For `review-mcp-outage` the
+# wrapper is still running, so this just happens on its own at the next
+# iteration; for `review-codex-outdated`/`review-codex-no-credits` the
+# wrapper has already halted, so it only happens once the operator fixes
+# the underlying cause and restarts. The label itself must NOT be removed
+# by hand in either case: the sweep finds the stalled PR by that label and
+# removes it itself; removing it manually leaves the PR stuck in draft with
+# nothing to find it.
 # `review-incomplete` = human action required, no auto-retry.
 # `review-mcp-outage` = auto-retry; transient, often clears on its own.
 # `review-codex-outdated` = Codex CLI too old for model; upgrade CLI then restart.
@@ -81,15 +84,15 @@ PR labels used by the review cycle:
   review-incomplete      Human intervention required; wrapper will NOT retry.
   review-mcp-outage      Codex MCP backend was unreachable; wrapper retries
                          automatically at the top of each outer iteration.
-  review-codex-outdated  Codex CLI is too old for the configured model; run
-                         \`codex update\`, then restart (or wait if it's
-                         still running — the wrapper retries automatically
-                         at the top of the next outer iteration). Do NOT
-                         remove the label yourself; the wrapper's retry
-                         sweep finds the PR by it and removes it.
-  review-codex-no-credits  Codex workspace has no credits; add credits,
-                           then restart (or wait). Retried the same way;
-                           do NOT remove the label yourself.
+  review-codex-outdated  Codex CLI is too old for the configured model; the
+                         wrapper halts when this happens, so run
+                         \`codex update\` then restart it — the retry sweep
+                         finds the PR by this label at the top of the first
+                         outer iteration and resumes it automatically. Do
+                         NOT remove the label yourself.
+  review-codex-no-credits  Codex workspace has no credits; same as above —
+                           the wrapper has already halted, so add credits
+                           then restart. Do NOT remove the label yourself.
 
 Logs land in ~/sisyphus-logs/<project>-<timestamp>-<pid>.log.
 
@@ -1025,7 +1028,7 @@ Reason: ${reason}
 
 The Codex CLI is too old for the configured model. No code-quality review took place.
 
-To resume: upgrade the Codex CLI (\`codex update\`), then restart the babysitter (or wait for the next outer iteration if it's still running). Do NOT remove the \`review-codex-outdated\` label yourself — the babysitter's stalled-PR retry sweep finds this PR by that label, removes it, and re-runs the review automatically; removing it manually leaves the PR stuck in draft."
+The babysitter has halted — this is not recoverable while it's running. To resume: upgrade the Codex CLI (\`codex update\`), then restart the babysitter. Do NOT remove the \`review-codex-outdated\` label yourself — the stalled-PR retry sweep finds this PR by that label, removes it, and re-runs the review automatically on the next start; removing it manually leaves the PR stuck in draft."
   printf '%s\n' "$body" \
     | gh pr comment "$pr_num" --body-file - >>"$LOG" 2>&1 \
     || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
@@ -1066,7 +1069,7 @@ Reason: ${reason}
 
 The Codex workspace has no credits remaining. No code-quality review took place.
 
-To resume: add credits to the Codex workspace, then restart the babysitter (or wait for the next outer iteration if it's still running). Do NOT remove the \`review-codex-no-credits\` label yourself — the babysitter's stalled-PR retry sweep finds this PR by that label, removes it, and re-runs the review automatically; removing it manually leaves the PR stuck in draft."
+The babysitter has halted — this is not recoverable while it's running. To resume: add credits to the Codex workspace, then restart the babysitter. Do NOT remove the \`review-codex-no-credits\` label yourself — the stalled-PR retry sweep finds this PR by that label, removes it, and re-runs the review automatically on the next start; removing it manually leaves the PR stuck in draft."
   printf '%s\n' "$body" \
     | gh pr comment "$pr_num" --body-file - >>"$LOG" 2>&1 \
     || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
@@ -2013,8 +2016,9 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
   # The label search here is the ONLY way a stalled PR is found again, so
   # the label must still be on the PR when this runs — operators must NOT
   # remove it manually; the documented recovery is "fix the underlying
-  # cause, then restart (or wait for the next outer iteration)". Removing
-  # the label yourself makes this search silently find nothing, leaving the
+  # cause, then restart" (review-mcp-outage doesn't need a restart since the
+  # wrapper never halted for it — it just resolves on the next iteration).
+  # Removing the label yourself makes this search silently find nothing, leaving the
   # PR in draft forever (see #82/#104). The PR stays in draft through the
   # review itself; only merge_reviewed_pr() un-drafts it, and only after a
   # clean review, so an in-progress retry is never briefly mergeable.
