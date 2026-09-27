@@ -49,6 +49,10 @@ bazaar-build.sh only:
   --issue N                 Dispatch this issue once and exit; requires bzr-ready unless --force.
   --force                   Skip the label check (never the precheck).
 
+bazaar-issues.sh only:
+  --issue N                 Dispatch this issue once and exit; issue must carry no bzr-* label unless --force.
+  --force                   Dispatch even if the issue carries a bzr-* label (replaced by bzr-drafting).
+
 Env: BZR_APPROVERS (default: gh api user login), MAX_ATTEMPTS (3),
      MAX_REVIEW_CYCLES (6), MAX_SPEC_REVIEW_CYCLES (6), BZR_HOME (~/.bazaar),
      BZR_NO_STREAM (0; set 1 to disable the worker-log relay below)
@@ -70,7 +74,7 @@ Marker comments (agent-authored, first line):
 - **Role hooks** a controller script defines over the common lib: `role_parse_arg` (runs in the caller's shell, sets `BZR_ROLE_CONSUMED`), `role_claim_label`, `role_queue_label`, `role_release_label`, `role_candidates`, `role_worker_cmd`, `role_sweeps`, `role_on_worker_exit`, optional `role_dry_sweeps` and `role_audit`.
 - **No jq, bash 3.2.** All JSON goes through python3; `gh --jq` is avoided so the test stub can serve plain JSON; the child registry is a directory of pid files; the worker subshell gets its pid from `bash -c 'echo $PPID'` (no `BASHPID`).
 - **Dry-run** runs no sweeps with side effects; `role_dry_sweeps` reports would-approve / would-escalate.
-- **`--force`** on `bazaar-build.sh --issue N` bypasses the pre-claim label check (`BZR_SKIP_LABEL_CHECK`) but never the worker's precheck.
+- **`--issue N` and `--force` exist on both scripts, with opposite label semantics.** On `bazaar-build.sh`, `--issue N` requires the issue already be `bzr-ready`; `--force` bypasses that check (`BZR_SKIP_LABEL_CHECK`) but never the worker's precheck. On `bazaar-issues.sh`, `--issue N` requires the issue carry no `bzr-*` label; `--force` dispatches it anyway, replacing whatever `bzr-*` label it carries with `bzr-drafting`. Both set the same `BZR_SKIP_LABEL_CHECK` flag under the hood.
 - **Escalation** replaces every `bzr-*` state label with `bzr-blocked`, so a rejected `bzr-spec-review` issue ends with exactly one label.
 - **Approval marker** is `<!-- bzr-spec-merged pr=N -->`; the comment guard refuses any agent body containing the approval word, including marker names.
 - **Local checkout for the approval sweep:** the git repo the controller runs in, else a clone under `~/.bazaar/<owner>-<repo>/clone`.
@@ -157,7 +161,7 @@ Tick under 10s with an empty queue; at most one model call per tick.
 Inherits `gh` auth. Approval accepted only from `BZR_APPROVERS`. The word "approved" is forbidden in every agent-authored comment (grep guard in the shared comment helper).
 
 ## Telemetry contract
-Log lines `[ctl:<role>]`: `tick`, `dispatch <issue> worker=<pid>`, `skip <issue> <reason>`, `claim-failed`, `dead-pid-release <issue>`, `attempt <issue> n=<K>`, `escalate <issue>`, `bounce <issue>`, `approved <issue> pr=<n>`, `merged-sweep <issue> …`, `worker-exit <issue> rc=<n> sentinel=<word>`. Sink: `$BZR_HOME/<repo>/logs/ctl-<role>-<date>.log`.
+Log lines `[ctl:<role>]`: `tick: queue empty` (only when nothing is in the queue), `dispatch <issue> worker=<pid>`, `skip <issue> <reason>`, `claim-failed <issue>`, `dead-pid-release <issue>`, `attempt <issue> n=<K> reason=<...>`, `escalate <issue> reason=<...>`, `bounce <issue>`, `approved <issue> pr=<n>`, `merged-sweep <issue> …`, `worker-exit <issue> rc=<n> sentinel=<word>`. There is no unconditional per-tick log line — a tick with candidates emits only `dispatch`/`skip` lines. Sink: `$BZR_HOME/<repo>/logs/ctl-<role>-<date>.log`.
 
 **Worker-log relay (2026-09-20).** On dispatch, the controller also starts a python3 tailer (`bzr_stream_worker`) against the new worker's log file. Any line matching `^\s*\[` — phase notes, tool calls, per-cycle review counts, sentinels — is relayed to the controller's own stderr as `[#<issue>] <line>`; raw model JSON and prompt dumps stay in the worker's log file only. The tailer exits on its own once the worker's pid is gone (one final read first). `BZR_NO_STREAM=1` disables the relay (e.g. cron). Every `gh` write the controller and workers make discards stdout so issue/PR URLs `gh` prints no longer reach the terminal or the log; stderr is unaffected.
 
