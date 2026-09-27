@@ -104,6 +104,15 @@ creates the lock file itself and never expects to find one already there)
 ---
 
 ### TC-1.3b: Lock File Semantics — No Pre-Existing Lock
+**Status: automated, not manual (added 2026-09-27).** Split out of TC-1.3
+in the same commit that corrected it (both describe the shipped
+`BABYSIT_TEST_MODE=outer-preflight` collision check, not two independent
+behaviors). This scenario — no pre-existing stop file, startup proceeds
+normally — is covered deterministically in `test-babysit-with-review-cli.sh`
+as the "TC-1.3 AT3b" case, run against a real (non-bare) preflight repo; no
+Claude/Codex/gh involved. The manual steps below remain as the acceptance
+reference.
+
 **Given:** No lock file exists before start-up  
 **When:** Script runs  
 **Then:** Script creates the lock file itself; first iteration executes normally
