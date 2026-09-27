@@ -112,7 +112,7 @@ one — any ticket (GitHub or Jira) carrying that label is eligible work.
 ## What we know
 Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOUS-DEV
 (owner-approved 2026-08-27), plus mechanics directly inherited from the shipped
-`babysit-with-review.sh` v1.1.0 implementation this script mirrors:
+`babysit-with-review.sh` v1.1.2 implementation this script mirrors:
 
 - **`build-ready` label is the work source, ticket type is not constrained.** The
   build queue is any ticket — GitHub issue or Jira issue, sub-ticket or otherwise —
@@ -138,7 +138,7 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
   `codex-review=success`, so the status can never go green against a SHA the PR does
   not carry. Confirmed against
   the shipped implementation: `babysit-with-review.sh` uses `wip/<project>/iter-<N>`
-  off `HEAD` (`git worktree add -b "$_wt_branch" "$_wt_dir" HEAD`, line ~1955);
+  off `HEAD` (`git worktree add -b "$_wt_branch" "$_wt_dir" HEAD`, line ~1991);
   `babysit-work-prep.sh` uses `work-prep/<slug>-<pid>` off the default branch's SHA
   (`git worktree add -b "$branch" "$worktree" "$base_sha"`, line ~1243). Neither ever
   reuses a branch across attempts, so a rebuilt ticket starts from a genuinely clean
