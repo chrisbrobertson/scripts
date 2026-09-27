@@ -286,6 +286,18 @@ remain the acceptance reference for those.
 ---
 
 ### TC-2.4: STUCK_REVIEW Sentinel
+**Status: automated (sentinel classification only), not manual (added
+2026-09-27).** `review-sentinel` in `test-babysit-with-review-cli.sh` drives
+the real `parse_review_sentinel()` (extracted from `run_review_cycle`'s
+implementer-response handling) over a simulated implementer RESULT on
+stdin — covering `STUCK_REVIEW <reason>` on the last line, bare
+`DONE_REVIEW`, no sentinel at all (classified `NONE`, treated as
+`DONE_REVIEW` by the caller), and a `STUCK_REVIEW`-looking line that isn't
+the final line (not honored). The `review-incomplete` label application and
+the function's return code are not exercised by this harness (no
+Claude/Codex/gh involved); the manual steps below remain the acceptance
+reference for those.
+
 **Given:** Claude outputs `STUCK_REVIEW cannot fix X`  
 **When:** Cycle processes response  
 **Then:** 
@@ -301,6 +313,16 @@ remain the acceptance reference for those.
 ---
 
 ### TC-2.5: HEAD Unchanged After DONE_REVIEW (Defensive Check)
+**Status: automated (predicate only), not manual (added 2026-09-27).**
+`review-head-unchanged` in `test-babysit-with-review-cli.sh` drives the real
+`review_head_unchanged()` (extracted from `run_review_cycle`'s post-pass
+check) over `pre_sha post_sha` pairs on stdin — covering identical SHAs
+(flagged), differing SHAs (not flagged), and an empty pre-SHA (never
+flagged, since a failed `git rev-parse` shouldn't be conflated with "no
+commits made"). The `review-incomplete` label application is not exercised
+by this harness (no Claude/Codex/gh involved); the manual steps below
+remain the acceptance reference for that.
+
 **Given:** Claude outputs `DONE_REVIEW` but HEAD SHA unchanged  
 **When:** Cycle checks HEAD  
 **Then:** PR labeled `review-incomplete`
@@ -310,8 +332,6 @@ remain the acceptance reference for those.
 2. Mock Claude to output DONE_REVIEW without making commits (requires test harness)
 3. Verify: Log shows "HEAD unchanged (no commits made) — bailing review cycle"
 4. Verify: PR labeled `review-incomplete`
-
-**Note:** Difficult to test without mocking. May skip in favor of code review verification.
 
 ---
 
@@ -643,9 +663,17 @@ stub mode ships.
 
 **Partially done, for Suite 2's PR-feedback filter:** `BABYSIT_TEST_MODE=review-feedback`
 drives the real `collect_pr_feedback()` against a stubbed `gh` (`test-babysit-review-feedback.sh`),
-covering TC-2.10/TC-2.11. The rest of Suite 2's review-cycle state machine
-(TC-2.1-2.9) is untouched by this — no stub exists yet for `run_review_cycle`'s
-cycle loop, sentinel handling, or label application.
+covering TC-2.10/TC-2.11.
+
+**Partially done, for Suite 2's review-cycle sentinel handling:**
+`BABYSIT_TEST_MODE` has sibling stub modes `review-sentinel` and
+`review-head-unchanged` that extract `run_review_cycle`'s implementer-sentinel
+classification and its HEAD-unchanged defensive check into pure functions
+(`parse_review_sentinel()`, `review_head_unchanged()`) and drive them
+deterministically — no Claude/Codex/gh involved. This covers TC-2.4 and TC-2.5
+(see each TC's own status note above). The cycle loop itself, label
+application, and TC-2.6/2.8/2.9 are untouched by this — no stub exists yet for
+those.
 
 **Still open, for the rest of Test Suite 2 and all of Suite 3** (review-cycle state
 machine, MCP resilience): those cases still require live Claude/Codex/gh calls or

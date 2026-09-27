@@ -578,5 +578,50 @@ printf '## RECOMMENDED\n- (none)\n\n## INFORMATION\n- (none)\n' \
   | run_script review-blocking-count "$TMP/blocking-count-no-section.record" "$TMP/home" > "$TMP/blocking-count-no-section.out"
 assert_contains "$TMP/blocking-count-no-section.out" '0' 'blocking count: a review with no BLOCKING heading at all counts as zero'
 
+# Review-cycle sentinel detection: converts QA-TEST-PLAN.md Suite 2 TC-2.4
+# (STUCK_REVIEW bails the review cycle) into deterministic coverage.
+# review-sentinel feeds one simulated implementer RESULT via stdin through
+# the real parse_review_sentinel() function extracted from run_review_cycle;
+# no Claude/Codex/gh involved.
+: > "$TMP/review-sentinel-stuck.record"
+printf 'tried a few things\nSTUCK_REVIEW cannot fix without external API change' \
+  | run_script review-sentinel "$TMP/review-sentinel-stuck.record" "$TMP/home" > "$TMP/review-sentinel-stuck.out"
+assert_contains "$TMP/review-sentinel-stuck.out" 'STUCK_REVIEW cannot fix without external API change' 'review sentinel: STUCK_REVIEW on last line is detected with its reason (TC-2.4)'
+
+: > "$TMP/review-sentinel-done.record"
+printf 'addressed the findings\nDONE_REVIEW' \
+  | run_script review-sentinel "$TMP/review-sentinel-done.record" "$TMP/home" > "$TMP/review-sentinel-done.out"
+assert_contains "$TMP/review-sentinel-done.out" 'DONE_REVIEW' 'review sentinel: bare DONE_REVIEW on last line is detected'
+
+: > "$TMP/review-sentinel-none.record"
+printf 'still working, no sentinel yet' \
+  | run_script review-sentinel "$TMP/review-sentinel-none.record" "$TMP/home" > "$TMP/review-sentinel-none.out"
+assert_contains "$TMP/review-sentinel-none.out" 'NONE' 'review sentinel: ordinary output with no sentinel line is classified NONE, treated as DONE_REVIEW by the caller'
+
+: > "$TMP/review-sentinel-mid-text.record"
+printf 'STUCK_REVIEW blocked\nbut then kept talking' \
+  | run_script review-sentinel "$TMP/review-sentinel-mid-text.record" "$TMP/home" > "$TMP/review-sentinel-mid-text.out"
+assert_contains "$TMP/review-sentinel-mid-text.out" 'NONE' 'review sentinel: STUCK_REVIEW is only honored on the final line, not mid-output'
+
+# HEAD-unchanged defensive check: converts QA-TEST-PLAN.md Suite 2 TC-2.5
+# (DONE_REVIEW with no commits made bails the review cycle) into
+# deterministic coverage. review-head-unchanged feeds "pre_sha post_sha"
+# pairs on stdin through the real review_head_unchanged() function extracted
+# from run_review_cycle; no Claude/Codex/gh involved.
+: > "$TMP/review-head-unchanged.record"
+printf 'abc123 abc123\n' \
+  | run_script review-head-unchanged "$TMP/review-head-unchanged.record" "$TMP/home" > "$TMP/review-head-unchanged.out"
+assert_contains "$TMP/review-head-unchanged.out" 'pre=abc123 post=abc123 unchanged=1' 'HEAD unchanged: identical pre/post SHA is detected as no commits made (TC-2.5)'
+
+: > "$TMP/review-head-changed.record"
+printf 'abc123 def456\n' \
+  | run_script review-head-unchanged "$TMP/review-head-changed.record" "$TMP/home" > "$TMP/review-head-changed.out"
+assert_contains "$TMP/review-head-changed.out" 'pre=abc123 post=def456 unchanged=0' 'HEAD unchanged: differing pre/post SHA is not flagged (commits were made)'
+
+: > "$TMP/review-head-empty-pre.record"
+printf ' \n' \
+  | run_script review-head-unchanged "$TMP/review-head-empty-pre.record" "$TMP/home" > "$TMP/review-head-empty-pre.out"
+assert_contains "$TMP/review-head-empty-pre.out" 'pre= post= unchanged=0' 'HEAD unchanged: an empty pre-SHA (e.g. detached HEAD lookup failure) never counts as unchanged'
+
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]
