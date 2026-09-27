@@ -26,7 +26,7 @@ Like a job dispatcher reading a work-queue table, where the table is GitHub labe
 Implementing agent: build `lib/bazaar-common.sh` and the two scripts per the surface below. Chris Robertson: confirm the attempt-counter mechanics.
 
 ## API surface fragment
-*Implemented 2026-09-19: `lib/bazaar-common.sh` v0.1.0, `bazaar-issues.sh` v0.1.0, `bazaar-build.sh` v0.1.0. Harnesses `test-bazaar-common.sh` (33), `test-bazaar-build.sh` (16), `test-bazaar-issues.sh` (33) at the time, all green over `test-support/fake-gh.py`; re-run 2026-09-27: `test-bazaar-common.sh` 38, `test-bazaar-build.sh` 16, `test-bazaar-issues.sh` 41 (harness totals are point-in-time snapshots, not a live figure — see `index.md`).*
+*Implemented 2026-09-19: `lib/bazaar-common.sh` v0.1.0, `bazaar-issues.sh` v0.1.0, `bazaar-build.sh` v0.1.0. Harnesses `test-bazaar-common.sh` (33), `test-bazaar-build.sh` (16), `test-bazaar-issues.sh` (33) at the time, all green over `test-support/fake-gh.py`; re-run 2026-09-26: `test-bazaar-common.sh` 38, `test-bazaar-build.sh` 16, `test-bazaar-issues.sh` 41 (harness totals are point-in-time snapshots, not a live figure — see `index.md`).*
 ```bash
 bazaar-issues.sh [OPTIONS]        # issue controller: intake → spec → approval
 bazaar-build.sh  [OPTIONS]        # build controller: bzr-ready → PR
@@ -76,7 +76,7 @@ Marker comments (agent-authored, first line):
 - **Dry-run** runs no sweeps with side effects; `role_dry_sweeps` reports would-approve / would-escalate.
 - **`--issue N` and `--force` exist on both scripts, with opposite label semantics.** On `bazaar-build.sh`, `--issue N` requires the issue already be `bzr-ready`; `--force` bypasses that check (`BZR_SKIP_LABEL_CHECK`) but never the worker's precheck. On `bazaar-issues.sh`, `--issue N` requires the issue carry no `bzr-*` label; `--force` dispatches it anyway, replacing whatever `bzr-*` label it carries with `bzr-drafting`. Both set the same `BZR_SKIP_LABEL_CHECK` flag under the hood.
 - **Escalation** replaces every `bzr-*` state label with `bzr-blocked`, so a rejected `bzr-spec-review` issue ends with exactly one label.
-- **Approval marker** is `<!-- bzr-spec-merged pr=N ts=T -->`; the comment guard refuses any agent body containing the approval word, including marker names.
+- **Approval marker** is `<!-- bzr-spec-merged pr=N ts=T -->`; the comment guard (`bzr_comment`, `lib/bazaar-common.sh`) refuses any agent body containing the approval word, *except* a body that itself carries a `<!-- bzr-` marker — marker comments are exempt so they may explain how to approve.
 - **Local checkout for the approval sweep:** the git repo the controller runs in, else a clone under `~/.bazaar/<owner>-<repo>/clone`.
 
 ## Consumer
@@ -158,12 +158,12 @@ Semver per script and for the lib, starting 0.1.0.
 Tick under 10s with an empty queue; at most one model call per tick.
 
 ## Security model
-Inherits `gh` auth. Approval accepted only from `BZR_APPROVERS`. The word "approved" is forbidden in every agent-authored comment (grep guard in the shared comment helper).
+Inherits `gh` auth. Approval accepted only from `BZR_APPROVERS`. The word "approved" is forbidden in every agent-authored comment except one that itself carries a `<!-- bzr-` marker (grep guard in the shared comment helper, `bzr_comment`).
 
 ## Telemetry contract
 Log lines `[ctl:<role>]`: `tick: queue empty` (only when nothing is in the queue), `dispatch <issue> worker=<pid>`, `skip <issue> <reason>`, `claim-failed <issue>`, `dead-pid-release <issue>`, `attempt <issue> n=<K> reason=<...>`, `escalate <issue> reason=<...>`, `bounce <issue>`, `approved <issue> pr=<n>`, `merged-sweep <issue> …`, `worker-exit <issue> rc=<n> sentinel=<word>`. There is no unconditional per-tick log line — a tick with candidates emits only `dispatch`/`skip` lines. Sink: `$BZR_HOME/<repo>/logs/ctl-<role>-<date>.log`.
 
-**Worker-log relay (2026-09-20).** On dispatch, the controller also starts a python3 tailer (`bzr_stream_worker`) against the new worker's log file. Any line matching `^\s*\[` — phase notes, tool calls, per-cycle review counts, sentinels — is relayed to the controller's own stderr as `[#<issue>] <line>`; raw model JSON and prompt dumps stay in the worker's log file only. The tailer exits on its own once the worker's pid is gone (one final read first). `BZR_NO_STREAM=1` disables the relay (e.g. cron). Every `gh` write the controller and workers make discards stdout so issue/PR URLs `gh` prints no longer reach the terminal or the log; stderr is unaffected.
+**Worker-log relay (2026-09-20).** On dispatch, the controller also starts a python3 tailer (`bzr_stream_worker`) against the new worker's log file. Any line matching `^\s*\[` — phase notes, tool calls, per-cycle review counts, sentinels — is relayed to the controller's own stderr as `[#<issue>] <line>`; raw model JSON and prompt dumps stay in the worker's log file only. The tailer exits on its own once the worker's pid is gone (one final read first). `BZR_NO_STREAM=1` disables the relay (e.g. cron). Most `gh` writes discard stdout (`>/dev/null`) so issue/PR URLs `gh` prints don't reach the terminal or the log, while stderr still lands in `$LOG`; the exception is the shared comment helper (`bzr_comment`), whose `gh ... comment` call appends both stdout and stderr straight into `$LOG`.
 
 ## Verifiers
 - Tech lead: Chris Robertson
@@ -200,7 +200,7 @@ Composes with both workers, `lib/bazaar-common.sh`, and [BZR-FEAT-REVIEW-LIB](L3
 9. **Given** a worker exits `STUCK` for the third time since the last escalation, **when** the controller handles it, **then** `bzr-blocked` is added, `bzr-escalated` posted, and the issue leaves every queue.
 10. **Given** a human removes `bzr-blocked`, **when** the next failure occurs, **then** the attempt count is 1.
 11. **Given** `--workers 2` and three `bzr-ready` issues, **when** `bazaar-build.sh` ticks, **then** exactly two are claimed.
-12. **Given** a sub-issue with no labels, **when** `bazaar-issues.sh` ticks, **then** it is skipped with `is-sub-issue`.
+12. **Given** a sub-issue with no labels, **when** `bazaar-issues.sh` ticks, **then** it never becomes a candidate — `bzr_candidates` excludes any issue with a non-null `parent` before role/label matching runs, so no `skip` line is logged for it.
 13. **Given** a `bzr-pr-ready` parent whose PR merged with one sub-issue skipped and later unblocked, **when** the merged sweep runs, **then** the parent becomes `bzr-ready`.
 14. **Given** the stop file exists, **when** a tick runs, **then** no dispatch and exit 0 after workers finish.
 
