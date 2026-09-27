@@ -407,6 +407,21 @@ babysit-driver.sh  (spawned via nohup)
     ▼
 new PR opened → labelled `from-babysitter`, Telegram notice sent,
     staff-pm's `spec-review-pr` cron triggered on-demand
+```
+
+> **Hardcoded repo path.** `team-dispatcher.sh` and `babysit-driver.sh` both
+> recompute `REPO_PATH="$HOME/repos/${FLEET_NAME}"` at runtime
+> (`new-fleet.sh:836,923`) instead of reusing the `<repo-path>` argument
+> `new-fleet.sh` was invoked with. That argument only flows into
+> generation-time text (SOUL.md, config.yaml, MCP filesystem-server args); the
+> autonomous-dev chain's own scripts ignore it. If your repo doesn't live at
+> `~/repos/<fleet-name>`, the dispatcher and driver will silently no-op
+> (`[[ -d "$REPO_PATH/.git" ]]` fails, so `GH_REPO_SLUG` stays empty and the
+> dispatcher exits without spawning) or, worse, operate on an unrelated
+> checkout that happens to exist at that path. Symlink `~/repos/<fleet-name>`
+> to the real location if your layout differs.
+
+```
     ▼
 staff-pm (spec-review-pr, LLM-backed)
     │  judges product correctness (codex, if configured, already covers code
