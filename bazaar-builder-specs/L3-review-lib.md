@@ -43,7 +43,7 @@ valid_review_structure <file>                                       # unchanged 
 count_blocking    <file>
 reviewer_preflight                                                  # startup fatal on outdated/no-credits
 
-# Cycle (from babysit-builder.sh:1093 run_build_cycle and babysit-work-prep.sh:1040 run_spec_review_cycle)
+# Cycle (from babysit-builder.sh:1097 run_build_cycle and babysit-work-prep.sh:1040 run_spec_review_cycle)
 run_review_cycle --mode code|spec --pr <n> --worktree <dir> --branch <name> [--max-cycles N] [--validate-cmd CMD]
 #                 [--spec-path P --spec-dir D --spec-guide G --ticket T --ticket-url U --ticket-title S --ticket-body B]
 #   returns: 0 converged (BLOCKING=0)   10 cap hit   20 bail (reviewer rc 1 / implementer failed /
@@ -72,7 +72,7 @@ BABYSIT_TEST_MODE=1  → retry sleeps are skipped; the harness puts claude/codex
 
 ## What we know
 - Owner decision 8 (2026-09-19): leave `babysit-with-review.sh` alone; extract the loop into a library for this tool.
-- Function inventory in `babysit-builder.sh` (lines 644-1093): `slugify`, `run_claude`, `run_codex_implementer`, `run_implementer`, `count_blocking`, `valid_review_structure`, `codex_review_with_retry`, `claude_review`, `review_with_retry`, `reviewer_preflight`, `quarantine_pr`, `fail_build_cycle*`, `ensure_pr_marker`, `run_build_cycle`.
+- Function inventory in `babysit-builder.sh` (lines 644-1097): `slugify`, `run_claude`, `run_codex_implementer`, `run_implementer`, `count_blocking`, `valid_review_structure`, `codex_review_with_retry`, `claude_review`, `review_with_retry`, `reviewer_preflight`, `quarantine_pr`, `fail_build_cycle*`, `ensure_pr_marker`, `run_build_cycle`.
 - Divergence measured 2026-09-19 (md5 of function bodies): `valid_review_structure` and `review_with_retry` identical in builder and work-prep; `run_claude` and `codex_review_with_retry` differ across all three scripts. `babysit-with-review.sh` additionally has adjudication mode (cycles 5-6) which work-prep deliberately omits for specs (babysit-specs README, 2026-09-10).
 - The `ASF` corpus already specifies the reviewer contract (`ASF-FEAT-MCP-RESILIENCE`: return codes 0-4, telltales, `valid_review_structure`) and the cycle (`ASF-FEAT-REVIEW-CYCLE`: prescriptive from cycle 3, history from cycle 2). Those contracts are inherited, not redefined here.
 - A recording-stub CLI harness exists for `babysit-with-review.sh` (`test-babysit-with-review-cli.sh`, `BABYSIT_TEST_MODE`); builder and work-prep have none.

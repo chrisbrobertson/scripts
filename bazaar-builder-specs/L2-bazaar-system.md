@@ -67,7 +67,7 @@ Chris Robertson: the label state machine and claim protocol below are implemente
 
 ## What we know
 - Owner decisions 1-13 recorded in [BZR-PROD-BAZAAR-BUILDER](L1-bazaar-builder.md) "What we know".
-- The review cycle to be extracted exists in `babysit-builder.sh` (`run_build_cycle`, line 1093) and `babysit-work-prep.sh` (`run_spec_review_cycle`, line 1040). The builder copy already keeps the worktree alive through the review cycle and never calls `gh pr checkout`, which is the behaviour this system needs for concurrent workers.
+- The review cycle to be extracted exists in `babysit-builder.sh` (`run_build_cycle`, line 1097) and `babysit-work-prep.sh` (`run_spec_review_cycle`, line 1040). The builder copy already keeps the worktree alive through the review cycle and never calls `gh pr checkout`, which is the behaviour this system needs for concurrent workers.
 - `gh api repos/{owner}/{repo}/issues/{n}/sub_issues` (GET) and GraphQL `subIssues` / `subIssuesSummary` / `parent` work for this account (probed 2026-09-19, read only).
 - Agent and human share one GitHub login here, so comment authorship carries no information.
 - `babysit-builder.sh` posts a `codex-review=success` commit status at convergence; `setup-branch-protection.sh` makes that status required on main. Both are reused unchanged.
