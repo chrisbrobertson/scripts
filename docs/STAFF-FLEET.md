@@ -355,8 +355,13 @@ Two separate credential paths feed each gateway process:
   reach both the gateway process and any `terminal` subprocess it spawns.
   `terminal.env_passthrough: [GH_TOKEN]` in `config.yaml` additionally lets
   `GH_TOKEN` through Hermes's own subprocess credential-scrubbing filter so
-  the agent's `gh` commands can authenticate — the bot token stays scrubbed
-  from anything the model can see or echo.
+  the agent's `gh` commands can authenticate — the bot token isn't on that
+  passthrough list, so it's scrubbed from `terminal` subprocess env and
+  output. That scrub only covers the process-env path, though: the `.env`
+  file itself (`~/staff-fleet/<fleet>/.hermes/profiles/staff-*/.env`) lives
+  inside the fleet directory, which is one of the two roots the `filesystem`
+  MCP server (§3.4) is scoped to — so the model can read the bot token
+  directly off disk via a filesystem tool call regardless of the scrub.
 
 ### 3.4 Tool access
 
