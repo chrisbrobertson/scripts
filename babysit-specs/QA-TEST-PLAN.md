@@ -1,10 +1,11 @@
 # QA Test Plan — babysit-with-review.sh
 
 **Owner:** qa-lead  
-**Status:** Test Suite 4 automated and passing (160/160, last run 2026-09-27), now
+**Status:** Test Suite 4 automated and passing (168/168, last run 2026-09-27), now
 including automated pre-flight coverage for TC-1.2, lock-file-collision coverage
 for TC-1.3/TC-1.3b, lock-file-removal coverage for TC-1.4, sentinel-detection
-coverage for TC-1.5/TC-1.6, and MAX_ITER-exhaustion coverage for TC-1.8 (see
+coverage for TC-1.5/TC-1.6, single-iteration outer-loop coverage for TC-1.1, and
+MAX_ITER-exhaustion coverage for TC-1.8 (see
 Suite 1), plus blocking-count coverage for TC-2.1/TC-2.2, sentinel/HEAD-unchanged
 coverage for TC-2.4/TC-2.5, missing-reviewer graceful-degradation coverage for
 TC-2.9, and a separate `test-babysit-review-feedback.sh` harness covering the
@@ -33,6 +34,18 @@ executed
 **Reference:** L3-autonomous-outer-loop.md Acceptance Tests (lines 167-176)
 
 ### TC-1.1: Single Iteration Execution
+**Status: automated, not manual (added 2026-09-27).** A full `MAX_ITER=1`
+pass — including the real per-iteration `git worktree add` and the
+implementer's branch rename — is covered deterministically in
+`test-babysit-with-review-cli.sh` via `run_single_iteration()`, which runs
+the actual script with no `BABYSIT_TEST_MODE` (an empty value skips the
+test-hook dispatch the same as unset) against a real repo fixture, with
+`claude` stubbed to rename the worktree's placeholder branch and return a
+sentinel-free result. No Codex/gh involved — the stubbed run never reaches a
+`HANDOFF_REVIEW`. This TC's manual steps below remain as the original
+acceptance reference; the automated case is the one that actually runs
+before every commit.
+
 **Given:** Clean git repo on default branch  
 **When:** `MAX_ITER=1 ./babysit-with-review.sh`  
 **Then:** 
@@ -676,10 +689,13 @@ sibling stub modes (`outer-preflight`, `outer-sentinel`, `outer-maxiter`,
 exhaustion, and mid-run lock-file removal into pure functions and drive them
 deterministically — no Claude/Codex/gh involved. This covers TC-1.2 through TC-1.6 and
 TC-1.8 (see each TC's own status note above). TC-1.1 (a full single-iteration run,
-including the per-iteration git worktree and branch rename) and TC-1.7 (stuck-loop
-detection) have not been converted this way as of this writing; check each TC's own
-status note for the current state, since this file is not always updated when a new
-stub mode ships.
+including the per-iteration git worktree and branch rename) is covered a different way:
+`run_single_iteration()` runs the real script end to end (no `BABYSIT_TEST_MODE`) against
+a repo fixture with `claude` stubbed, rather than extracting a pure function — the thing
+under test is the worktree/rename mechanics themselves, not a predicate. TC-1.7
+(stuck-loop detection) has not been converted this way as of this writing; check each
+TC's own status note for the current state, since this file is not always updated when a
+new stub mode ships.
 
 **Partially done, for Suite 2's PR-feedback filter:** `BABYSIT_TEST_MODE=review-feedback`
 drives the real `collect_pr_feedback()` against a stubbed `gh` (`test-babysit-review-feedback.sh`),
