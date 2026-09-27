@@ -63,6 +63,9 @@ make_stubs() {
 #!/bin/bash
 printf '%s\n' 'CALL=claude' >> "$RECORD"
 printf '<%s>\n' "$@" >> "$RECORD"
+if [ -n "${STUB_RENAME_BRANCH:-}" ]; then
+  git branch -m "$STUB_RENAME_BRANCH" 2>>"$RECORD" || true
+fi
 printf '{"type":"system","subtype":"init","session_id":"test-session"}\n'
 result="${STUB_FINAL_RESULT:-FINAL_RESULT}"
 result=${result//\\/\\\\}
@@ -120,6 +123,21 @@ run_preflight() {
   set +e
   ( cd "$repo_dir" && HOME="$home" PATH="$TMP/bin:/usr/bin:/bin" \
       BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) >"$out" 2>"$err"
+  local rc=$?
+  set -e
+  return $rc
+}
+
+# Runs the real outer loop (no BABYSIT_TEST_MODE — an empty value skips the
+# test-hook dispatch the same as unset) against a real repo directory, with
+# claude/codex/gh stubbed on PATH. Used for QA-TEST-PLAN.md TC-1.1, which
+# needs the actual per-iteration worktree/branch-rename mechanics, not a
+# pure-function extraction. MAX_ITER/SLEEP_SEC are set by the caller via env.
+run_single_iteration() {
+  local repo_dir="$1" home="$2" record="$3" out="$4" err="$5"
+  set +e
+  ( cd "$repo_dir" && HOME="$home" PATH="$TMP/bin:/usr/bin:/bin" RECORD="$record" \
+      BABYSIT_TEST_MODE="" "$SCRIPT" ) >"$out" 2>"$err"
   local rc=$?
   set -e
   return $rc
@@ -636,6 +654,60 @@ assert_contains "$TMP/review-head-changed.out" 'pre=abc123 post=def456 unchanged
 printf ' \n' \
   | run_script review-head-unchanged "$TMP/review-head-empty-pre.record" "$TMP/home" > "$TMP/review-head-empty-pre.out"
 assert_contains "$TMP/review-head-empty-pre.out" 'pre= post= unchanged=0' 'HEAD unchanged: an empty pre-SHA (e.g. detached HEAD lookup failure) never counts as unchanged'
+
+# Full single-iteration outer-loop run: converts QA-TEST-PLAN.md Suite 1
+# TC-1.1 (one MAX_ITER=1 pass, including the real per-iteration git worktree
+# and the implementer's branch rename) into deterministic coverage. Unlike
+# the pure-function extractions above, this drives the actual outer loop
+# end to end against a real repo fixture with no BABYSIT_TEST_MODE (an empty
+# value skips the test-hook dispatch the same as unset — see
+# run_single_iteration): claude is stubbed to rename the worktree's
+# placeholder branch (as the real implementer prompt instructs) and return a
+# sentinel-free result, so the loop completes iter 1 cleanly and stops on
+# MAX_ITER without ever touching gh.
+make_preflight_repo "$TMP/single-iter" >/dev/null 2>&1
+mkdir -p "$TMP/single-iter/home"
+: > "$TMP/single-iter.record"
+set +e
+MAX_ITER=1 SLEEP_SEC=0 \
+  STUB_FINAL_RESULT='Investigated the project state; nothing actionable surfaced this iteration.' \
+  STUB_RENAME_BRANCH='chore/tc-1-1-test' \
+  run_single_iteration "$TMP/single-iter/work" "$TMP/single-iter/home" \
+    "$TMP/single-iter.record" "$TMP/single-iter.out" "$TMP/single-iter.err"
+single_iter_rc=$?
+set -e
+[ "$single_iter_rc" -eq 0 ] && pass 'single iteration: exits 0 (TC-1.1)' || fail 'single iteration: exits 0 (TC-1.1)'
+
+single_iter_log=$(find "$TMP/single-iter/home/sisyphus-logs" -maxdepth 1 -name '*.log' | head -1)
+if [ -n "$single_iter_log" ]; then
+  pass 'single iteration: log file created'
+else
+  fail 'single iteration: log file created'
+  single_iter_log="$TMP/single-iter.err"
+fi
+
+if [ "$(grep -c '^=== iter ' "$single_iter_log")" -eq 1 ]; then
+  pass 'single iteration: exactly one iteration header logged (TC-1.1)'
+else
+  echo "  actual iter headers:" >&2
+  grep '^=== iter ' "$single_iter_log" | sed 's/^/    /' >&2
+  fail 'single iteration: exactly one iteration header logged (TC-1.1)'
+fi
+if grep -Eq '^=== iter 1 @ [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z ===$' "$single_iter_log"; then
+  pass 'single iteration: header matches "=== iter 1 @ <timestamp> ===" (TC-1.1)'
+else
+  fail 'single iteration: header matches "=== iter 1 @ <timestamp> ===" (TC-1.1)'
+fi
+assert_not_contains "$single_iter_log" 'STOP signal received on iter 1.' 'single iteration: no STOP sentinel output (TC-1.1)'
+if grep -Eq '^  \[outer\] worktree: /tmp/babysit-work-iter1-[0-9]+ \(branch: wip/work/iter-1\)$' "$single_iter_log"; then
+  pass 'single iteration: per-iteration worktree created on the placeholder branch (TC-1.1)'
+else
+  fail 'single iteration: per-iteration worktree created on the placeholder branch (TC-1.1)'
+fi
+assert_contains "$single_iter_log" '  [outer] iter 1 branch: chore/tc-1-1-test' \
+  "single iteration: implementer's branch rename is reflected before worktree teardown (TC-1.1)"
+assert_contains "$TMP/single-iter.out" 'Done after 1 iterations. See '"$single_iter_log" \
+  'single iteration: loop reports exactly 1 completed iteration'
 
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]
