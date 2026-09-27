@@ -103,8 +103,8 @@ Per tick, zero or more `dispatch <issue>` and `skip <issue> <reason>` log lines;
 ### Queue definition per role
 | Script | Queue (in order) | Sweeps before reading |
 |---|---|---|
-| `bazaar-issues.sh` | open issues that are not sub-issues, not PRs, and carry no `bzr-*` label | (a) dead-pid release: `bzr-drafting` → no label; (b) bounce: `bzr-needs-info` with a human comment newer than the last marker → no label; (c) approval sweep (below); (d) rejected spec: `bzr-spec-review` whose spec PR was closed unmerged → `bzr-blocked`, close its draft-time sub-issues |
-| `bazaar-build.sh` | `bzr-ready` | (a) dead-pid release: `bzr-building` → `bzr-ready`; (b) merged sweep: `bzr-pr-ready` whose PR merged → close parent if every sub-issue is closed, else `bzr-ready` for the remaining unblocked sub-issues |
+| `bazaar-issues.sh` | open issues that are not sub-issues, not PRs, and carry no `bzr-*` label | (a) dead-pid release: `bzr-drafting` → no label, counted as one attempt (below); (b) bounce: `bzr-needs-info` with a human comment newer than the last marker → no label; (c) approval sweep (below); (d) rejected spec: `bzr-spec-review` whose spec PR was closed unmerged → `bzr-blocked`, close its draft-time sub-issues |
+| `bazaar-build.sh` | `bzr-ready` | (a) dead-pid release: `bzr-building` → `bzr-ready`, counted as one attempt (below); (b) merged sweep: `bzr-pr-ready` whose PR merged → close parent if every sub-issue is closed, else `bzr-ready` for the remaining unblocked sub-issues |
 
 Excluded from every queue: sub-issues (built through their parent), closed issues, issues carrying `bzr-blocked`, issues whose newest claim names a live process.
 
@@ -122,6 +122,8 @@ Interrupted after step 3: detected as "PR merged, issue still `bzr-spec-review`"
 ### Attempt handling (both scripts)
 A worker exit that is transient (`STUCK`, crash without sentinel) makes the controller: post `bzr-attempt n=K`, return the issue to its queue state (issue side: remove the claim label so it has no `bzr-*` label; build side: `bzr-building` → `bzr-ready`), and, if `K ≥ MAX_ATTEMPTS`, add `bzr-blocked` and post `bzr-escalated`. Reviewer transport failure, Codex CLI too old, and Codex workspace out of credits all fold into the same generic `STUCK reviewer unavailable: <reason>` sentinel at the worker (see [BZR-FEAT-BUILD-WORKER](L3-build-worker.md) / [BZR-FEAT-ISSUE-WORKER](L3-issue-worker.md)) and so count as an ordinary attempt like any other `STUCK` — there is no separate "exits 1 for the operator" path in the shipped code; an outdated CLI or empty credits burns attempts and can escalate to `bzr-blocked` exactly like a transient transport failure.
 
+The dead-pid release sweep (Queue definition, row (a)) is not a bare release: it shares the same counter. `bzr_sweep_dead_claims` calls `bzr_record_attempt` with reason `"worker process died"` for every stale claim it frees (`lib/bazaar-common.sh:493`), which posts a `bzr-attempt` marker and, on the `MAX_ATTEMPTS`-th one since the last escalation, escalates to `bzr-blocked` exactly like a `STUCK` worker exit — three consecutive dead-pid releases on one issue escalate it with no worker ever having run to completion. [L2-bazaar-system.md](L2-bazaar-system.md) already describes worker-crash recovery as "returns to queue as one attempt"; this section previously omitted that the same is true of the sweep's own dead-pid path.
+
 ### Invariants
 1. A controller never edits code or PR contents, and never edits spec text except the approval-authorised status flip.
 2. At most `--workers` worker processes per controller.
@@ -138,6 +140,7 @@ A worker exit that is transient (`STUCK`, crash without sentinel) makes the cont
 - `gh` read failure: skip tick; halt after 3 consecutive.
 - Claim write fails midway: revert, log `claim-failed`, continue.
 - Worker exits without a sentinel: treated as a transient attempt.
+- Dead-pid release (stale claim, no live process): also treated as a transient attempt, same counter as a `STUCK` exit.
 - Model call fails or returns garbage: sort order.
 - Approval merge fails: see sweep step 3.
 
@@ -183,7 +186,7 @@ Composes with both workers, `lib/bazaar-common.sh`, and [BZR-FEAT-REVIEW-LIB](L3
 
 ## Acceptance tests
 1. **Given** two unlabelled open issues, one `P1`, **when** `bazaar-issues.sh` ticks with 1 free slot, **then** the `P1` issue is claimed and the other logged `skip no-slot`.
-2. **Given** an issue in `bzr-drafting` whose claim names this host and a dead pid, **when** a tick runs, **then** the label is removed and `dead-pid-release` logged.
+2. **Given** an issue in `bzr-drafting` whose claim names this host and a dead pid, **when** a tick runs, **then** the label is removed, `dead-pid-release` is logged, and a `bzr-attempt` marker is posted counting one attempt toward `MAX_ATTEMPTS`.
 3. **Given** the same but the pid is alive, **when** a tick runs, **then** nothing changes even after hours.
 4. **Given** a claim naming another host, **when** a tick runs, **then** it is skipped, never released.
 5. **Given** an issue in `bzr-needs-info` with a human comment newer than the last marker, **when** a tick runs, **then** the label is removed and the issue is intake again.
