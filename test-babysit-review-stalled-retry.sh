@@ -4,22 +4,27 @@
 # added for #82, tightened for #104, tightened again in PR #104's own review
 # cycle for the reviewer-unavailable fallthrough below).
 #
-# BLOCKING regressions this guards against:
+# Regressions this guards against:
 #   1. The sweep finds a stalled PR by searching `gh pr list --label <l>`, so
 #      the label must still be on the PR when the sweep runs. Confirms the
 #      sweep issues `gh pr edit --remove-label` ITSELF — but only once the
-#      reviewer CLI is confirmed available (see #2) — rather than requiring
+#      reviewer CLI is confirmed available (see #3) — rather than requiring
 #      the operator to have removed it already (removing it first makes the
 #      search find nothing and strands the PR in draft — see #104).
-#   1b. The sweep must NOT call `gh pr ready` (undraft-for-merge) before the
+#   2. The sweep must NOT call `gh pr ready` (undraft-for-merge) before the
 #      re-review completes; only a clean review may un-draft a PR
 #      (merge_reviewed_pr does that). Un-drafting up front would expose an
 #      unreviewed PR to merging.
-#   2. When the reviewer CLI is still unavailable, the sweep must leave the
+#   3. When the reviewer CLI is still unavailable, the sweep must leave the
 #      label in place (so a later run can find the PR again) AND must not
 #      fall through to starting new implementer work — a stalled PR awaiting
 #      review takes priority over new work, otherwise unreviewed work piles
 #      up behind the stall (flagged in PR #104's own review cycle).
+#   4. If the `gh pr edit --remove-label` call itself fails, the sweep must
+#      not run the review cycle over a stale resumable label — a later
+#      review-incomplete bail would leave that label for the next sweep to
+#      wrongly retry a PR meant for manual intervention (RECOMMENDED,
+#      PR #104 review cycle 1).
 #
 # Runs a real outer-loop iteration (BABYSIT_TEST_MODE unset) against a real
 # git repo (preflight needs real git state) with `gh` and (for scenario 1)
@@ -54,7 +59,7 @@ case "$*" in
   "pr list --state open --label review-codex-outdated"*) printf '%s' "${STUB_PR_OUTDATED:-}"; exit 0 ;;
   "pr list --state open --label review-mcp-outage"*) printf '%s' "${STUB_PR_MCP:-}"; exit 0 ;;
   "pr list --state open --label review-codex-no-credits"*) printf '%s' "${STUB_PR_CREDITS:-}"; exit 0 ;;
-  "pr edit "*"--remove-label"*) exit 0 ;;
+  "pr edit "*"--remove-label"*) exit "${STUB_REMOVE_LABEL_RC:-0}" ;;
   "pr ready "*) exit 0 ;;
   *) exit 0 ;;
 esac
@@ -117,6 +122,18 @@ assert_not_line "stalled retry (reviewer available): sweep does not un-draft bef
 assert_grep "stalled retry (reviewer available): run_review_cycle actually ran for the stalled PR" "=== review handoff: PR #96 @" "$TMP/err"
 assert_grep "stalled retry (reviewer available): outer loop logs which PR/label it's retrying" "[outer] retrying review cycle for PR #96 (review-codex-outdated)" "$TMP/err"
 assert_not_grep "stalled retry (reviewer available): never merges an unreviewed PR" "CALL=gh pr merge" "$r"
+rm -f "$TMP/bin/codex"
+
+# ---------- scenario 1b: reviewer CLI available, but the label-removal call
+# itself fails (RECOMMENDED finding, PR #104 review cycle 1) — must not run
+# the review cycle with a stale resumable label still on the PR, since a
+# review-incomplete bail afterward would leave that stale label for the next
+# sweep to wrongly retry a PR meant for manual intervention ----------
+ln -s "$TMP/bin/codex.stub" "$TMP/bin/codex"
+r="$TMP/remove-label-fails.record"
+run_outer_iteration "$r" STUB_PR_OUTDATED=96 STUB_REMOVE_LABEL_RC=1
+assert_not_grep "stalled retry (label removal fails): run_review_cycle is not invoked over a stale label" "=== review handoff: PR #96 @" "$TMP/err"
+assert_grep "stalled retry (label removal fails): sweep logs the removal failure" "[outer] WARNING: failed to remove review-codex-outdated from PR #96; retrying removal next iteration" "$TMP/err"
 rm -f "$TMP/bin/codex"
 
 # ---------- scenario 2: reviewer CLI still unavailable — label stays, no

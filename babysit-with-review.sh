@@ -2046,7 +2046,17 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
       continue
     else
       echo "[outer] retrying review cycle for PR #$_retry_pr ($_retry_label)" | tee -a "$LOG" >&2
-      gh pr edit "$_retry_pr" --remove-label "$_retry_label" >>"$LOG" 2>&1 || true
+      if ! gh pr edit "$_retry_pr" --remove-label "$_retry_label" >>"$LOG" 2>&1; then
+        # Don't run the review cycle with a stale resumable label still on
+        # the PR: if the review then bails to review-incomplete (a bail the
+        # sweep must NOT retry), the leftover resumable label would make the
+        # next sweep retry it anyway. Skip to next iteration and try the
+        # removal again rather than risk that state.
+        echo "[outer] WARNING: failed to remove $_retry_label from PR #$_retry_pr; retrying removal next iteration" | tee -a "$LOG" >&2
+        unset _retry_pick _retry_label _retry_pr
+        sleep "$SLEEP_SEC"
+        continue
+      fi
       _rc=0
       run_review_cycle "$_retry_pr" || _rc=$?
       if [ "$_rc" -ne 0 ]; then
