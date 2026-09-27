@@ -28,7 +28,9 @@ Implementing agent: build the worker in `bazaar-build.sh` on top of the lib. Chr
 ## API surface fragment
 *Implemented 2026-09-20: `bazaar-build-worker.sh` v0.1.0; `test-bazaar-build-worker.sh` 45 cases green.*
 ```bash
-bazaar-worker-build <issue>       # env from controller; branch bzr/<issue>-<slug>, worktree $BZR_HOME/<repo>/wt/<issue>
+bazaar-build-worker.sh <issue>    # spawned by bazaar-build.sh; env: BZR_ISSUE BZR_REPO BZR_REPO_DIR BZR_HOME BZR_HOST
+                                  # BZR_LOG DEFAULT_BRANCH BZR_SENTINEL SCRIPTS_DIR IMPLEMENTER* REVIEWER* MAX_REVIEW_CYCLES
+                                  # branch bzr/<issue>-<slug> (or -rN), worktree $BZR_HOME/<repo>/wt/<issue>
 
 # Precheck outcome (wrapper, before any model call):
 #   the parent's `Specs:` line (written by the approval sweep) names spec files that exist on origin/main with status: ready
@@ -36,16 +38,14 @@ bazaar-worker-build <issue>       # env from controller; branch bzr/<issue>-<slu
 #   branch does not exist on origin, or exists with a marker PR (resume)
 # Otherwise: SPEC_GAP <what is missing> → bzr-blocked + comment, claim released.
 
-# Sentinels per implementer pass (last line, bare):
-PLAN_POSTED                       # plan pass only: ordered list posted as issue comment
-SUBISSUE_DONE <n>                 # sub-issue n implemented, committed, pushed; wrapper runs review cycle
-HANDOFF_REVIEW <pr>               # first pass only, PR opened (draft) after the first sub-issue
-SPEC_GAP <reason>                 # spec not implementable; whole issue → bzr-blocked
-STUCK <reason>                    # environmental; controller counts an attempt, issue → bzr-ready
+# Sentinel per implementer pass (last line, bare): PLAN_POSTED | UNIT_DONE | SPEC_GAP <reason> | STUCK <reason>
+# Sentinel to the controller (last line of $BZR_SENTINEL): PR_READY <pr> | SPEC_GAP <reason> | BLOCKED <reason> | STUCK <reason>
+#   STUCK covers environmental failures, including reviewer unavailable (transport/outdated/no-credits); controller
+#   counts an attempt, issue → bzr-ready.
 ```
 
 ### Implementation notes (2026-09-20)
-- Worker sentinels are `UNIT_DONE | SPEC_GAP | STUCK` per implementer pass and `PR_READY <pr> | SPEC_GAP | BLOCKED | STUCK` to the controller; `PLAN_POSTED` ends the plan pass. The wrapper opens the PR after the first unit's push and owns its body (markers, state block, `Closes` lines).
+- The wrapper opens the PR after the first unit's push and owns its body (markers, state block, `Closes` lines).
 - State lives in the PR body as `<!-- bzr-build-state {"converged":{unit:range},"skipped":{unit:reason}} -->`; resume reads it and never re-implements a converged unit. The plan comment is posted once per round (`<!-- bzr-build-plan issue= round= -->`).
 - Order is deterministic first (`Blocked by #n`, L4 `depends_on`, number); the plan pass may reorder only with a permutation of the unit set, else the deterministic order stands.
 - Skip = one `git revert --no-commit` over the unit's range plus one commit (a plain `revert` refuses empty commits), `bzr-blocked` on the sub-issue with the last review, dependents skipped without a model call; a revert conflict is the single whole-issue halt.
@@ -83,7 +83,7 @@ Parent in exactly one of `bzr-pr-ready`, `bzr-blocked`, or back in `bzr-ready`; 
 ### Phases
 0. **precheck** (bash): as in the surface fragment. Also: working tree of the worktree clean, `origin/main` fetched.
 1. **plan** (implementer, short): posts the ordered plan as an issue comment, `PLAN_POSTED`. Skipped when there are no sub-issues.
-2. **implement sub-issue k** (implementer): reads its L4, implements, tests, commits with `Refs #<sub>`, pushes, `SUBISSUE_DONE k` (or `HANDOFF_REVIEW <pr>` on k=1, after opening the draft PR).
+2. **implement sub-issue k** (implementer): reads its L4, implements, tests, commits with `Refs #<sub>`, pushes, `UNIT_DONE`. The wrapper (not the implementer) opens the draft PR after the push, on k=1 and every k after.
 3. **review** (lib, `--mode code`): convergent cycle per k. Converged → update marker block, next k. Not converged (cap or bail) → skip per the assumption above, next eligible k.
 4. **finish**: after the last k, if at least one converged: post `codex-review=success`, mark PR ready, comment a summary (converged and skipped lists) on the parent, write `PR_READY <pr>` to `$BZR_SENTINEL` (the controller moves `bzr-building` → `bzr-pr-ready`). If every sub-issue was skipped: close the PR and write `BLOCKED <reason>` (controller escalates). The PR body carries `<!-- bzr-build issue=N round=R -->` so the controller's merged-PR sweep can find it.
 
@@ -101,8 +101,7 @@ Parent in exactly one of `bzr-pr-ready`, `bzr-blocked`, or back in `bzr-ready`; 
 ### Error model
 - Precheck fails: `SPEC_GAP`, `bzr-blocked`, comment listing each missing item.
 - Implementer `STUCK`: safety push, back to `bzr-ready`; the controller counts the attempt and escalates on the third.
-- Reviewer transport failure after the lib's retries: same as `STUCK` (the current sub-issue stays pending in the marker block and resumes next attempt).
-- Reviewer backend outdated / no credits: comment on PR, controller exits 1 (operator action); not an attempt.
+- Reviewer unavailable (transport failure after the lib's retries, Codex CLI too old, or Codex workspace out of credits): all three fold into `STUCK reviewer unavailable on unit #<k>: <reason>` (the current sub-issue stays pending in the marker block and resumes next attempt). The controller counts this as an attempt like any other `STUCK`; nothing distinguishes the three causes or exempts them from the attempt counter.
 - Cap hit or bail on sub-issue k: skip per assumption.
 - Push rejected (branch moved by someone else): `STUCK rebase-needed`; human intervention.
 
