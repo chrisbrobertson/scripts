@@ -113,8 +113,9 @@ There is no `--port` or other flag — exactly two positional arguments.
 **What it does** (abbreviated; see [§10](#10-file-layout-reference) for the
 full artifact list):
 - Idempotently patches `~/.hermes/hermes-agent/hermes_cli/gateway.py` so it
-  injects each profile's `.env` (`GH_*`/`TELEGRAM_*`/`OPENAI_*`/`ANTHROPIC_*`/
-  `FLEET_*` keys) into the gateway's launchd `EnvironmentVariables` — Hermes
+  injects each profile's `.env` (`GH_*`/`GITHUB_*`/`TELEGRAM_*`/`OPENAI_*`/
+  `ANTHROPIC_*`/`FLEET_*` keys) into the gateway's launchd
+  `EnvironmentVariables` — Hermes
   regenerates that plist from a hardcoded template on every `gateway start`,
   which would otherwise wipe manual edits.
 - Creates `~/staff-fleet/<fleet-name>/`, a `service-context.md` template (only
@@ -943,12 +944,12 @@ correct action depends on whether a babysitter is currently running:
      as long as the iteration currently in progress.
   3. **Verify it actually exited** before declaring the chain paused. Don't
      `pgrep` for the fleet name — the driver launches `babysit-with-review.sh`
-     with no fleet-identifying argument at all (`new-fleet.sh:877`; it selects
+     with no fleet-identifying argument at all (`new-fleet.sh:883`; it selects
      the repo via its working directory, not argv), so a name-based pattern
      can report "exited" while the run is still committing, pushing, or
      merging a reviewed PR. Use the actual PID instead, taken from the
      **current** run's driver log line `babysitter PID=...`
-     (`new-fleet.sh:876`):
+     (`new-fleet.sh:885`):
      ```bash
      BABYSIT_PID=12345 # from this run's "babysitter PID=..." line in the driver log
      while kill -0 "$BABYSIT_PID" 2>/dev/null; do
@@ -1538,7 +1539,7 @@ All line numbers reference the current files in `~/repos/scripts/`.
 | 1051–1070 | PM `spec-review-prompt.txt` template |
 | 1072–1108 | Bin wrapper generation (fleet-qualified + global, generic wrapper poisoning) |
 | 1110–1267 | `start-gateways.sh` template — gateway install/start, 5-cron wiring, pre-flight checks |
-| 1269–1330 | Final provisioning summary printed on completion |
+| 1269–1329 | Final provisioning summary printed on completion |
 
 ### `claude-code-proxy.py`
 
