@@ -125,7 +125,9 @@ def find_referenced_files(body):
     """
     refs = set()
     for m in re.finditer(r"`([\w./-]+)`", body):
-        token = m.group(1).lstrip("./")
+        token = m.group(1)
+        if token.startswith("./"):
+            token = token[2:]
         if Path(token).suffix in SOURCE_EXTENSIONS:
             refs.add(token)
     return refs
