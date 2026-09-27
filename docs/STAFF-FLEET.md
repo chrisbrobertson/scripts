@@ -499,9 +499,10 @@ staff-swe: [greps for test files touching auth/token]
 
 you: draft a comment on PR #482 flagging this?
 
-staff-swe: I don't have write access to post comments (config restricts me
-           to read-only gh by default). I can draft the text and you can
-           paste it:
+staff-swe: My SOUL.md instructs me not to post PR comments without your
+           sign-off — nothing in config actually blocks the `gh` call, so
+           treat that as a behavioral norm, not an enforced permission. I can
+           draft the text and you can paste it:
 
            "This removes the salt-rotation logic added in #387 (post-Q3
            audit). tests/auth/test_session.py has a TODO for an encryption
@@ -1334,10 +1335,15 @@ logs via `gh run list`, but has no access to application metrics, error rates,
 APM data, or log aggregators. It notes this explicitly in every digest. To add
 monitoring: wire a monitoring MCP server in staff-sre's `config.yaml`.
 
-**PM and SRE are read-only by default.** staff-swe can comment on PRs (if
-explicitly granted in `service-context.md` Write Capabilities). PM can draft
-issue comments. SRE has no write capability until explicitly granted. This is
-intentional; write access for AI agents should be incremental and deliberate.
+**PM and SRE are read-only by default — as an instruction, not an enforced
+boundary.** Nothing in `config.yaml` restricts which `gh` subcommands an agent
+can run (see §3.4 and the note below); "read-only by default" means SOUL.md
+and `service-context.md`'s Write Capabilities section tell the agent not to
+write unless explicitly granted there. staff-swe can comment on PRs (if
+explicitly granted). PM can draft issue comments. SRE has no write capability
+until explicitly granted. This is intentional; write access for AI agents
+should be incremental and deliberate — but it's a norm the agent is expected
+to follow, not one it's technically prevented from breaking.
 
 **No documented tool-call allowlist.** The pre-2026-05-11 proxy hardcoded a
 tool allowlist (`_ALLOWED_TOOLS`); the native `openai-codex` provider has no
