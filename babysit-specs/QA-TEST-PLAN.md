@@ -1,7 +1,8 @@
 # QA Test Plan — babysit-with-review.sh
 
 **Owner:** qa-lead  
-**Status:** Recommended plan (not yet executed)  
+**Status:** Test Suite 4 automated and passing (112/112, last run 2026-09-27); Test
+Suites 1-3 (manual smoke tests against live Claude/Codex/gh) still not executed  
 **Priority:** Medium (internal tool, existing implementation to verify)
 
 ## Test Strategy
@@ -433,6 +434,59 @@
 
 ---
 
+## Test Suite 4: L4-selectable-implementer / L4-selectable-reviewer
+
+**Reference:** L4-selectable-implementer.md, L4-selectable-reviewer.md
+
+**Status: automated, not manual.** This suite postdates the rest of this plan — the
+selectable-implementer/reviewer feature and its test harness
+(`test-babysit-with-review-cli.sh`, using `BABYSIT_TEST_MODE` recording stubs for
+`claude`/`codex`/`gh`/`sleep`) landed 2026-07-15, after this plan's Test Suites 1-3
+were drafted (2026-06-28). It is deterministic and requires no live Claude/Codex/gh
+calls, so — unlike Suites 1-3 — it runs in CI-suitable time and is expected to pass
+before every commit that touches harness selection or review-structure validation.
+
+**Run:** `./test-babysit-with-review-cli.sh` — last run 2026-09-27, 112 assertions,
+0 failed.
+
+**Coverage (paraphrased from the harness's own assertions, not a numbered TC list —
+add TC IDs here if this suite is ever split into individually-run cases):**
+- Default implementer is Claude, default reviewer is Codex, with no model/effort
+  forced unless explicitly requested
+- `--name VALUE` and `--name=VALUE` both parse for every selectable flag
+- Per-role model/effort selection does not leak across roles (an implementer model
+  never reaches the reviewer invocation and vice versa) or across harnesses (Claude
+  settings never reach a Codex invocation and vice versa), including when the same
+  harness is selected for both roles
+- Claude implementer gets `--dangerously-skip-permissions`; Codex implementer gets
+  `--dangerously-bypass-approvals-and-sandbox` — neither bypass is ever granted to a
+  reviewer invocation
+- Codex reviewer runs sandboxed and read-only (`-s read-only`); Claude reviewer runs
+  in plan mode (`--permission-mode plan`)
+- Model policy: a Claude implementer defaults to the stage default at startup but
+  keeps whatever model a review cycle selected on remediation passes; a Codex
+  implementer's configured default applies at both startup and remediation unless a
+  model is explicitly set, in which case the explicit model applies at both stages
+- A selected reviewer binary that is missing is detected gracefully (falls back
+  rather than crashing) and reported when the other selected harness is present
+- `--help` documents `--implementer`, `--implementer-model`, `--implementer-effort`,
+  `--reviewer`, `--reviewer-model`, `--reviewer-effort` without confusing a harness
+  name for a model name
+- Review-structure validation (`valid_review_structure`, shared with
+  `ASF-FEAT-REVIEW-CYCLE`): rejects headings with no bullets, bulletless
+  BLOCKING/RECOMMENDED/INFORMATION sections, duplicate or out-of-order core headings,
+  prose outside/between sections, unknown top-level headings, and a "none" bullet
+  followed by more bullets in the same section — while accepting prescriptive
+  multiline findings, a leading ADJUDICATION section, and multiple real findings with
+  indented detail lines
+
+This suite does not exercise the outer loop, the review-cycle state machine, or MCP
+resilience (Test Suites 1-3 still cover those, manually, until a
+`BABYSIT_TEST_MODE`-style harness exists for them too — see "Test Automation
+Recommendations" below).
+
+---
+
 ## Test Execution Plan
 
 ### Phase 1: Smoke Tests (1 hour)
@@ -456,15 +510,32 @@ Run all test cases as regression suite after code changes.
 
 ## Test Automation Recommendations
 
-### Short-term (Manual Testing)
+**Done, for the selectable-implementer/reviewer surface:** the "mock Claude/Codex
+output via a stub" recommendation below is no longer future work for that surface —
+`test-babysit-with-review-cli.sh` is exactly that harness, gated by
+`BABYSIT_TEST_MODE`, and it is Test Suite 4 above. Run it before any commit that
+touches flag parsing, harness selection, model/effort forwarding, or
+`valid_review_structure`.
+
+**Still open, for Test Suites 1-3** (outer loop, review-cycle state machine, MCP
+resilience): those suites still require live Claude/Codex/gh calls or manual network
+interference (blocking `chatgpt.com` to simulate MCP failures) because no
+`BABYSIT_TEST_MODE`-style stub exists yet for the outer loop's `run_implementer` call
+or for `codex_review_with_retry`'s transport-failure paths. Extending
+`BABYSIT_TEST_MODE` (or a sibling stub mode) to cover those two surfaces would let
+Suites 1-3 collapse into the same fast, deterministic run as Suite 4.
+
+### Short-term (Manual Testing, Suites 1-3 only)
 - Use test repo: `~/test-babysit-repo/` for isolated testing
 - Document test results in spreadsheet or markdown table
 - Run smoke tests before each release
 
-### Long-term (Automated Testing)
-- Create test harness to mock Claude/Codex output (stub via environment variable or wrapper script)
-- Use bats (Bash Automated Testing System) for test runner
-- Add CI pipeline (GitHub Actions) to run smoke tests on each push
+### Long-term (Automated Testing, Suites 1-3 only)
+- Extend `BABYSIT_TEST_MODE` (or a comparable stub mode) to cover the outer loop and
+  MCP-resilience retry paths, following the pattern `test-babysit-with-review-cli.sh`
+  already established for the selectable-harness surface
+- Add CI pipeline (GitHub Actions) to run the fast suites (4, and 1-3 once stubbed)
+  on each push
 
 **Example bats test:**
 ```bash
