@@ -1550,6 +1550,37 @@ ${_hb}--- end prior review cycles ---
   fail_review_cycle "$pr_num" "exhausted MAX_REVIEW_CYCLES=$MAX_REVIEW_CYCLES without clearing all blocking findings"
 }
 
+# Classify an implementer RESULT's trailing sentinel line. Echoes one of:
+#   STOP
+#   HANDOFF_REVIEW <pr_num>
+#   HANDOFF_REVIEW_INVALID <raw>
+#   NONE
+# Extracted from the outer loop so BABYSIT_TEST_MODE=outer-sentinel can drive
+# it deterministically without gh/codex/git.
+parse_sentinel() {
+  local result="$1"
+  local trimmed last_line
+  trimmed=$(printf '%s' "$result" | sed -e 's/[[:space:]]*$//')
+  last_line=$(printf '%s' "$trimmed" | tail -n 1)
+  case "$last_line" in
+    "HANDOFF_REVIEW "*)
+      local pr_num="${last_line#HANDOFF_REVIEW }"
+      pr_num="${pr_num%% *}"
+      if [[ "$pr_num" =~ ^[0-9]+$ ]]; then
+        echo "HANDOFF_REVIEW $pr_num"
+      else
+        echo "HANDOFF_REVIEW_INVALID $pr_num"
+      fi
+      ;;
+    "STOP")
+      echo "STOP"
+      ;;
+    *)
+      echo "NONE"
+      ;;
+  esac
+}
+
 # Narrow deterministic test hook for argument and provider-command regression
 # coverage. Normal execution is unchanged when BABYSIT_TEST_MODE is unset.
 # outer-preflight is handled separately below: it needs the real pre-flight
@@ -1587,6 +1618,9 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight
     model-policy)
       printf 'startup_model=%s\n' "$(implementer_startup_model_policy)"
       printf 'remediation_model=%s\n' "$(resolved_implementer_model 'claude-opus-4-8')"
+      ;;
+    outer-sentinel)
+      parse_sentinel "$(cat)"
       ;;
     *)
       echo "Unknown BABYSIT_TEST_MODE: $BABYSIT_TEST_MODE" >&2
@@ -1872,30 +1906,28 @@ ${BASE_PROMPT}"
   fi
 
   RESULT=$(cat "$TMP_RESULT")
-  TRIMMED=$(printf '%s' "$RESULT" | sed -e 's/[[:space:]]*$//')
-  LAST_LINE=$(printf '%s' "$TRIMMED" | tail -n 1)
 
   # Sentinel detection. HANDOFF_REVIEW triggers a review cycle and falls
   # through to the next outer iteration; STOP terminates the loop.
-  case "$LAST_LINE" in
+  SENTINEL=$(parse_sentinel "$RESULT")
+  case "$SENTINEL" in
     "HANDOFF_REVIEW "*)
-      pr_num="${LAST_LINE#HANDOFF_REVIEW }"
-      pr_num="${pr_num%% *}"
-      if [[ "$pr_num" =~ ^[0-9]+$ ]]; then
-        _rc=0
-        run_review_cycle "$pr_num" || _rc=$?
-        if [ "$_rc" -ne 0 ]; then
-          case "$_rc" in
-            2) echo "Halting: codex MCP transport outage on PR #$pr_num; retries exhausted. See $LOG" | tee -a "$LOG" >&2 ;;
-            3) echo "Halting: Codex version incompatibility on PR #$pr_num; upgrade CLI before restarting. See $LOG" | tee -a "$LOG" >&2 ;;
-            4) echo "Halting: Codex workspace out of credits on PR #$pr_num; add credits then remove label and restart. See $LOG" | tee -a "$LOG" >&2 ;;
-            *) echo "Halting: review cycle returned unexpected rc=$_rc for PR #$pr_num. See $LOG" | tee -a "$LOG" >&2 ;;
-          esac
-          break
-        fi
-      else
-        echo "  [outer] HANDOFF_REVIEW with non-numeric PR '$pr_num'; ignoring" | tee -a "$LOG" >&2
+      pr_num="${SENTINEL#HANDOFF_REVIEW }"
+      _rc=0
+      run_review_cycle "$pr_num" || _rc=$?
+      if [ "$_rc" -ne 0 ]; then
+        case "$_rc" in
+          2) echo "Halting: codex MCP transport outage on PR #$pr_num; retries exhausted. See $LOG" | tee -a "$LOG" >&2 ;;
+          3) echo "Halting: Codex version incompatibility on PR #$pr_num; upgrade CLI before restarting. See $LOG" | tee -a "$LOG" >&2 ;;
+          4) echo "Halting: Codex workspace out of credits on PR #$pr_num; add credits then remove label and restart. See $LOG" | tee -a "$LOG" >&2 ;;
+          *) echo "Halting: review cycle returned unexpected rc=$_rc for PR #$pr_num. See $LOG" | tee -a "$LOG" >&2 ;;
+        esac
+        break
       fi
+      ;;
+    "HANDOFF_REVIEW_INVALID "*)
+      invalid_pr="${SENTINEL#HANDOFF_REVIEW_INVALID }"
+      echo "  [outer] HANDOFF_REVIEW with non-numeric PR '$invalid_pr'; ignoring" | tee -a "$LOG" >&2
       ;;
     "STOP")
       echo "STOP signal received on iter $iter."

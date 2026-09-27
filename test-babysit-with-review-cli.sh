@@ -461,5 +461,34 @@ run_preflight "$TMP/preflight/diverged/work" "$TMP/preflight/home" \
 [ "$rc" -eq 1 ] && pass 'preflight: diverged from origin exits 1' || fail 'preflight: diverged from origin exits 1'
 if grep -q 'diverged from origin/main' "$TMP/preflight/diverged.err"; then pass 'preflight: diverged error names the cause'; else fail 'preflight: diverged error names the cause'; fi
 
+# Sentinel detection: converts QA-TEST-PLAN.md Suite 1 TC-1.5 (STOP halts the
+# loop) and TC-1.6 (HANDOFF_REVIEW <PR> triggers a review cycle) into
+# deterministic coverage. outer-sentinel feeds one simulated iteration's
+# implementer RESULT via stdin through the real parse_sentinel() function
+# extracted from the outer loop; no Claude/Codex/gh involved.
+: > "$TMP/sentinel-stop.record"
+printf 'did some work\nSTOP' | run_script outer-sentinel "$TMP/sentinel-stop.record" "$TMP/home" > "$TMP/sentinel-stop.out"
+assert_contains "$TMP/sentinel-stop.out" 'STOP' 'sentinel: bare STOP on last line is detected'
+
+: > "$TMP/sentinel-handoff.record"
+printf 'opened a PR\nHANDOFF_REVIEW 123' | run_script outer-sentinel "$TMP/sentinel-handoff.record" "$TMP/home" > "$TMP/sentinel-handoff.out"
+assert_contains "$TMP/sentinel-handoff.out" 'HANDOFF_REVIEW 123' 'sentinel: HANDOFF_REVIEW <PR> extracts the bare PR number'
+
+: > "$TMP/sentinel-handoff-space.record"
+printf 'HANDOFF_REVIEW 42 \n' | run_script outer-sentinel "$TMP/sentinel-handoff-space.record" "$TMP/home" > "$TMP/sentinel-handoff-space.out"
+assert_contains "$TMP/sentinel-handoff-space.out" 'HANDOFF_REVIEW 42' 'sentinel: trailing whitespace after the PR number is trimmed'
+
+: > "$TMP/sentinel-invalid.record"
+printf 'HANDOFF_REVIEW abc' | run_script outer-sentinel "$TMP/sentinel-invalid.record" "$TMP/home" > "$TMP/sentinel-invalid.out"
+assert_contains "$TMP/sentinel-invalid.out" 'HANDOFF_REVIEW_INVALID abc' 'sentinel: non-numeric PR is classified invalid, not acted on'
+
+: > "$TMP/sentinel-none.record"
+printf 'still working, no sentinel yet' | run_script outer-sentinel "$TMP/sentinel-none.record" "$TMP/home" > "$TMP/sentinel-none.out"
+assert_contains "$TMP/sentinel-none.out" 'NONE' 'sentinel: ordinary output with no sentinel line is classified NONE'
+
+: > "$TMP/sentinel-mid-text.record"
+printf 'STOP\nbut then kept talking' | run_script outer-sentinel "$TMP/sentinel-mid-text.record" "$TMP/home" > "$TMP/sentinel-mid-text.out"
+assert_contains "$TMP/sentinel-mid-text.out" 'NONE' 'sentinel: STOP is only honored on the final line, not mid-output'
+
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]
