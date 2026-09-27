@@ -1581,6 +1581,14 @@ parse_sentinel() {
   esac
 }
 
+# MAX_ITER exhaustion predicate: true once the outer loop's iteration counter
+# has reached the configured cap. Extracted from the post-loop check so
+# BABYSIT_TEST_MODE=outer-maxiter can drive it deterministically.
+maxiter_exhausted() {
+  local iter_val="$1" max_val="$2"
+  [ "$iter_val" -ge "$max_val" ]
+}
+
 # Narrow deterministic test hook for argument and provider-command regression
 # coverage. Normal execution is unchanged when BABYSIT_TEST_MODE is unset.
 # outer-preflight is handled separately below: it needs the real pre-flight
@@ -1621,6 +1629,18 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight
       ;;
     outer-sentinel)
       parse_sentinel "$(cat)"
+      ;;
+    outer-maxiter)
+      # Each stdin line is the outer loop's iter counter at the point the
+      # loop condition is re-checked. Prints "iter=N exhausted=0|1" per line
+      # using the real maxiter_exhausted() against $MAX_ITER.
+      while IFS= read -r _iter_line; do
+        if maxiter_exhausted "$_iter_line" "$MAX_ITER"; then
+          echo "iter=$_iter_line exhausted=1"
+        else
+          echo "iter=$_iter_line exhausted=0"
+        fi
+      done
       ;;
     *)
       echo "Unknown BABYSIT_TEST_MODE: $BABYSIT_TEST_MODE" >&2
@@ -1955,7 +1975,7 @@ ${BASE_PROMPT}"
   sleep "$SLEEP_SEC"
 done
 
-if [ "$iter" -ge "$MAX_ITER" ]; then
+if maxiter_exhausted "$iter" "$MAX_ITER"; then
   echo "Hit MAX_ITER=$MAX_ITER. Bailing." | tee -a "$LOG"
 fi
 

@@ -1,10 +1,11 @@
 # QA Test Plan — babysit-with-review.sh
 
 **Owner:** qa-lead  
-**Status:** Test Suite 4 automated and passing (136/136, last run 2026-09-27), now
-including automated pre-flight coverage for TC-1.2 and sentinel-detection coverage
-for TC-1.5/TC-1.6 (see Suite 1); Test Suites 1-3 otherwise remain manual smoke tests
-against live Claude/Codex/gh, not yet executed  
+**Status:** Test Suite 4 automated and passing (140/140, last run 2026-09-27), now
+including automated pre-flight coverage for TC-1.2, sentinel-detection coverage
+for TC-1.5/TC-1.6, and MAX_ITER-exhaustion coverage for TC-1.8 (see Suite 1);
+Test Suites 1-3 otherwise remain manual smoke tests against live Claude/Codex/gh,
+not yet executed  
 **Priority:** Medium (internal tool, existing implementation to verify)
 
 ## Test Strategy
@@ -159,6 +160,14 @@ acceptance reference for that end-to-end behavior.
 ---
 
 ### TC-1.8: MAX_ITER Exhaustion
+**Status: automated, not manual (added 2026-09-27).** The exhaustion check
+is extracted into `maxiter_exhausted()` and covered deterministically in
+`test-babysit-with-review-cli.sh` via `BABYSIT_TEST_MODE=outer-maxiter`,
+which feeds simulated post-iteration counters through the real function (no
+Claude/Codex/gh involved). This TC's manual steps below remain as the
+original acceptance reference; the automated cases are the ones that
+actually run before every commit.
+
 **Given:** MAX_ITER=5  
 **When:** 5 iterations complete without STOP  
 **Then:** Loop exits with "Hit MAX_ITER"
