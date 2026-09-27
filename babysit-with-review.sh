@@ -2039,6 +2039,11 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
       # leave the PR unlabelled and undiscoverable by the next retry sweep.
       echo "[outer] $REVIEWER CLI still unavailable; leaving PR #$_retry_pr labelled $_retry_label for a later retry" | tee -a "$LOG" >&2
       unset _retry_pick _retry_label _retry_pr
+      # Don't fall through to new work: a PR is stuck awaiting review, and
+      # starting an implementer pass would let new unreviewed work pile up
+      # behind it instead of resolving the stall first (see PR #104 review).
+      sleep "$SLEEP_SEC"
+      continue
     else
       echo "[outer] retrying review cycle for PR #$_retry_pr ($_retry_label)" | tee -a "$LOG" >&2
       gh pr edit "$_retry_pr" --remove-label "$_retry_label" >>"$LOG" 2>&1 || true

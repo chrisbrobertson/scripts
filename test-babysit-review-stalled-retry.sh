@@ -1,25 +1,29 @@
 #!/bin/bash
 # test-babysit-review-stalled-retry.sh — recording-stub coverage for the
 # outer loop's stalled-PR retry sweep in babysit-with-review.sh (the sweep
-# added for #82, tightened for #104).
+# added for #82, tightened for #104, tightened again in PR #104's own review
+# cycle for the reviewer-unavailable fallthrough below).
 #
-# Two BLOCKING regressions this guards against:
+# BLOCKING regressions this guards against:
 #   1. The sweep finds a stalled PR by searching `gh pr list --label <l>`, so
 #      the label must still be on the PR when the sweep runs. Confirms the
-#      sweep issues `gh pr edit --remove-label` ITSELF rather than requiring
+#      sweep issues `gh pr edit --remove-label` ITSELF — but only once the
+#      reviewer CLI is confirmed available (see #2) — rather than requiring
 #      the operator to have removed it already (removing it first makes the
 #      search find nothing and strands the PR in draft — see #104).
-#   2. The sweep must NOT call `gh pr ready` before the re-review completes;
-#      only a clean review may un-draft a PR (merge_reviewed_pr does that).
-#      Un-drafting up front would expose an unreviewed PR to merging.
+#   1b. The sweep must NOT call `gh pr ready` (undraft-for-merge) before the
+#      re-review completes; only a clean review may un-draft a PR
+#      (merge_reviewed_pr does that). Un-drafting up front would expose an
+#      unreviewed PR to merging.
+#   2. When the reviewer CLI is still unavailable, the sweep must leave the
+#      label in place (so a later run can find the PR again) AND must not
+#      fall through to starting new implementer work — a stalled PR awaiting
+#      review takes priority over new work, otherwise unreviewed work piles
+#      up behind the stall (flagged in PR #104's own review cycle).
 #
 # Runs a real outer-loop iteration (BABYSIT_TEST_MODE unset) against a real
-# git repo (preflight needs real git state) with only `gh` stubbed on PATH.
-# The reviewer binary (codex) is deliberately absent from PATH so
-# run_review_cycle takes its graceful-degradation early return right after
-# checkout — no further gh/git calls — keeping the fixture minimal while
-# still proving the sweep invoked the real run_review_cycle() for the right
-# PR. No Claude/Codex network calls.
+# git repo (preflight needs real git state) with `gh` and (for scenario 1)
+# `codex` stubbed on PATH. No Claude/Codex network calls.
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "$0")" && pwd)
@@ -31,6 +35,11 @@ pass() { echo "ok - $1"; PASS=$((PASS + 1)); }
 fail() { echo "not ok - $1" >&2; FAIL=$((FAIL + 1)); }
 assert_grep() { if grep -qF -- "$2" "$3" 2>/dev/null; then pass "$1"; else echo "  missing '$2' in $3" >&2; sed 's/^/    /' "$3" >&2; fail "$1"; fi; }
 assert_not_grep() { if grep -qF -- "$2" "$3" 2>/dev/null; then echo "  unexpected '$2' in $3" >&2; sed 's/^/    /' "$3" >&2; fail "$1"; else pass "$1"; fi; }
+# Exact whole-line match — needed to tell "gh pr ready 96" (undraft-for-merge)
+# apart from "gh pr ready 96 --undo" (fail_review_cycle's re-draft), since
+# the former is a textual prefix of the latter and a plain substring grep
+# can't distinguish them.
+assert_not_line() { if grep -qxF -- "$2" "$3" 2>/dev/null; then echo "  unexpected exact line '$2' in $3" >&2; sed 's/^/    /' "$3" >&2; fail "$1"; else pass "$1"; fi; }
 
 mkdir -p "$TMP/bin"
 
@@ -52,9 +61,22 @@ esac
 STUB
 chmod +x "$TMP/bin/gh"
 
+# codex: only used in scenario 1 (reviewer available). Fails the
+# reviewer_preflight probe generically (not the version/credits telltales),
+# which drives run_review_cycle straight to fail_review_cycle() without ever
+# reaching gh pr checkout/merge — enough to prove the sweep invoked the real
+# run_review_cycle() for the right PR, without needing to fake a full review.
+cat > "$TMP/bin/codex.stub" <<'STUB'
+#!/bin/bash
+printf 'CALL=codex %s\n' "$*" >> "$RECORD"
+echo "generic preflight failure (not a version/credits issue)" >&2
+exit 1
+STUB
+chmod +x "$TMP/bin/codex.stub"
+
 # Real git repo satisfying pre-flight: bare origin + a clone with one commit
 # on "main", already pushed (clean, not ahead/behind). Real git binary is
-# used (only gh is stubbed), matching make_preflight_repo() in
+# used (only gh/codex are stubbed), matching make_preflight_repo() in
 # test-babysit-with-review-cli.sh.
 make_repo() {
   local dir="$1"
@@ -85,13 +107,26 @@ run_outer_iteration() {  # <record> [env assignments...]
   echo "$?" > "$TMP/rc"
 }
 
-# ---------- a PR is stalled behind review-codex-outdated ----------
+# ---------- scenario 1: reviewer CLI available, a PR is stalled behind
+# review-codex-outdated ----------
+ln -s "$TMP/bin/codex.stub" "$TMP/bin/codex"
 r="$TMP/outdated.record"
 run_outer_iteration "$r" STUB_PR_OUTDATED=96
-assert_grep "stalled retry: sweep removes the label itself" "CALL=gh pr edit 96 --remove-label review-codex-outdated" "$r"
-assert_not_grep "stalled retry: sweep does not un-draft before the review runs (BLOCKING #2)" "CALL=gh pr ready 96" "$r"
-assert_grep "stalled retry: run_review_cycle actually ran for the stalled PR" "codex CLI not found; skipping review cycle (PR #96 remains open for external review)" "$TMP/err"
-assert_grep "stalled retry: outer loop logs which PR/label it's retrying" "[outer] retrying review cycle for PR #96 (review-codex-outdated)" "$TMP/err"
+assert_grep "stalled retry (reviewer available): sweep removes the label itself" "CALL=gh pr edit 96 --remove-label review-codex-outdated" "$r"
+assert_not_line "stalled retry (reviewer available): sweep does not un-draft before the review runs (BLOCKING #2)" "CALL=gh pr ready 96" "$r"
+assert_grep "stalled retry (reviewer available): run_review_cycle actually ran for the stalled PR" "=== review handoff: PR #96 @" "$TMP/err"
+assert_grep "stalled retry (reviewer available): outer loop logs which PR/label it's retrying" "[outer] retrying review cycle for PR #96 (review-codex-outdated)" "$TMP/err"
+assert_not_grep "stalled retry (reviewer available): never merges an unreviewed PR" "CALL=gh pr merge" "$r"
+rm -f "$TMP/bin/codex"
+
+# ---------- scenario 2: reviewer CLI still unavailable — label stays, no
+# review is run, and no new work starts ahead of it ----------
+r="$TMP/unavailable.record"
+run_outer_iteration "$r" STUB_PR_OUTDATED=96
+assert_not_grep "stalled retry (reviewer unavailable): label is left in place for a later retry" "--remove-label" "$r"
+assert_not_grep "stalled retry (reviewer unavailable): run_review_cycle is never invoked" "=== review handoff: PR #96 @" "$TMP/err"
+assert_grep "stalled retry (reviewer unavailable): sweep logs that it's deferring" "[outer] codex CLI still unavailable; leaving PR #96 labelled review-codex-outdated for a later retry" "$TMP/err"
+assert_not_grep "stalled retry (reviewer unavailable): does not fall through to new implementer work" "[outer] worktree:" "$TMP/err"
 
 # ---------- no resumable label on any open PR: sweep is a no-op ----------
 r="$TMP/none.record"
