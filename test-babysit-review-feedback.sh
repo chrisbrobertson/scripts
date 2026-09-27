@@ -83,7 +83,7 @@ chmod +x "$TMP/bin/gh"
 run_feedback() {
   local out="$1" record="$2"
   : > "$record"
-  ( RECORD="$record" PATH="$TMP/bin:/usr/bin:/bin" \
+  ( RECORD="$record" PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
       BABYSIT_TEST_MODE=review-feedback TEST_PR_NUM=7 "$SCRIPT" ) > "$out" 2>/dev/null
 }
 
@@ -114,7 +114,7 @@ assert_grep "collect_pr_feedback queries inline review comments via gh api" "CAL
 # ---------- no feedback at all falls back to the documented "(none)" marker ----------
 run_feedback_empty() {
   : > "$TMP/empty.record"
-  ( RECORD="$TMP/empty.record" PATH="$TMP/bin:/usr/bin:/bin" STUB_OWNER_REPO="empty/repo" \
+  ( RECORD="$TMP/empty.record" PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" STUB_OWNER_REPO="empty/repo" \
       BABYSIT_TEST_MODE=review-feedback TEST_PR_NUM=99 "$SCRIPT" ) > "$TMP/empty.out" 2>/dev/null
 }
 cat > "$TMP/bin/gh" <<'STUB'
