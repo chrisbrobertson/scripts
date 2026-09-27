@@ -1509,14 +1509,13 @@ ${_hb}--- end prior review cycles ---
       return 0
     fi
 
-    local result trimmed last_line
+    local result review_sentinel
     result=$(cat "$TMP_REVIEW_RESULT")
-    trimmed=$(printf '%s' "$result" | sed -e 's/[[:space:]]*$//')
-    last_line=$(printf '%s' "$trimmed" | tail -n 1)
+    review_sentinel=$(parse_review_sentinel "$result")
 
-    case "$last_line" in
+    case "$review_sentinel" in
       "STUCK_REVIEW"*)
-        echo "  [$IMPLEMENTER implementer] $last_line — bailing review cycle" | tee -a "$LOG" >&2
+        echo "  [$IMPLEMENTER implementer] $review_sentinel — bailing review cycle" | tee -a "$LOG" >&2
         fail_review_cycle "$pr_num" "$IMPLEMENTER reported STUCK_REVIEW (cycle $cycle)"
         return 0
         ;;
@@ -1528,7 +1527,7 @@ ${_hb}--- end prior review cycles ---
           echo "  [$IMPLEMENTER implementer] resolution justifications posted to PR #$pr_num" | tee -a "$LOG" >&2
         fi
         ;;
-      *)
+      "NONE")
         echo "  [$IMPLEMENTER implementer] no review-cycle sentinel on last line; treating as DONE_REVIEW" | tee -a "$LOG" >&2
         # Capture resolution justifications for next cycle (cycle 4+)
         if [ "$cycle" -ge 4 ]; then
@@ -1539,7 +1538,7 @@ ${_hb}--- end prior review cycles ---
     esac
 
     post_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
-    if [ -n "$pre_sha" ] && [ "$pre_sha" = "$post_sha" ]; then
+    if review_head_unchanged "$pre_sha" "$post_sha"; then
       echo "  [$IMPLEMENTER implementer] HEAD unchanged (no commits made) — bailing review cycle to avoid infinite loop" | tee -a "$LOG" >&2
       fail_review_cycle "$pr_num" "$IMPLEMENTER reported DONE_REVIEW but made no commits (cycle $cycle)"
       return 0
@@ -1596,6 +1595,42 @@ maxiter_exhausted() {
 stop_file_removed() {
   local stop_file="$1"
   [ ! -f "$stop_file" ]
+}
+
+# Classify an implementer RESULT's trailing sentinel line during a review
+# cycle. Echoes one of:
+#   STUCK_REVIEW <reason>
+#   DONE_REVIEW
+#   NONE   (no recognized sentinel; run_review_cycle treats this like
+#           DONE_REVIEW, but callers can tell the two apart if needed)
+# Extracted from run_review_cycle so BABYSIT_TEST_MODE=review-sentinel can
+# drive it deterministically without gh/codex/git.
+parse_review_sentinel() {
+  local result="$1"
+  local trimmed last_line
+  trimmed=$(printf '%s' "$result" | sed -e 's/[[:space:]]*$//')
+  last_line=$(printf '%s' "$trimmed" | tail -n 1)
+  case "$last_line" in
+    "STUCK_REVIEW"*)
+      echo "$last_line"
+      ;;
+    "DONE_REVIEW")
+      echo "DONE_REVIEW"
+      ;;
+    *)
+      echo "NONE"
+      ;;
+  esac
+}
+
+# HEAD-unchanged predicate: true when the implementer reported DONE_REVIEW (or
+# no sentinel) but made no commits during the review pass — the defensive
+# check that avoids an infinite review-cycle loop. Extracted from
+# run_review_cycle so BABYSIT_TEST_MODE=review-head-unchanged can drive it
+# deterministically without gh/codex/git.
+review_head_unchanged() {
+  local pre_sha="$1" post_sha="$2"
+  [ -n "$pre_sha" ] && [ "$pre_sha" = "$post_sha" ]
 }
 
 # Narrow deterministic test hook for argument and provider-command regression
@@ -1675,6 +1710,26 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight
       # decides between "addressing findings" and "auto-merge"). No
       # Claude/Codex/gh involved.
       count_blocking
+      ;;
+    review-sentinel)
+      # Drives the real parse_review_sentinel() over an implementer RESULT on
+      # stdin (QA-TEST-PLAN.md TC-2.4: STUCK_REVIEW bails the review cycle).
+      # No Claude/Codex/gh involved.
+      parse_review_sentinel "$(cat)"
+      ;;
+    review-head-unchanged)
+      # Each stdin line is "pre_sha post_sha". Prints "pre=<p> post=<q>
+      # unchanged=0|1" per line using the real review_head_unchanged()
+      # (QA-TEST-PLAN.md TC-2.5: the defensive check that bails the review
+      # cycle when DONE_REVIEW arrives with no commits). No Claude/Codex/gh
+      # involved.
+      while IFS=' ' read -r _pre _post; do
+        if review_head_unchanged "$_pre" "$_post"; then
+          echo "pre=$_pre post=$_post unchanged=1"
+        else
+          echo "pre=$_pre post=$_post unchanged=0"
+        fi
+      done
       ;;
     *)
       echo "Unknown BABYSIT_TEST_MODE: $BABYSIT_TEST_MODE" >&2
