@@ -1353,17 +1353,15 @@ ${_hb}--- end prior review cycles ---
     local _has_history="no"
     [ -n "$history_block" ] && _has_history="yes"
     local _tmpl_name
-    if [ "$cycle" -eq 1 ]; then
-      _tmpl_name="descriptive-baseline"
-    elif [ "$cycle" -eq 2 ]; then
-      _tmpl_name="descriptive-convergence"
-    elif [ "$cycle" -le 4 ]; then
-      _tmpl_name="prescriptive-detailed"
-      echo "  [$REVIEWER reviewer] detailed explanations enabled (cycle 3+)" | tee -a "$LOG" >&2
-    else
-      _tmpl_name="prescriptive-adjudication"
-      echo "  [$REVIEWER reviewer] adjudication mode enabled (cycle 5+)" | tee -a "$LOG" >&2
-    fi
+    _tmpl_name=$(codex_template_name "$cycle")
+    case "$_tmpl_name" in
+      prescriptive-detailed)
+        echo "  [$REVIEWER reviewer] detailed explanations enabled (cycle 3+)" | tee -a "$LOG" >&2
+        ;;
+      prescriptive-adjudication)
+        echo "  [$REVIEWER reviewer] adjudication mode enabled (cycle 5+)" | tee -a "$LOG" >&2
+        ;;
+    esac
     echo "  [$REVIEWER reviewer] template=${_tmpl_name} has_history=${_has_history} cycle=${cycle}/${MAX_REVIEW_CYCLES}" | tee -a "$LOG" >&2
     unset _has_history _tmpl_name
 
@@ -1581,6 +1579,25 @@ parse_sentinel() {
   esac
 }
 
+# Codex review template name for a given review cycle number: which prompt
+# variant (descriptive vs. prescriptive) and convergence stage the reviewer
+# pass uses. Echoes one of: descriptive-baseline, descriptive-convergence,
+# prescriptive-detailed, prescriptive-adjudication. Extracted from the
+# per-cycle template selection so BABYSIT_TEST_MODE=review-template-name can
+# drive it deterministically (QA-TEST-PLAN TC-2.3, TC-2.7).
+codex_template_name() {
+  local cycle="$1"
+  if [ "$cycle" -eq 1 ]; then
+    echo "descriptive-baseline"
+  elif [ "$cycle" -eq 2 ]; then
+    echo "descriptive-convergence"
+  elif [ "$cycle" -le 4 ]; then
+    echo "prescriptive-detailed"
+  else
+    echo "prescriptive-adjudication"
+  fi
+}
+
 # MAX_ITER exhaustion predicate: true once the outer loop's iteration counter
 # has reached the configured cap. Extracted from the post-loop check so
 # BABYSIT_TEST_MODE=outer-maxiter can drive it deterministically.
@@ -1668,6 +1685,14 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight
       # (QA-TEST-PLAN.md TC-2.10/TC-2.11). PR number comes from TEST_PR_NUM
       # so callers don't have to smuggle it past this script's own CLI parser.
       collect_pr_feedback "${TEST_PR_NUM:-7}"
+      ;;
+    review-template-name)
+      # Each stdin line is a review cycle number. Prints "cycle=N
+      # template=<name>" per line using the real codex_template_name()
+      # (QA-TEST-PLAN TC-2.3, TC-2.7).
+      while IFS= read -r _cycle_line; do
+        echo "cycle=$_cycle_line template=$(codex_template_name "$_cycle_line")"
+      done
       ;;
     *)
       echo "Unknown BABYSIT_TEST_MODE: $BABYSIT_TEST_MODE" >&2

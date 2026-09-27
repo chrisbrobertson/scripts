@@ -1,11 +1,12 @@
 # QA Test Plan — babysit-with-review.sh
 
 **Owner:** qa-lead  
-**Status:** Test Suite 4 automated and passing (144/144, last run 2026-09-27), now
+**Status:** Test Suite 4 automated and passing (152/152, last run 2026-09-27), now
 including automated pre-flight coverage for TC-1.2, lock-file-collision coverage
 for TC-1.3/TC-1.3b, lock-file-removal coverage for TC-1.4, sentinel-detection
-coverage for TC-1.5/TC-1.6, and MAX_ITER-exhaustion coverage for TC-1.8 (see
-Suite 1), plus a separate `test-babysit-review-feedback.sh` harness covering
+coverage for TC-1.5/TC-1.6, MAX_ITER-exhaustion coverage for TC-1.8, and
+review-cycle template-selection coverage for TC-2.3/TC-2.7 (see Suite 1 and
+Suite 2), plus a separate `test-babysit-review-feedback.sh` harness covering
 the `collect_pr_feedback()` filter (TC-2.10/TC-2.11, see Suite 2); Test Suites
 1-3 otherwise remain manual smoke tests against live Claude/Codex/gh, not yet
 executed  
@@ -252,6 +253,16 @@ actually run before every commit.
 ---
 
 ### TC-2.3: Prescriptive Mode (Cycle 3+)
+**Status: automated (template selection only), not manual (added 2026-09-27).**
+The cycle-to-template mapping is extracted into `codex_template_name()` and
+covered deterministically in `test-babysit-with-review-cli.sh` via
+`BABYSIT_TEST_MODE=review-template-name`, which feeds cycle numbers through
+the real function (no Claude/Codex/gh involved) and asserts cycle 3 returns
+`prescriptive-detailed`. Whether Codex's actual output contains a concrete
+`Suggested fix:` line under each BLOCKING bullet is a property of the live
+Codex response, not this function, so the manual steps below remain the
+acceptance reference for that content check.
+
 **Given:** Cycle 3 starts  
 **When:** Codex prompt is assembled  
 **Then:** Prescriptive template used (requires "Suggested fix:")
@@ -310,6 +321,15 @@ actually run before every commit.
 ---
 
 ### TC-2.7: Convergence Tracking (Cycle 2+)
+**Status: automated (template selection only), not manual (added 2026-09-27).**
+Same `review-template-name` harness as TC-2.3: cycle 2 is asserted to return
+`descriptive-convergence`, the template that carries the history block, while
+cycle 1 returns `descriptive-baseline`. Whether the assembled Codex prompt
+actually contains the `--- prior review cycles ---` history block (built
+separately in `run_review_cycle` from `REVIEW_HISTORY` and `git log`, not by
+`codex_template_name()`) is not covered by this harness — the manual steps
+below remain the acceptance reference for that content check.
+
 **Given:** Cycle 2 starts  
 **When:** Codex prompt is assembled  
 **Then:** History block includes cycle 1 review and git log
