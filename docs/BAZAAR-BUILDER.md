@@ -293,8 +293,10 @@ Environment:
 | `MAX_REVIEW_CYCLES` | 6 | code review cap per unit |
 | `WORK_PREP_SPEC_DIR` | auto | override spec directory discovery |
 
-Implementer models per review cycle are staged (Sonnet early, Opus 4-8 from cycle 4) unless
-`--implementer-model` pins one.
+For the build loop's code-review cycles (`--mode code`), implementer models are staged
+(Sonnet through cycle 3, Opus 4-8 from cycle 4) unless `--implementer-model` pins one. The
+issue loop's spec-review cycles (`--mode spec`) never escalate — remediation stays on Sonnet
+regardless of cycle number.
 
 ---
 
