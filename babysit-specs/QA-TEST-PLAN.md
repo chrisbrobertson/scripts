@@ -5,8 +5,10 @@
 including automated pre-flight coverage for TC-1.2, lock-file-collision coverage
 for TC-1.3/TC-1.3b, lock-file-removal coverage for TC-1.4, sentinel-detection
 coverage for TC-1.5/TC-1.6, and MAX_ITER-exhaustion coverage for TC-1.8 (see
-Suite 1); Test Suites 1-3 otherwise remain manual smoke tests against live
-Claude/Codex/gh, not yet executed  
+Suite 1), plus a separate `test-babysit-review-feedback.sh` harness covering
+the `collect_pr_feedback()` filter (TC-2.10/TC-2.11, see Suite 2); Test Suites
+1-3 otherwise remain manual smoke tests against live Claude/Codex/gh, not yet
+executed  
 **Priority:** Medium (internal tool, existing implementation to verify)
 
 ## Test Strategy
@@ -356,6 +358,15 @@ actually run before every commit.
 ---
 
 ### TC-2.10: Existing CodeRabbit Comments Included
+**Status: automated, not manual (added 2026-09-27).** `test-babysit-review-feedback.sh`
+drives the real `collect_pr_feedback()` (via `BABYSIT_TEST_MODE=review-feedback`)
+against a `gh` stub that forwards the function's actual `--json`/`-q`/`--jq`
+arguments to the real `jq` binary against canned review/comment/inline-comment
+fixtures — so the embedded jq filters run unmodified, not a bash
+re-implementation of them. This directly verifies the unit-test alternative this
+TC's note below already proposed. The manual steps remain the acceptance
+reference for the live-PR path (the actual prompt Claude receives).
+
 **Given:** PR has existing CodeRabbit comments  
 **When:** collect_pr_feedback runs  
 **Then:** Comments included in Claude prompt
@@ -371,6 +382,17 @@ actually run before every commit.
 ---
 
 ### TC-2.11: Self-Posted Codex Comments Excluded
+**Status: automated, not manual (added 2026-09-27).** Same
+`test-babysit-review-feedback.sh` harness as TC-2.10: the `--json reviews`
+fixture covers all three self-posted prefixes (`**Codex review`, `**Claude
+review`, `**babysit-with-review:`), and the assertions confirm
+`collect_pr_feedback()` excludes all three from that call. The `--json
+comments` fixture additionally confirms exclusion of a self-posted `**Codex
+review` in top-level PR comments. Inline review comments (`gh api
+.../comments`) have no self-posted fixture, so exclusion there is untested by
+this harness. The manual steps remain the acceptance reference for the
+live-PR path.
+
 **Given:** PR has self-posted Codex review comment  
 **When:** collect_pr_feedback runs  
 **Then:** Comment excluded
@@ -600,13 +622,20 @@ detection) have not been converted this way as of this writing; check each TC's 
 status note for the current state, since this file is not always updated when a new
 stub mode ships.
 
-**Still open, for Test Suite 2 and Suite 3** (review-cycle state machine, MCP
-resilience): those suites still require live Claude/Codex/gh calls or manual network
-interference (blocking `chatgpt.com` to simulate MCP failures) because no
-`BABYSIT_TEST_MODE`-style stub exists yet for the review-cycle state machine or for
-`codex_review_with_retry`'s transport-failure paths. Extending `BABYSIT_TEST_MODE`
-(or a sibling stub mode) to cover those two surfaces would let Suites 2-3 collapse
-into the same fast, deterministic run as Suite 4 and Suite 1's automated cases.
+**Partially done, for Suite 2's PR-feedback filter:** `BABYSIT_TEST_MODE=review-feedback`
+drives the real `collect_pr_feedback()` against a stubbed `gh` (`test-babysit-review-feedback.sh`),
+covering TC-2.10/TC-2.11. The rest of Suite 2's review-cycle state machine
+(TC-2.1-2.9) is untouched by this — no stub exists yet for `run_review_cycle`'s
+cycle loop, sentinel handling, or label application.
+
+**Still open, for the rest of Test Suite 2 and all of Suite 3** (review-cycle state
+machine, MCP resilience): those cases still require live Claude/Codex/gh calls or
+manual network interference (blocking `chatgpt.com` to simulate MCP failures)
+because no `BABYSIT_TEST_MODE`-style stub exists yet for `run_review_cycle`'s cycle
+loop or for `codex_review_with_retry`'s transport-failure paths. Extending
+`BABYSIT_TEST_MODE` (or a sibling stub mode) to cover those two surfaces would let
+the rest of Suites 2-3 collapse into the same fast, deterministic run as Suite 4
+and Suite 1's/Suite 2's automated cases.
 
 ### Short-term (Manual Testing, Suites 1-3 only)
 - Use test repo: `~/test-babysit-repo/` for isolated testing

@@ -1663,6 +1663,12 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight
         fi
       done
       ;;
+    review-feedback)
+      # Drives the real collect_pr_feedback() against a stubbed gh on PATH
+      # (QA-TEST-PLAN.md TC-2.10/TC-2.11). PR number comes from TEST_PR_NUM
+      # so callers don't have to smuggle it past this script's own CLI parser.
+      collect_pr_feedback "${TEST_PR_NUM:-7}"
+      ;;
     *)
       echo "Unknown BABYSIT_TEST_MODE: $BABYSIT_TEST_MODE" >&2
       exit 2

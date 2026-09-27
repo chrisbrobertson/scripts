@@ -37,6 +37,7 @@ empirical tests (`test-*`). No formal test suite, no build step, no CI.
 | `run-retrospective-review.sh` | One-shot Codex review for PRs that merged without automated review; posts findings as PR comments and opens issues for each BLOCKING finding |
 | `find-bailed-merged-prs.sh` | Scan babysit logs for review-cycle bails, then query GitHub to find which bailed PRs were subsequently merged (unreviewed code audit) |
 | `test-babysit-with-review-cli.sh` | Deterministic CLI regression harness for babysit-with-review.sh using recording stubs (`BABYSIT_TEST_MODE`) |
+| `test-babysit-review-feedback.sh` | Recording-stub coverage for `collect_pr_feedback()`'s CodeRabbit-inclusion / self-posted-exclusion filter (QA-TEST-PLAN.md TC-2.10/TC-2.11); `gh` stub on PATH forwards the script's real `--json`/`-q`/`--jq` args to the real `jq` binary against canned fixtures, so the actual embedded filters run |
 | `test-llm-routing.py` | Empirical test: model-alias forwarding + OAuth rejection by Anthropic |
 | `test-codex-review.sh` | Codex review helper |
 | `prs` | `gh pr list` with CI rollup and review state |
