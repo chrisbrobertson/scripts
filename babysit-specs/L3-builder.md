@@ -236,12 +236,20 @@ sign-off before `babysit-builder.sh` is built against this spec:
   four non-terminal quarantine labels mirror `babysit-with-review.sh`'s `review-*`
   set one-for-one, because invariant 6 forbids reusing those: `build-incomplete`,
   `build-mcp-outage`, `build-codex-outdated`, `build-codex-no-credits`. A
-  `build-incomplete` bail also swaps the ticket to `build-done` (with an explanatory
-  ticket comment carrying the real semantics) — leaving it `build-ready` would
-  guarantee a duplicate PR on every subsequent run with no progress, which is the one
-  case the accepted-duplicate-PR trade-off does not cover. `build-mcp-outage` is the
-  deliberate exception: the ticket keeps `build-ready` because the outage sweep at the
-  top of the next run resumes that PR before the queue is read.
+  `build-incomplete` bail also swaps the ticket to `build-done` — leaving it
+  `build-ready` would guarantee a duplicate PR on every subsequent run with no
+  progress, which is the one case the accepted-duplicate-PR trade-off does not cover.
+  Confirmed against the shipped implementation: the ticket-side comment `mark_ticket_done`
+  posts is the same generic "PR halted for human merge" heading on all three paths that
+  reach it (`build-ready-for-merge` convergence, `build-max-cycles`, and `build-incomplete`)
+  — it does not carry the bail's real semantics; a human must read the PR's own label to
+  tell the three apart. `build-mcp-outage` is one deliberate exception to the swap: the
+  ticket keeps `build-ready` because the outage sweep at the top of the next run resumes
+  that PR before the queue is read. `build-codex-outdated` and `build-codex-no-credits` are
+  also exceptions in the shipped code — `mark_ticket_done` is never reached on those paths
+  either, so the ticket keeps `build-ready` there too — but unlike the MCP-outage path
+  neither has an automatic resume sweep: the run halts entirely, and once the operator
+  clears the label a re-selected ticket may open a second PR alongside the quarantined one.
   Owner should confirm the `build-incomplete` → `build-done` swap reads correctly, or
   whether a distinct ticket-side label is preferred. Critically, the
   queue query filters on `build-ready` presence alone, so `build-done` being *added*
