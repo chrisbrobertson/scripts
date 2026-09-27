@@ -151,12 +151,14 @@ local mcp_re='Transport send error:|...'
 | Auto-merge approval | Medium | **Resolved** — `codex-review` status gate + `setup-branch-protection.sh` shipped in v1.1.0 |
 | Telltale regex injection | Low | **Resolved** — maintenance comment added to source |
 | Command injection | Low | Accepted (validated input, proper quoting) |
-| Secrets exposure in logs | Low | Accepted for personal use, document log sensitivity |
+| Secrets exposure in logs | Low | **Resolved** — log sensitivity documented in README.md |
 | Dependency trust | Medium | Accepted, document installation sources, monitor Codex CLI |
 
 **Remaining action items:**
 1. ~~**Owner decision:** Auto-merge behavior~~ — resolved; optional follow-up: decide on `required_approving_review_count` for team repos
 2. ~~Add telltale regex maintenance comment~~ — done
-3. Document log sensitivity in README/CLAUDE.md (10-minute doc update) — still open
+3. ~~Document log sensitivity in README/CLAUDE.md~~ — done (`README.md`'s "Logs" section, added in `c73cf53`)
 
-**Estimated remaining effort:** ~10 minutes (log sensitivity doc update)
+**Estimated remaining effort:** None — all tracked action items resolved. The
+only open item in this plan is the optional `required_approving_review_count`
+follow-up noted in item 1, which is an owner decision, not a doc/code task.
