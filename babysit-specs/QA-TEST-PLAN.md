@@ -3,9 +3,10 @@
 **Owner:** qa-lead  
 **Status:** Test Suite 4 automated and passing (144/144, last run 2026-09-27), now
 including automated pre-flight coverage for TC-1.2, lock-file-collision coverage
-for TC-1.3/TC-1.3b, sentinel-detection coverage for TC-1.5/TC-1.6, and
-MAX_ITER-exhaustion coverage for TC-1.8 (see Suite 1); Test Suites 1-3 otherwise
-remain manual smoke tests against live Claude/Codex/gh, not yet executed  
+for TC-1.3/TC-1.3b, lock-file-removal coverage for TC-1.4, sentinel-detection
+coverage for TC-1.5/TC-1.6, and MAX_ITER-exhaustion coverage for TC-1.8 (see
+Suite 1); Test Suites 1-3 otherwise remain manual smoke tests against live
+Claude/Codex/gh, not yet executed  
 **Priority:** Medium (internal tool, existing implementation to verify)
 
 ## Test Strategy
@@ -588,13 +589,24 @@ output via a stub" recommendation below is no longer future work for that surfac
 touches flag parsing, harness selection, model/effort forwarding, or
 `valid_review_structure`.
 
-**Still open, for Test Suites 1-3** (outer loop, review-cycle state machine, MCP
+**Partially done, for Suite 1's outer-loop mechanics:** `BABYSIT_TEST_MODE` now has
+sibling stub modes (`outer-preflight`, `outer-sentinel`, `outer-maxiter`,
+`outer-lockfile-removed`) that extract the pre-flight gate, sentinel parsing, MAX_ITER
+exhaustion, and mid-run lock-file removal into pure functions and drive them
+deterministically — no Claude/Codex/gh involved. This covers TC-1.2 through TC-1.6 and
+TC-1.8 (see each TC's own status note above). TC-1.1 (a full single-iteration run,
+including the per-iteration git worktree and branch rename) and TC-1.7 (stuck-loop
+detection) have not been converted this way as of this writing; check each TC's own
+status note for the current state, since this file is not always updated when a new
+stub mode ships.
+
+**Still open, for Test Suite 2 and Suite 3** (review-cycle state machine, MCP
 resilience): those suites still require live Claude/Codex/gh calls or manual network
 interference (blocking `chatgpt.com` to simulate MCP failures) because no
-`BABYSIT_TEST_MODE`-style stub exists yet for the outer loop's `run_implementer` call
-or for `codex_review_with_retry`'s transport-failure paths. Extending
-`BABYSIT_TEST_MODE` (or a sibling stub mode) to cover those two surfaces would let
-Suites 1-3 collapse into the same fast, deterministic run as Suite 4.
+`BABYSIT_TEST_MODE`-style stub exists yet for the review-cycle state machine or for
+`codex_review_with_retry`'s transport-failure paths. Extending `BABYSIT_TEST_MODE`
+(or a sibling stub mode) to cover those two surfaces would let Suites 2-3 collapse
+into the same fast, deterministic run as Suite 4 and Suite 1's automated cases.
 
 ### Short-term (Manual Testing, Suites 1-3 only)
 - Use test repo: `~/test-babysit-repo/` for isolated testing
