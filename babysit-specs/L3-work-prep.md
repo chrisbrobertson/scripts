@@ -325,7 +325,7 @@ Events emitted to stderr:
    runs, **then** a worktree is created, a spec file is drafted and committed, and a PR
    is opened referencing the ticket.
 2. **Given** a ticket that already has an open spec PR, **when** the script runs,
-   **then** it is skipped in the drafting phase with a `already has open spec PR`
+   **then** it is skipped in the drafting phase with a `already has open/merged spec PR`
    message and no duplicate PR is opened.
 3. **Given** a converged (non-draft) spec PR for a GitHub-sourced ticket with a comment
    containing "Approved, let's build this" from an authorized approver, **when** the
