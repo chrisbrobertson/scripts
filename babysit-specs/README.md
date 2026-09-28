@@ -6,12 +6,12 @@ TIF (Trustable, Intuitive, Flexible) specifications documenting the autonomous d
 
 | Layer | File | Status | Description |
 |---|---|---|---|
-| **L1** | [L1-babysit-with-review.md](L1-babysit-with-review.md) | review | Product spec: autonomous dev loop for solo/small teams (<10 users) |
-| **L2** | [L2-autonomous-dev-system.md](L2-autonomous-dev-system.md) | review | System architecture: bash orchestrator + selectable implementer/reviewer + gh/git |
-| **L3** | [L3-autonomous-outer-loop.md](L3-autonomous-outer-loop.md) | review | Iterative loop: worktree → collect_state → run_implementer → sentinel detection |
-| **L3** | [L3-review-cycle.md](L3-review-cycle.md) | review | Review cycle: reviewer → implementer fixes → convergence + codex-review status gate |
-| **L3** | [L3-mcp-resilience.md](L3-mcp-resilience.md) | review | MCP resilience: retry-with-backoff + valid_review_structure for Codex transport failures |
-| **L3** | [L3-retrospective-review.md](L3-retrospective-review.md) | review | Retrospective review: one-shot Codex review for merged PRs that bypassed forward-path |
+| **L1** | [L1-babysit-with-review.md](L1-babysit-with-review.md) | approved | Product spec: autonomous dev loop for solo/small teams (<10 users) |
+| **L2** | [L2-autonomous-dev-system.md](L2-autonomous-dev-system.md) | approved | System architecture: bash orchestrator + selectable implementer/reviewer + gh/git |
+| **L3** | [L3-autonomous-outer-loop.md](L3-autonomous-outer-loop.md) | approved | Iterative loop: worktree → collect_state → run_implementer → sentinel detection |
+| **L3** | [L3-review-cycle.md](L3-review-cycle.md) | approved | Review cycle: reviewer → implementer fixes → convergence + codex-review status gate |
+| **L3** | [L3-mcp-resilience.md](L3-mcp-resilience.md) | approved | MCP resilience: retry-with-backoff + valid_review_structure for Codex transport failures |
+| **L3** | [L3-retrospective-review.md](L3-retrospective-review.md) | approved | Retrospective review: one-shot Codex review for merged PRs that bypassed forward-path |
 | **L3** | L3-work-prep.md | review | Work-prep loop: ticket → TIF spec pipeline with human approval gate and sub-ticket creation — drafted on open PR #8 (`docs/l3-work-prep-spec`), not yet merged to main |
 | **L3** | [L3-builder.md](L3-builder.md) | review | Builder loop: spec → PR pipeline with convergent adversarial review cycle and human merge gate |
 | **L4** | [L4-selectable-implementer.md](L4-selectable-implementer.md) | **ready** | Select Claude or Codex implementation harness with role-specific model/effort |
