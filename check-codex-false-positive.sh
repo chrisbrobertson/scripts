@@ -280,6 +280,7 @@ header_counts = {}
 unexpected_headers = []
 headers_in_order = []
 current = None
+leading_content = False
 for l in block:
     line = l.rstrip('\r\n')
     if line.strip() == '':
@@ -293,6 +294,15 @@ for l in block:
         sections[current] = []
     elif current is not None:
         sections[current].append(line)
+    else:
+        # Nonblank content before the first recognized column-0 "## " header.
+        # The backward span scan above matches "## ADJUDICATION"/"## BLOCKING"
+        # on a *left-stripped* line, so it can anchor `start` on an INDENTED
+        # header that this column-0 parser then silently discards — leaving the
+        # trailing clean sections to read as a false positive on a verdict the
+        # wrapper (whose awk anchors every header at column 0) actually rejects.
+        # Flag any such leading content so the block reads as malformed.
+        leading_content = True
 
 # A well-formed verdict block has each required header exactly once, an
 # optional leading ADJUDICATION, and no other "## " headers. Duplicate
@@ -316,7 +326,7 @@ out_of_order = headers_in_order != expected_order
 # When ADJUDICATION is present the wrapper requires it to carry >=1 bullet
 # (valid_review_structure() END check: adjudication_headings == 1 && bullets < 1).
 adjudication_empty = has_adjudication and not sections.get(ADJUDICATION)
-malformed = (bool(duplicate_headers) or bool(unexpected_headers)
+malformed = (leading_content or bool(duplicate_headers) or bool(unexpected_headers)
              or bool(missing_headers) or out_of_order or adjudication_empty)
 
 clean = (not malformed) and all(sections.get(name) == ['- (none)'] for name in REQUIRED_SECTIONS)
@@ -329,6 +339,9 @@ print(block_text)
 print()
 if malformed:
     reasons = []
+    if leading_content:
+        reasons.append('nonblank content before the first column-0 section header '
+                       '(e.g. an indented "## ADJUDICATION"/"## BLOCKING" the wrapper rejects)')
     if duplicate_headers:
         reasons.append(f'duplicate section header(s): {", ".join(duplicate_headers)}')
     if unexpected_headers:

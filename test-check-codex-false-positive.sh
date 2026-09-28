@@ -167,6 +167,27 @@ EOF
 run_case "real BLOCKING finding is not a false positive" \
   "non-empty findings present" "$TMP/case6.log"
 
+# ---------- Case 7: an INDENTED ## ADJUDICATION header is malformed ----------
+# The backward span scan matches "## ADJUDICATION" on a left-stripped line, so an
+# indented header can anchor `start`. The column-0 parser discards it, leaving the
+# clean sections to look like a false positive on a verdict the wrapper rejects.
+# The leading-content guard must catch it. (PR #94 cycle-5 DISAGREED re-address.)
+cat > "$TMP/case7.log" <<EOF
+  [codex] starting review
+$HANDOFF
+  ## ADJUDICATION
+- BLOCKING earlier finding: ACCEPTED — fix is sound
+## BLOCKING
+- (none)
+## RECOMMENDED
+- (none)
+## INFORMATION
+- (none)
+$HALT
+EOF
+run_case "indented ## ADJUDICATION header does not read as false positive" \
+  "nonblank content before the first column-0 section header" "$TMP/case7.log"
+
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
