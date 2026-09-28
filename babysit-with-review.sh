@@ -1097,18 +1097,28 @@ The babysitter has halted — this is not recoverable while it's running. To res
 # ever searches by label, so a labelling failure here would leave the PR
 # undiscoverable while the outer loop moves on to new work (the exact #60
 # orphan class this function exists to close) — halt instead.
-# Args: <pr_num> [head_sha]
+# Args: <pr_num> [head_sha] [stage]
 # head_sha, when known, is the commit that codex-review=success was actually
 # posted for; it is recorded on the PR (see review_merge_failed_recorded_head)
 # so a later merge-only retry can confirm the PR head hasn't moved since the
 # review passed before reusing that green status (see PR #107 review).
+#
+# stage says which step actually failed — "status" (the codex-review status
+# POST itself, or resolving the repo/head needed to make it, so no status was
+# set and no merge was attempted) or "merge" (default; status was set green
+# but `gh pr merge` failed) — so the posted comment doesn't claim a status
+# was set, or a merge was attempted, when it wasn't (see PR #107 review,
+# RECOMMENDED). Either way the retry sweep calls merge_reviewed_pr() again in
+# full, which redoes the status POST before merging, so one label/retry path
+# correctly covers both failure points.
 flag_review_cycle_merge_failed() {
   local pr_num="$1"
   local head_sha="${2:-}"
+  local stage="${3:-merge}"
 
   gh label create review-merge-failed \
     --color b60205 \
-    --description "Babysit review passed but gh pr merge failed; wrapper retries automatically" \
+    --description "Babysit review passed but the merge could not be completed; wrapper retries automatically" \
     --force >>"$LOG" 2>&1 || true
 
   # Fail-closed: if we can't label the PR, halt — it must not sit unlabelled
@@ -1120,9 +1130,16 @@ flag_review_cycle_merge_failed() {
   fi
 
   local body
-  body="**babysit-with-review: review passed but merge failed**
+  if [ "$stage" = "status" ]; then
+    body="**babysit-with-review: review passed but the \`codex-review\` status could not be set**
 
-The review cycle completed with zero BLOCKING findings and \`codex-review\` was already set to success, but \`gh pr merge\` itself failed — see the wrapper log for the exact error (often a transient CI or branch-protection race). No code changes are needed.
+The review cycle completed with zero BLOCKING findings, but posting the \`codex-review=success\` status failed (or the repo/head SHA needed to post it could not be resolved) — see the wrapper log for the exact error. No \`gh pr merge\` was attempted. No code changes are needed."
+  else
+    body="**babysit-with-review: review passed but merge failed**
+
+The review cycle completed with zero BLOCKING findings and \`codex-review\` was already set to success, but \`gh pr merge\` itself failed — see the wrapper log for the exact error (often a transient CI or branch-protection race). No code changes are needed."
+  fi
+  body="${body}
 
 Label \`review-merge-failed\` has been added. The stalled-PR retry sweep will find this PR by that label and retry automatically on a later iteration — do NOT remove it yourself (see #82/#104 for why removing a resumable label by hand strands the PR instead of helping). Remove it only if you merge this PR by hand."
   if [ -n "$head_sha" ]; then
@@ -1412,12 +1429,12 @@ merge_reviewed_pr() {
       # removed that label before calling in; without re-flagging here, this
       # failure would leave the PR invisible to every future sweep (see PR
       # #107 review, BLOCKING).
-      flag_review_cycle_merge_failed "$pr_num" "$_head_sha"
+      flag_review_cycle_merge_failed "$pr_num" "$_head_sha" status
       return 0
     fi
   else
     echo "  [review] WARNING: could not resolve repo or head SHA for PR #$pr_num; leaving PR open rather than merging without the status check" | tee -a "$LOG" >&2
-    flag_review_cycle_merge_failed "$pr_num" "$_head_sha"
+    flag_review_cycle_merge_failed "$pr_num" "$_head_sha" status
     return 0
   fi
 
