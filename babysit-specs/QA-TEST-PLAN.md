@@ -1,16 +1,19 @@
 # QA Test Plan — babysit-with-review.sh
 
 **Owner:** qa-lead  
-**Status:** Test Suite 4 automated and passing (168/168, last run 2026-09-27), now
+**Status:** Test Suite 4 automated and passing (176/176, last run 2026-09-28), now
 including automated pre-flight coverage for TC-1.2, lock-file-collision coverage
 for TC-1.3/TC-1.3b, lock-file-removal coverage for TC-1.4, sentinel-detection
 coverage for TC-1.5/TC-1.6, single-iteration outer-loop coverage for TC-1.1, and
 MAX_ITER-exhaustion coverage for TC-1.8 (see
-Suite 1), plus blocking-count coverage for TC-2.1/TC-2.2, sentinel/HEAD-unchanged
-coverage for TC-2.4/TC-2.5, missing-reviewer graceful-degradation coverage for
-TC-2.9, and a separate `test-babysit-review-feedback.sh` harness covering the
-`collect_pr_feedback()` filter (TC-2.10/TC-2.11, see Suite 2); Test Suites 1-3
-otherwise remain manual smoke tests against live Claude/Codex/gh, not yet
+Suite 1), plus blocking-count coverage for TC-2.1/TC-2.2, merge-mechanics and
+merge-failed-label coverage for TC-2.2 via `test-babysit-review-merge-draft.sh`
+(16/16), stalled-PR retry-sweep coverage for TC-1.9 via
+`test-babysit-review-stalled-retry.sh` (28/28), sentinel/HEAD-unchanged coverage
+for TC-2.4/TC-2.5, missing-reviewer graceful-degradation coverage for TC-2.9, and
+a separate `test-babysit-review-feedback.sh` harness covering the
+`collect_pr_feedback()` filter (TC-2.10/TC-2.11, see Suite 2; 16/16); Test Suites
+1-3 otherwise remain manual smoke tests against live Claude/Codex/gh, not yet
 executed  
 **Priority:** Medium (internal tool, existing implementation to verify)
 
@@ -239,6 +242,56 @@ actually run before every commit.
 
 ---
 
+### TC-1.9: Stalled-PR Retry Sweep (Four Resumable Labels)
+**Status: automated, not manual (added 2026-09-28).** `test-babysit-review-stalled-retry.sh`
+(28 assertions) drives the outer loop's pre-iteration sweep over
+`RESUMABLE_STALL_LABELS` (`review-mcp-outage`, `review-codex-outdated`,
+`review-codex-no-credits`, `review-merge-failed`, checked in that priority order —
+see L3-autonomous-outer-loop.md's "Stalled-PR pre-iteration retry" acceptance
+criterion) against stubbed `claude`/`codex`/`gh` on PATH, with no live network
+calls. This is the regression coverage for #82/#104/#107.
+
+Covered scenarios:
+- **Reviewer available, one of the first three labels:** the sweep removes the
+  label itself before calling `run_review_cycle` (so a review that then bails
+  to `review-incomplete` — a label the sweep must not retry — doesn't leave a
+  stale resumable label behind for the next sweep to pick up), never merges an
+  unreviewed PR, and logs which PR/label it is retrying.
+- **Label removal fails:** the sweep does not invoke `run_review_cycle` over a
+  now-stale label state and logs the removal failure.
+- **`review-merge-failed`, head unchanged:** the sweep takes the merge-only
+  shortcut — calls `merge_reviewed_pr` directly, without invoking the reviewer
+  CLI or running a full review cycle — attempts the merge before removing the
+  label, and only removes the label once the merge is confirmed.
+- **`review-merge-failed`, merge still fails:** the label is never removed,
+  `merge_reviewed_pr` re-flags the PR for the next retry, and the failure is
+  logged.
+- **`review-merge-failed`, stale head (current head no longer matches the head
+  recorded when the merge failed):** the sweep logs the mismatch, removes the
+  stale label, and falls through to a full `run_review_cycle` retry instead of
+  merging the unreviewed head.
+- **Reviewer unavailable:** the sweep defers — logs that it's deferring, leaves
+  the label in place for a later retry, never invokes `run_review_cycle`, and
+  does not fall through to starting new implementer work.
+- **No stalled PR:** the sweep is a no-op — never removes a label, never calls
+  `gh pr ready`.
+
+**Given:** An open PR carries one of the four resumable labels  
+**When:** The outer loop starts its next iteration  
+**Then:** The sweep resumes or merge-retries that PR before reading the ticket
+queue for new work, per the scenario table above
+
+**Test steps (manual acceptance reference):**
+1. Label an open PR `review-codex-outdated` (or any of the other three)
+2. Run: `MAX_ITER=1 ~/repo/scripts/babysit-with-review.sh`
+3. Verify: Log shows the sweep found and retried/merge-retried the labelled PR
+   before considering any new ticket
+4. Verify: the label removal timing matches the scenario table above (removed
+   before `run_review_cycle` for the first three labels; removed only after
+   the merge is confirmed for `review-merge-failed`)
+
+---
+
 ## Test Suite 2: L3-review-cycle
 
 **Reference:** L3-review-cycle.md Acceptance Tests (lines 184-196)
@@ -283,10 +336,19 @@ branch) against a stubbed `gh`/`git` on PATH, covering the actual merge
 mechanics that the blocking-count harness doesn't reach: the
 `codex-review=success` status POST, that `gh pr ready` is called before
 `gh pr merge` (a PR can still be draft at this point — see below), that a
-`gh pr ready` failure doesn't abort the merge attempt, that a status-POST
-failure skips both `gh pr ready` and `gh pr merge` entirely, and the
-`--auto` → plain-merge fallback. The full `gh pr view N --json state`
-end-to-end assertion remains the manual acceptance reference below.
+`gh pr ready` failure doesn't abort the merge attempt, and that a status-POST
+failure skips both `gh pr ready` and `gh pr merge` entirely. The single merge
+attempt is pinned to the reviewed head via `--match-head-commit`; `--auto` is
+deliberately never used, since GitHub only validates `--match-head-commit` at
+merge time, not when queuing an auto-merge (see the script's own comment
+above the call). It also covers the case where that merge attempt fails:
+`flag_review_cycle_merge_failed` labels the PR `review-merge-failed`, posts an
+explanatory comment, and does **not** re-draft it (the review already
+passed — see TC-1.9 for how the outer loop's stalled-PR sweep picks this
+label back up), and a `gh pr edit --add-label` failure itself halts the
+wrapper rather than continuing silently unlabelled. The full
+`gh pr view N --json state` end-to-end assertion remains the manual acceptance
+reference below.
 
 **Regression note (2026-09-27):** a real PR in this repo's own backlog (#60)
 reached a clean zero-BLOCKING review and had `codex-review=success` set, but
@@ -298,7 +360,7 @@ best-effort `gh pr ready` call before the merge attempt in
 
 **Given:** Codex returns 0 BLOCKING findings  
 **When:** Cycle completes  
-**Then:** PR is merged via `gh pr merge --squash [--auto]`
+**Then:** PR is merged via `gh pr merge --squash --delete-branch --match-head-commit <reviewed-head-sha>`
 
 **Test steps:**
 1. Create test PR with clean code (no issues)
@@ -637,10 +699,12 @@ were drafted (2026-06-28). It is deterministic and requires no live Claude/Codex
 calls, so — unlike Suites 1-3 — it runs in CI-suitable time and is expected to pass
 before every commit that touches harness selection or review-structure validation.
 
-**Run:** `./test-babysit-with-review-cli.sh` — last run 2026-09-27, 168 assertions,
-0 failed. 18 of those are the Suite 1 pre-flight cases (TC-1.2) added the same day;
+**Run:** `./test-babysit-with-review-cli.sh` — last run 2026-09-28, 176 assertions,
+0 failed. 18 of those are the Suite 1 pre-flight cases (TC-1.2) added 2026-09-27;
 everything else below is selectable-implementer/reviewer and review-structure
-coverage.
+coverage. (The stalled-PR retry sweep and merge-failed-label mechanics are
+separate harnesses — `test-babysit-review-stalled-retry.sh` (TC-1.9) and
+`test-babysit-review-merge-draft.sh` (TC-2.2) — not part of this file's count.)
 
 **Coverage (paraphrased from the harness's own assertions, not a numbered TC list —
 add TC IDs here if this suite is ever split into individually-run cases):**
@@ -689,7 +753,7 @@ Run TC-1.1, TC-1.2, TC-2.1, TC-3.1 to verify basic functionality.
 Run TC-1.5, TC-1.8, TC-2.2, TC-2.9, TC-3.1 to verify typical usage.
 
 ### Phase 3: Error Handling (3 hours)
-Run TC-1.7, TC-2.4, TC-2.6, TC-2.8, TC-3.4 to verify error recovery.
+Run TC-1.7, TC-1.9, TC-2.4, TC-2.6, TC-2.8, TC-3.4 to verify error recovery.
 
 ### Phase 4: Edge Cases (2 hours)
 Run TC-1.4, TC-2.5, TC-2.7, TC-3.2, TC-3.3 to verify edge cases.
@@ -719,10 +783,12 @@ TC-1.8 (see each TC's own status note above). TC-1.1 (a full single-iteration ru
 including the per-iteration git worktree and branch rename) is covered a different way:
 `run_single_iteration()` runs the real script end to end (no `BABYSIT_TEST_MODE`) against
 a repo fixture with `claude` stubbed, rather than extracting a pure function — the thing
-under test is the worktree/rename mechanics themselves, not a predicate. TC-1.7
-(stuck-loop detection) has not been converted this way as of this writing; check each
-TC's own status note for the current state, since this file is not always updated when a
-new stub mode ships.
+under test is the worktree/rename mechanics themselves, not a predicate. TC-1.9
+(stalled-PR retry sweep) is covered a third way: its own standalone recording-stub
+harness, `test-babysit-review-stalled-retry.sh`, with `claude`/`codex`/`gh` stubs on
+PATH rather than a `BABYSIT_TEST_MODE` mode. TC-1.7 (stuck-loop detection) has not been
+converted this way as of this writing; check each TC's own status note for the current
+state, since this file is not always updated when a new stub mode ships.
 
 **Partially done, for Suite 2's PR-feedback filter:** `BABYSIT_TEST_MODE=review-feedback`
 drives the real `collect_pr_feedback()` against a stubbed `gh` (`test-babysit-review-feedback.sh`),
