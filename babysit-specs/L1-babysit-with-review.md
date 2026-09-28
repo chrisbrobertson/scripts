@@ -81,6 +81,7 @@ From the existing implementation (babysit-with-review.sh):
 - If review cycle produces false positives (flags valid code): Developer time wasted investigating non-issues; mitigated by prescriptive mode requiring concrete suggested fixes
 - If review cycle misses bugs (false negatives): Code quality degrades; mitigated by human review still required before production deployment
 - If MCP outage persists: PRs stall with review-mcp-outage label; graceful - developer can manually review and merge
+- If a clean-reviewed PR fails to merge (transient CI/branch-protection race): PR stalls with review-merge-failed label instead of sitting silently unlabelled and unreviewable-by-sweep; wrapper retries automatically without operator action, does not halt
 
 # Bounds
 

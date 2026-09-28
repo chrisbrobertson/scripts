@@ -116,5 +116,18 @@ run_merge "$r" STUB_MERGE_AUTO_RC=1
 assert_line_count "auto-merge fallback: --auto attempted first" "CALL=gh pr merge 60 --squash --delete-branch --auto" 1 "$r"
 assert_line_count "auto-merge fallback: falls back to a plain merge" "CALL=gh pr merge 60 --squash --delete-branch" 1 "$r"
 
+# ---------- both merge attempts fail (e.g. transient CI/branch-protection
+# race): regression for the actual PR #60 in this repo's backlog — before
+# this fix, a merge failure after a clean review just logged a WARNING and
+# left the PR open with no label, so the stalled-PR retry sweep (which only
+# ever searches by label) could never rediscover it. Now it must be labelled
+# review-merge-failed so the sweep finds it on a later iteration ----------
+r="$TMP/both-merges-fail.record"
+run_merge "$r" STUB_MERGE_AUTO_RC=1 STUB_MERGE_RC=1
+assert_grep "both merges fail: review-merge-failed label is created" "CALL=gh label create review-merge-failed" "$r"
+assert_grep "both merges fail: review-merge-failed label is added to the PR" "CALL=gh pr edit 60 --add-label review-merge-failed" "$r"
+assert_grep "both merges fail: an explanatory comment is posted" "CALL=gh pr comment 60 --body-file -" "$r"
+assert_not_grep "both merges fail: the PR is NOT re-drafted (review already passed, status already green)" "CALL=gh pr ready 60 --undo" "$r"
+
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -34,10 +34,14 @@
 # `review-mcp-outage` = transport failure, often transient; restart the wrapper to retry.
 # `review-codex-outdated` = Codex CLI too old for model; upgrade CLI then restart.
 # `review-codex-no-credits` = Codex workspace out of credits; add credits then restart.
+# `review-merge-failed` = review already passed (codex-review=success already set) but
+# `gh pr merge` itself failed; unlike the other three this does NOT halt the wrapper
+# (the reviewer backend is fine) — it's picked up by the same pre-iter sweep, lowest
+# priority, on the next outer iteration of the same run, no restart needed.
 
 set -uo pipefail
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 
 usage() {
   cat <<'EOF'
@@ -90,6 +94,10 @@ PR labels used by the review cycle:
   review-codex-no-credits  Codex workspace has no credits; same as above —
                            the wrapper has already halted, so add credits
                            then restart. Do NOT remove the label yourself.
+  review-merge-failed    Review already passed (codex-review=success already
+                         set) but \`gh pr merge\` itself failed; does NOT
+                         halt the wrapper, retried by the same sweep on the
+                         next outer iteration.
 
 Logs land in ~/sisyphus-logs/<project>-<timestamp>-<pid>.log.
 
@@ -283,7 +291,7 @@ Pick the next unit of work in this priority order — stop at the first level th
 
    SKIP any PR whose STATE is `draft` or `BLOCKED` in the prs table (or `isDraft: true` / labels include `review-incomplete` in the JSON). These PRs were marked by a previous review cycle as needing human intervention — re-attempting them wastes iterations. Move on to item 2.
 
-   Also SKIP PRs labelled `review-mcp-outage` or `review-codex-no-credits` — these are managed by the wrapper itself and require operator action before the review cycle can proceed. Do not touch them.
+   Also SKIP PRs labelled `review-mcp-outage`, `review-codex-no-credits`, or `review-merge-failed` — these are managed by the wrapper itself and require operator action (or just its own automatic retry) before the review cycle can proceed. `review-merge-failed` in particular may already be un-drafted and passing CI — do not merge it yourself; the wrapper's sweep retries it. Do not touch any of these.
 2. Open issues you can complete in one iteration. See open issues in the project state above. Pick the highest-priority one that fits the scope discipline below.
 3. Approved specs with no implementation. See specs in the project state above — look for rows where IMPL is `no` or `?`. Scaffold the next missing piece — project skeleton, an interface stub, the first integration test, etc.
 4. Proto definitions without consumers. Files under ./proto/ that no service implements. Generate stubs or wire a service skeleton that consumes them.
@@ -1072,6 +1080,44 @@ The babysitter has halted — this is not recoverable while it's running. To res
     || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
 }
 
+# Mark a PR as stalled by a `gh pr merge` failure after an already-clean
+# review (see #82/#60: a PR reached this point with BLOCKING=0 and
+# codex-review=success already set, but nothing labelled it, so the stalled-PR
+# retry sweep — which only ever searches by label — could never find it again
+# and it sat open forever).
+#
+# Unlike fail_review_cycle_mcp/_codex_outdated/_codex_no_credits, this is NOT
+# fail-closed and does not re-draft the PR: the review already passed, the
+# codex-review status is already green, and the only thing that failed is the
+# git-hosting-side merge op (commonly a transient CI/branch-protection race),
+# so leaving it ready-and-mergeable is correct, not a hole to close. A
+# labelling failure here is logged and swallowed rather than halting the
+# babysitter, since the underlying work is otherwise done.
+# Args: <pr_num>
+flag_review_cycle_merge_failed() {
+  local pr_num="$1"
+
+  gh label create review-merge-failed \
+    --color b60205 \
+    --description "Babysit review passed but gh pr merge failed; wrapper retries automatically" \
+    --force >>"$LOG" 2>&1 || true
+
+  if ! gh pr edit "$pr_num" --add-label review-merge-failed >>"$LOG" 2>&1; then
+    echo "  [review] WARNING: gh pr edit --add-label failed for PR #$pr_num; the merge-failure retry sweep won't find it — manually add 'review-merge-failed' or merge by hand" | tee -a "$LOG" >&2
+    return 0
+  fi
+
+  local body
+  body="**babysit-with-review: review passed but merge failed**
+
+The review cycle completed with zero BLOCKING findings and \`codex-review\` was already set to success, but \`gh pr merge\` itself failed — see the wrapper log for the exact error (often a transient CI or branch-protection race). No code changes are needed.
+
+Label \`review-merge-failed\` has been added. The stalled-PR retry sweep will find this PR by that label and retry automatically on a later iteration — do NOT remove it yourself (see #82/#104 for why removing a resumable label by hand strands the PR instead of helping). Remove it only if you merge this PR by hand."
+  printf '%s\n' "$body" \
+    | gh pr comment "$pr_num" --body-file - >>"$LOG" 2>&1 \
+    || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
+}
+
 # Validate the strict review parser contract shared by all reviewer harnesses.
 valid_review_structure() {
   local review_file="$1"
@@ -1326,6 +1372,7 @@ merge_reviewed_pr() {
     echo "  [review] PR #$pr_num merged." | tee -a "$LOG" >&2
   else
     echo "  [review] WARNING: merge failed for PR #$pr_num; left open for next iteration. See $LOG." | tee -a "$LOG" >&2
+    flag_review_cycle_merge_failed "$pr_num"
     return 0
   fi
 
@@ -1677,7 +1724,7 @@ review_head_unchanged() {
 # Priority-ordered labels that mark a review cycle stalled in a way an
 # operator can resolve without abandoning the PR (as opposed to
 # review-incomplete, which always requires a human to pick the work back up).
-RESUMABLE_STALL_LABELS=(review-mcp-outage review-codex-outdated review-codex-no-credits)
+RESUMABLE_STALL_LABELS=(review-mcp-outage review-codex-outdated review-codex-no-credits review-merge-failed)
 
 # Given one "<label> <pr_num_or_empty>" pair per entry in
 # RESUMABLE_STALL_LABELS (in the same order, as gh would return them), pick
@@ -1813,20 +1860,22 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight
       done
       ;;
     outer-retry-sweep)
-      # Each stdin line is three space-separated PR numbers (or empty fields,
+      # Each stdin line is four space-separated PR numbers (or empty fields,
       # written as "-"), one per label in RESUMABLE_STALL_LABELS order,
-      # standing in for what three `gh pr list --label ... -q .[0].number`
+      # standing in for what four `gh pr list --label ... -q .[0].number`
       # calls would return. Prints "label=<l> pr=<n>" for the first stalled
       # label found, or "none" — using the real pick_stalled_retry(). No
       # Claude/Codex/gh involved.
-      while IFS=' ' read -r _mcp _outdated _credits; do
+      while IFS=' ' read -r _mcp _outdated _credits _merge_failed; do
         [ "$_mcp" = "-" ] && _mcp=""
         [ "$_outdated" = "-" ] && _outdated=""
         [ "$_credits" = "-" ] && _credits=""
+        [ "$_merge_failed" = "-" ] && _merge_failed=""
         if _pick=$(pick_stalled_retry \
             "review-mcp-outage $_mcp" \
             "review-codex-outdated $_outdated" \
-            "review-codex-no-credits $_credits"); then
+            "review-codex-no-credits $_credits" \
+            "review-merge-failed $_merge_failed"); then
           echo "label=${_pick%% *} pr=${_pick#* }"
         else
           echo "none"
@@ -2009,7 +2058,8 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
   fi
 
   # Retry any PR stalled behind a resumable label (review-mcp-outage,
-  # review-codex-outdated, review-codex-no-credits) from a previous run.
+  # review-codex-outdated, review-codex-no-credits, review-merge-failed)
+  # from a previous run.
   # The label search here is the ONLY way a stalled PR is found again, so
   # the label must still be on the PR when this runs — operators must NOT
   # remove it manually; the documented recovery is "fix the underlying

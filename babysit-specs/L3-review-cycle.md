@@ -64,6 +64,7 @@ review-incomplete              # human action required (stuck, max cycles, etc.)
 review-mcp-outage             # Codex MCP transport failure (auto-retry)
 review-codex-outdated         # Codex CLI too old for configured model; run `codex update`, remove label, restart
 review-codex-no-credits        # Codex workspace out of credits; add credits, remove label, restart
+review-merge-failed            # review passed but `gh pr merge` failed (auto-retry, no halt)
 
 # Cycle state (not exposed, internal to run_review_cycle)
 REVIEW_HISTORY=()             # array of prior Codex reviews
@@ -84,7 +85,7 @@ From implementation (babysit-with-review.sh):
 - Convergence tracking: cycle 2+ includes prior reviews + git log of implementer commits
 - Prescriptive mode: cycle 3+ uses template requiring "Suggested fix:" for BLOCKING
 - PR feedback collection: reviews, comments, inline comments (filtered to exclude self-posted — three prefixes: `**Codex review`, `**Claude review`, `**babysit-with-review:`)
-- **Merge gate (codex-review status), extracted as `merge_reviewed_pr`:** when BLOCKING=0, the wrapper first POSTs `gh api -X POST repos/<owner>/statuses/<sha> -f context=codex-review -f state=success` via `gh api`. If the POST fails, or owner/repo or head SHA cannot be resolved, it logs a WARNING and returns 0 *without merging*. Only after a successful status POST does it call `gh pr ready` (best-effort — a failure here is logged but does not abort the merge attempt) to un-draft the PR, since it can still be marked draft at this point (the implementer opened it with `gh pr create --draft`, or an earlier bail drafted it via a label with no undraft retry sweep — only `review-mcp-outage` has one), and `gh pr merge` fails on a draft PR. It then attempts `gh pr merge --squash --delete-branch --auto`, falling back to an immediate merge. `setup-branch-protection.sh` makes `codex-review` a required status check with `enforce_admins: true`; this is the actual mechanism that prevents implementation Claude from self-merging.
+- **Merge gate (codex-review status), extracted as `merge_reviewed_pr`:** when BLOCKING=0, the wrapper first POSTs `gh api -X POST repos/<owner>/statuses/<sha> -f context=codex-review -f state=success` via `gh api`. If the POST fails, or owner/repo or head SHA cannot be resolved, it logs a WARNING and returns 0 *without merging*. Only after a successful status POST does it call `gh pr ready` (best-effort — a failure here is logged but does not abort the merge attempt) to un-draft the PR, since it can still be marked draft at this point (the implementer opened it with `gh pr create --draft`, or an earlier bail drafted it via a label with no undraft retry sweep — only `review-mcp-outage` has one), and `gh pr merge` fails on a draft PR. It then attempts `gh pr merge --squash --delete-branch --auto`, falling back to an immediate merge. `setup-branch-protection.sh` makes `codex-review` a required status check with `enforce_admins: true`; this is the actual mechanism that prevents implementation Claude from self-merging. If both merge attempts fail (e.g. a transient CI or branch-protection race), `flag_review_cycle_merge_failed` labels the PR `review-merge-failed` and posts an explanatory comment — best-effort, not fail-closed, and it does **not** re-draft the PR (the review already passed and the status is already green, so leaving it ready-and-mergeable is correct). Regression for a real orphan in this repo's own backlog (#82/#60): before this label existed, a merge failure after a clean review just logged a WARNING with no label, so the stalled-PR retry sweep — which only ever finds PRs by label — could never rediscover it and it sat open forever.
 - **Graceful degradation:** if the selected reviewer binary is not installed, skip the review cycle (logged) and return 0.
 - **Reviewer pre-flight probe (`reviewer_preflight`):** before the cycle loop, `run_review_cycle` calls `reviewer_preflight`. For Codex it runs `codex exec -s read-only "Say 'ok'."` with the configured model/effort, checks only `compat_re` and `credits_re` (no structural validation), and returns 3/4/1/0. For Claude, `reviewer_preflight` is a no-op (returns 0 immediately). If the probe returns 3, `run_review_cycle` calls `fail_review_cycle_codex_outdated` and returns 3. If it returns 4, it calls `fail_review_cycle_codex_no_credits` and returns 4. Any other non-zero calls `fail_review_cycle` and returns 0.
 - **Structural validation:** `review_with_retry` (via `valid_review_structure` in ASF-FEAT-MCP-RESILIENCE) returns 0 only when TMP_REVIEW passes the full contract (see L3-mcp-resilience for the exact awk rules). A structurally invalid output with rc=0 is treated as failure (return 1).
@@ -140,9 +141,10 @@ run_review_cycle <PR_NUMBER>
 8. **Adjudication:** Cycle 5–6 requires the reviewer to accept or provide reasoned disagreement for each of the implementer's resolution justifications from the previous cycle
 9. **BLOCKING counting:** Only bullets under `## BLOCKING` that are not `- (none)` count. Structural validation is a pre-condition (see `valid_review_structure` in ASF-FEAT-MCP-RESILIENCE): invalid output is a reviewer failure, not a zero-findings pass.
 10. **PR branch checkout:** Cycle starts by checking out PR branch via `gh pr checkout <PR_NUMBER>`
-11. **Label application:** `review-incomplete` for human-action bails, `review-mcp-outage` for transport failures, `review-codex-outdated` for backend compatibility failures, `review-codex-no-credits` for credit exhaustion
-12. **Fail-closed labelling:** `fail_review_cycle` gh label/draft commands abort the babysitter on failure; only the follow-up `gh pr comment` is best-effort
+11. **Label application:** `review-incomplete` for human-action bails, `review-mcp-outage` for transport failures, `review-codex-outdated` for backend compatibility failures, `review-codex-no-credits` for credit exhaustion, `review-merge-failed` for a `gh pr merge` failure after an already-clean review
+12. **Fail-closed labelling:** `fail_review_cycle` gh label/draft commands abort the babysitter on failure; only the follow-up `gh pr comment` is best-effort. `flag_review_cycle_merge_failed` (the `review-merge-failed` path) is the one exception: it is entirely best-effort and never calls `exit`, since the review already passed and the codex-review status is already green — there is nothing left to fail closed against.
 13. **Merge gate:** BLOCKING=0 alone does not merge. The wrapper first POSTs `codex-review=success` via `gh api`. Failure to POST leaves the PR open. Only after a successful POST does merge proceed.
+14. **Merge-failure labelling does not halt:** unlike the three reviewer-backend labels, `review-merge-failed` does not call `exit` and the outer loop keeps running — the reviewer backend is fine, only the git-hosting-side merge op failed, so the pre-iteration sweep can retry it on the very next iteration of the same run (no restart required).
 
 ### Error model
 - **Pre-flight probe: `compat_re` match:** Label PR `review-codex-outdated`, post upgrade instructions comment, `exit 1` (halts babysitter). Note: probe checks only `compat_re` and `credits_re`, not structural validity.
@@ -160,6 +162,7 @@ run_review_cycle <PR_NUMBER>
 - **`STUCK_REVIEW` sentinel:** Label PR `review-incomplete` (fail-closed), return 0
 - **`codex-review` status POST fails or owner/SHA unresolvable:** Log WARNING, return 0 without merging (PR stays open)
 - **`fail_review_cycle` gh label/draft command failure:** `exit 1` (babysitter halts; PR must be manually quarantined)
+- **Both `gh pr merge` attempts fail after a clean review:** Log WARNING, label PR `review-merge-failed` (best-effort, not fail-closed), post explanatory comment, return 0 — PR stays open and ready (not re-drafted); babysitter does not halt
 
 ### Idempotency
 Non-idempotent. Each cycle advances PR branch state (commits pushed). Re-running on same PR resumes from current state, not cycle 1.
@@ -771,12 +774,14 @@ __REVIEW__
 29. **Given** cycle 5+ Codex review with adjudication, **when** Claude claimed "invalid" but Codex disagrees, **then** Codex outputs "DISAGREED" with counter-argument explaining why the finding is valid AND the finding reappears as [RECURRENCE] in BLOCKING.
 30. **Given** cycle 5+ with ACCEPTED findings, **when** next cycle (6) runs, **then** those ACCEPTED findings do NOT reappear in BLOCKING section (verified via absence in Codex review).
 31. **Given** same BLOCKING finding DISAGREED on 2+ consecutive cycles (5 and 6), **when** cycle 6 Claude processes the second DISAGREED, **then** Claude reports STUCK_REVIEW escalating ping-pong to human review (per kill criterion).
+32. **Given** BLOCKING=0 and both `gh pr merge --auto` and the plain-merge fallback fail, **when** `merge_reviewed_pr` processes the failure, **then** PR is labelled `review-merge-failed`, an explanatory comment is posted, function returns 0, the PR is left ready (not re-drafted), and the babysitter does not halt.
 
 ## Telemetry events tied to L1 KPIs
 - **Cycles per PR** → Productivity KPI (lower = better prompt quality, faster convergence)
 - **BLOCKING=0 rate** → Quality KPI (higher = better code quality at merge)
 - **review-incomplete rate** → Reliability KPI (lower = fewer stuck cases)
 - **review-mcp-outage rate** → Codex availability KPI (lower = more reliable Codex)
+- **review-merge-failed rate** → Merge reliability KPI (higher = more transient CI/branch-protection races after a clean review, not a reviewer-quality problem)
 
 ## AEAB cases
 N/A — no eval framework integration yet.

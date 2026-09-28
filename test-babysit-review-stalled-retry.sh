@@ -59,6 +59,7 @@ case "$*" in
   "pr list --state open --label review-codex-outdated"*) printf '%s' "${STUB_PR_OUTDATED:-}"; exit 0 ;;
   "pr list --state open --label review-mcp-outage"*) printf '%s' "${STUB_PR_MCP:-}"; exit 0 ;;
   "pr list --state open --label review-codex-no-credits"*) printf '%s' "${STUB_PR_CREDITS:-}"; exit 0 ;;
+  "pr list --state open --label review-merge-failed"*) printf '%s' "${STUB_PR_MERGE_FAILED:-}"; exit 0 ;;
   "pr edit "*"--remove-label"*) exit "${STUB_REMOVE_LABEL_RC:-0}" ;;
   "pr ready "*) exit 0 ;;
   *) exit 0 ;;
@@ -134,6 +135,19 @@ r="$TMP/remove-label-fails.record"
 run_outer_iteration "$r" STUB_PR_OUTDATED=96 STUB_REMOVE_LABEL_RC=1
 assert_not_grep "stalled retry (label removal fails): run_review_cycle is not invoked over a stale label" "=== review handoff: PR #96 @" "$TMP/err"
 assert_grep "stalled retry (label removal fails): sweep logs the removal failure" "[outer] WARNING: failed to remove review-codex-outdated from PR #96; retrying removal next iteration" "$TMP/err"
+rm -f "$TMP/bin/codex"
+
+# ---------- scenario 1c: reviewer CLI available, a PR is stalled behind
+# review-merge-failed (the #60 orphan class: review already passed, only the
+# merge itself failed) — the generic sweep picks up the 4th label exactly
+# like the other three, retrying via a full review cycle ----------
+ln -s "$TMP/bin/codex.stub" "$TMP/bin/codex"
+r="$TMP/merge-failed.record"
+run_outer_iteration "$r" STUB_PR_MERGE_FAILED=60
+assert_grep "stalled retry (merge-failed): sweep removes the label itself" "CALL=gh pr edit 60 --remove-label review-merge-failed" "$r"
+assert_not_line "stalled retry (merge-failed): sweep does not un-draft before the review runs" "CALL=gh pr ready 60" "$r"
+assert_grep "stalled retry (merge-failed): run_review_cycle actually ran for the stalled PR" "=== review handoff: PR #60 @" "$TMP/err"
+assert_grep "stalled retry (merge-failed): outer loop logs which PR/label it's retrying" "[outer] retrying review cycle for PR #60 (review-merge-failed)" "$TMP/err"
 rm -f "$TMP/bin/codex"
 
 # ---------- scenario 2: reviewer CLI still unavailable — label stays, no
