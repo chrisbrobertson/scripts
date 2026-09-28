@@ -30,7 +30,9 @@ scripts" sections) rather than kept in a separate amendments file.
 
 ## Status
 
-- **L1/L2/L3 features (original):** `review` (awaiting approval)
+- **L1/L2/L3 features (original):** `review` — security review complete, all findings
+  accepted (see SECURITY-REVIEW-PLAN.md); QA smoke tests deferred pending a mock harness
+  for Claude/Codex output (see QA-TEST-PLAN.md)
 - **L3 work-prep + builder design decisions (7-9 below):** approved by owner 2026-08-27
 - **L3 work-prep spec:** `review` — drafted 2026-08-27 from the approved decisions;
   several implementation mechanics are flagged `[ASSUMPTION]` pending owner sign-off
