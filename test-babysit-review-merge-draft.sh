@@ -87,8 +87,8 @@ r="$TMP/clean.record"
 run_merge "$r"
 assert_grep "clean merge: status POST happens" "CALL=gh api -X POST repos/o/r/statuses/deadbeef" "$r"
 assert_line_count "clean merge: gh pr ready is called exactly once" "CALL=gh pr ready 60" 1 "$r"
-assert_line_count "clean merge: gh pr merge --auto is attempted" "CALL=gh pr merge 60 --squash --delete-branch --auto" 1 "$r"
-if [ "$(grep -nFx 'CALL=gh pr ready 60' "$r" | head -1 | cut -d: -f1)" -lt "$(grep -nFx 'CALL=gh pr merge 60 --squash --delete-branch --auto' "$r" | head -1 | cut -d: -f1)" ]; then
+assert_line_count "clean merge: gh pr merge --auto is attempted" "CALL=gh pr merge 60 --squash --delete-branch --auto --match-head-commit deadbeef" 1 "$r"
+if [ "$(grep -nFx 'CALL=gh pr ready 60' "$r" | head -1 | cut -d: -f1)" -lt "$(grep -nFx 'CALL=gh pr merge 60 --squash --delete-branch --auto --match-head-commit deadbeef' "$r" | head -1 | cut -d: -f1)" ]; then
   pass "clean merge: gh pr ready runs before gh pr merge (the actual fix)"
 else
   fail "clean merge: gh pr ready runs before gh pr merge (the actual fix)"
@@ -100,7 +100,7 @@ assert_grep "clean merge: local branch reset to default branch" "CALL=git checko
 r="$TMP/ready-fails.record"
 run_merge "$r" STUB_READY_RC=1
 assert_line_count "ready failure: gh pr ready is still called" "CALL=gh pr ready 60" 1 "$r"
-assert_line_count "ready failure: merge is attempted anyway (best-effort undraft)" "CALL=gh pr merge 60 --squash --delete-branch --auto" 1 "$r"
+assert_line_count "ready failure: merge is attempted anyway (best-effort undraft)" "CALL=gh pr merge 60 --squash --delete-branch --auto --match-head-commit deadbeef" 1 "$r"
 assert_grep "ready failure: a warning is logged, not a silent skip" "gh pr ready failed for PR #60; attempting merge anyway" "$TMP/err"
 
 # ---------- status POST fails: must not attempt ready/merge without the
@@ -114,8 +114,8 @@ assert_not_grep "status failure: gh pr merge is NOT called" "CALL=gh pr merge 60
 # falls back to a direct merge ----------
 r="$TMP/auto-fallback.record"
 run_merge "$r" STUB_MERGE_AUTO_RC=1
-assert_line_count "auto-merge fallback: --auto attempted first" "CALL=gh pr merge 60 --squash --delete-branch --auto" 1 "$r"
-assert_line_count "auto-merge fallback: falls back to a plain merge" "CALL=gh pr merge 60 --squash --delete-branch" 1 "$r"
+assert_line_count "auto-merge fallback: --auto attempted first" "CALL=gh pr merge 60 --squash --delete-branch --auto --match-head-commit deadbeef" 1 "$r"
+assert_line_count "auto-merge fallback: falls back to a plain merge" "CALL=gh pr merge 60 --squash --delete-branch --match-head-commit deadbeef" 1 "$r"
 
 # ---------- both merge attempts fail (e.g. transient CI/branch-protection
 # race): regression for the actual PR #60 in this repo's backlog — before

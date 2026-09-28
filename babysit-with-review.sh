@@ -1368,6 +1368,14 @@ reviewer_binary_available() {
 merge_reviewed_pr() {
   local pr_num="$1"
   local cycle="$2"
+  # expected_head, when passed, is a SHA the caller already validated as the
+  # reviewed head (e.g. the review-merge-failed retry sweep, which compares
+  # the recorded reviewed head against the PR's current head before calling
+  # in). Using it directly instead of re-fetching headRefOid here closes the
+  # TOCTOU window where a commit pushed between the caller's check and this
+  # function's own fetch would get a green status posted against it despite
+  # never having been reviewed (see PR #107 review, BLOCKING).
+  local expected_head="${3:-}"
 
   echo "  [review] zero blocking findings; PR #$pr_num cleared after $cycle cycle(s)" | tee -a "$LOG" >&2
 
@@ -1375,7 +1383,11 @@ merge_reviewed_pr() {
   # This is the ONLY place this status is set green — the implementation agent never sets it.
   local _owner_repo _head_sha
   _owner_repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
-  _head_sha=$(gh pr view "$pr_num" --json headRefOid -q .headRefOid 2>/dev/null || echo "")
+  if [ -n "$expected_head" ]; then
+    _head_sha="$expected_head"
+  else
+    _head_sha=$(gh pr view "$pr_num" --json headRefOid -q .headRefOid 2>/dev/null || echo "")
+  fi
   if [ -n "$_owner_repo" ] && [ -n "$_head_sha" ]; then
     if gh api -X POST "repos/${_owner_repo}/statuses/${_head_sha}" \
         -f state=success \
@@ -1409,9 +1421,12 @@ merge_reviewed_pr() {
   gh pr ready "$pr_num" >>"$LOG" 2>&1 \
     || echo "  [review] WARNING: gh pr ready failed for PR #$pr_num; attempting merge anyway" | tee -a "$LOG" >&2
 
-  if gh pr merge "$pr_num" --squash --delete-branch --auto >>"$LOG" 2>&1; then
+  # --match-head-commit pins the merge to the exact SHA the codex-review=success
+  # status above was just posted for, so a commit pushed after that point (and
+  # thus never reviewed) can never be merged out from under this call.
+  if gh pr merge "$pr_num" --squash --delete-branch --auto --match-head-commit "$_head_sha" >>"$LOG" 2>&1; then
     echo "  [review] PR #$pr_num queued for auto-merge (merges when CI passes)" | tee -a "$LOG" >&2
-  elif gh pr merge "$pr_num" --squash --delete-branch >>"$LOG" 2>&1; then
+  elif gh pr merge "$pr_num" --squash --delete-branch --match-head-commit "$_head_sha" >>"$LOG" 2>&1; then
     echo "  [review] PR #$pr_num merged." | tee -a "$LOG" >&2
   else
     echo "  [review] WARNING: merge failed for PR #$pr_num; left open for next iteration. See $LOG." | tee -a "$LOG" >&2
@@ -2166,7 +2181,7 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
           sleep "$SLEEP_SEC"
           continue
         fi
-        merge_reviewed_pr "$_retry_pr" "retry"
+        merge_reviewed_pr "$_retry_pr" "retry" "$_current_head"
         unset _retry_pick _retry_label _retry_pr _recorded_head _current_head
         continue
       fi
