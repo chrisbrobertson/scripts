@@ -1714,6 +1714,14 @@ BUILD_STALL_SWEEP_LIMIT="${BUILD_STALL_SWEEP_LIMIT:-200}"
 # record — or worse, to the ticket queue — risks the same duplicate.
 resume_stalled_prs() {
   local raw_file="$TMP_ROOT/stalled-prs.json" records="$TMP_ROOT/stalled-records" label pr_count
+  # Field separator for $records: NOT a tab. Bash (and awk's default field
+  # splitting) treat space/tab/newline as "IFS whitespace" and collapse runs
+  # of them, silently dropping empty fields and shifting later columns left —
+  # exactly what happens when a resumed PR has no builder marker, leaving
+  # source/ticket empty. \x1f (ASCII unit separator) isn't in that collapsing
+  # class, so empty fields survive, and it can't collide with real content
+  # (PR number, branch name, ticket id, label name).
+  local sep=$'\x1f'
   : > "$records"
   for label in "${RESUMABLE_BUILD_STALL_LABELS[@]}"; do
     if ! gh pr list --repo "$REPO" --state open --label "$label" --limit "$BUILD_STALL_SWEEP_LIMIT" \
@@ -1737,7 +1745,7 @@ with open(sys.argv[1], encoding="utf-8") as fh:
 for pr in prs:
     match = marker.search(pr.get("body") or "")
     source, ticket = (match.group(1), match.group(2)) if match else ("", "")
-    print("\t".join([str(pr.get("number") or ""), pr.get("headRefName") or "", source, ticket, label]))
+    print("\x1f".join([str(pr.get("number") or ""), pr.get("headRefName") or "", source, ticket, label]))
 PY
   done
 
@@ -1749,15 +1757,15 @@ PY
   # here (as a naive dedup-by-PR would) leaves a stale resumable label in
   # place, and the PR resurfaces under it on the very next sweep for another,
   # redundant build cycle.
-  awk -F'\t' '
+  awk -F"$sep" -v OFS="$sep" '
     !($1 in head) { order[++n] = $1; head[$1] = $2; src[$1] = $3; tick[$1] = $4 }
     { labels[$1] = (labels[$1] == "" ? $5 : labels[$1] "," $5) }
-    END { for (i = 1; i <= n; i++) { pr = order[i]; print pr "\t" head[pr] "\t" src[pr] "\t" tick[pr] "\t" labels[pr] } }
+    END { for (i = 1; i <= n; i++) { pr = order[i]; print pr, head[pr], src[pr], tick[pr], labels[pr] } }
   ' "$records" > "$records.dedup" && mv "$records.dedup" "$records"
 
   local pr_num head_ref source ticket label cycle_rc rm_label
   # fd 3: the harnesses inherit stdin, and would otherwise consume this file.
-  while IFS=$'\t' read -r -u 3 pr_num head_ref source ticket label; do
+  while IFS="$sep" read -r -u 3 pr_num head_ref source ticket label; do
     [ -n "$pr_num" ] && [ -n "$head_ref" ] || continue
     echo "[build] resuming build cycle for PR #$pr_num ($label)"
     if ! git fetch origin "$head_ref" >> "$LOG" 2>&1; then

@@ -118,6 +118,10 @@ queue_json() {  # <issue-number> — a single build-ready ticket, for asserting 
   printf '[{"number": %s, "title": "t", "body": "", "url": "https://example.com/%s"}]' "$1" "$1"
 }
 
+pr_json_no_marker() {  # <number> <head_ref> — a resumed PR with no builder marker in its body
+  printf '[{"number": %s, "headRefName": "%s", "body": ""}]' "$1" "$2"
+}
+
 pr_json_n() {  # <count> — N dummy entries, for exercising the sweep-limit truncation guard
   local n="$1" i out="["
   for i in $(seq 1 "$n"); do
@@ -221,6 +225,19 @@ assert_count "stalled retry (dedup): build cycle runs exactly once for the dupli
 assert_grep "stalled retry (dedup): the first-seen label is removed" "CALL=gh pr edit 100 --repo owner/repo --remove-label build-mcp-outage" "$r"
 assert_grep "stalled retry (dedup): the second label is also removed, not left stale" "CALL=gh pr edit 100 --repo owner/repo --remove-label build-codex-outdated" "$r"
 assert_count "stalled retry (dedup): exactly two remove-label calls are made for the duplicated PR" 2 "CALL=gh pr edit 100 --repo owner/repo --remove-label" "$r"
+
+# ---------- scenario 10 (regression, see #106 review): a resumed PR carries no
+# builder marker (empty source/ticket). The sweep's per-record fields were
+# tab-delimited; bash/awk collapse runs of "IFS whitespace" (space/tab/
+# newline) instead of preserving empty fields between them, so the empty
+# source/ticket columns swallowed the label column too — the label was never
+# removed, leaving the PR mislabelled and eligible to resurface, while the
+# still-build-ready ticket stayed readable for a duplicate PR ----------
+r="$TMP/no-marker.record"
+run_builder "$r" STUB_PR_MCP="$(pr_json_no_marker 101 stalled-pr-branch)"
+assert_grep "stalled retry (no builder marker): label is still removed" "CALL=gh pr edit 101 --repo owner/repo --remove-label build-mcp-outage" "$r"
+assert_grep "stalled retry (no builder marker): run_build_cycle still runs" "=== build cycle: PR #101 @" "$TMP/err"
+assert_grep "stalled retry (no builder marker): ticket-marker warning is logged" "PR #101 carries no builder marker" "$TMP/err"
 
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]
