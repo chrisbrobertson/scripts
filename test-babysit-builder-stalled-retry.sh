@@ -184,7 +184,17 @@ assert_grep "stalled retry (limit hit): run halts rather than assuming the page 
 assert_not_grep "stalled retry (limit hit): ticket queue is never read" "CALL=gh issue list" "$r"
 assert_not_grep "stalled retry (limit hit): no build cycle starts for the queued ticket" "=== build cycle:" "$TMP/err"
 
-# ---------- scenario 7: the same PR shows up under two resumable labels (e.g.
+# ---------- scenario 7 (duplicate-PR failure path): the resumed PR's branch
+# cannot be fetched (deleted/renamed upstream) — the sweep must halt rather
+# than skip past it, since skipping would fall through to a still-build-ready
+# ticket and rebuild it into a duplicate PR ----------
+r="$TMP/fetch-fail.record"
+run_builder "$r" STUB_PR_MCP="$(pr_json 199 ghost-branch-does-not-exist github 45)" STUB_QUEUE="$(queue_json 504)"
+assert_grep "stalled retry (fetch failure): run halts rather than skipping to the next record/queue" "Halting: stalled-PR sweep could not fetch or check out" "$TMP/err"
+assert_not_grep "stalled retry (fetch failure): ticket queue is never read" "CALL=gh issue list" "$r"
+assert_not_grep "stalled retry (fetch failure): no build cycle starts for the unreachable PR" "=== build cycle:" "$TMP/err"
+
+# ---------- scenario 8: the same PR shows up under two resumable labels (e.g.
 # a labelling race) — it must run through the build cycle exactly once, not
 # once per label it happens to carry ----------
 r="$TMP/dedup.record"
