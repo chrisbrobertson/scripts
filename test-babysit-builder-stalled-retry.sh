@@ -319,5 +319,19 @@ assert_grep "stalled retry (mark-done failure): build cycle actually ran" "=== b
 assert_not_grep "stalled retry (mark-done failure): resumable label is left in place" "CALL=gh pr edit 104 --repo owner/repo --remove-label" "$r"
 assert_not_grep "stalled retry (mark-done failure): ticket queue is never read" "CALL=gh issue list" "$r"
 
+# ---------- scenario 15 (PR #106 review, BLOCKING): a resumed PR's ticket is
+# a Jira ticket, but this run was started with the default --source github,
+# which never validates JIRA_BASE_URL/JIRA_TOKEN/JIRA_PROJECT at startup —
+# the sweep runs regardless of --source, so without an explicit check here
+# mark_ticket_done would reach jira_api with unset credentials. The
+# resumable label must stay in place rather than being stripped ahead of
+# that doomed call ----------
+r="$TMP/jira-creds-missing.record"
+run_builder "$r" STUB_PR_MCP="$(pr_json 105 stalled-pr-branch jira 60)" STUB_QUEUE="$(queue_json 509)"
+assert_grep "stalled retry (missing Jira credentials): run halts rather than skipping to the next record/queue" "Halting: stalled-PR sweep found a resumed Jira ticket but JIRA_BASE_URL/JIRA_TOKEN/JIRA_PROJECT are not fully set" "$TMP/err"
+assert_grep "stalled retry (missing Jira credentials): build cycle actually ran" "=== build cycle: PR #105 @" "$TMP/err"
+assert_not_grep "stalled retry (missing Jira credentials): resumable label is left in place" "CALL=gh pr edit 105 --repo owner/repo --remove-label" "$r"
+assert_not_grep "stalled retry (missing Jira credentials): ticket queue is never read" "CALL=gh issue list" "$r"
+
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]

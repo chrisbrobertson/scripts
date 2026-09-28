@@ -1730,8 +1730,13 @@ case "$BUILD_STALL_SWEEP_LIMIT" in ''|*[!0-9]*) echo "ERROR: BUILD_STALL_SWEEP_L
 # label — now runs BEFORE the resumable label is removed, not after: a PR
 # whose ticket swap fails must stay discoverable by this same sweep, or it's
 # invisible to every future run while its ticket sits build-ready forever
-# (HALT_RC=11, see #106 review). Only once the ticket is confirmed done does
-# a failure to remove the now-stale resumable label (HALT_RC=7) stop being a
+# (HALT_RC=11, see #106 review). Since this sweep runs regardless of
+# --source, a resumed Jira-sourced PR can reach that Jira API call even
+# under --source github, which never validates Jira credentials at startup —
+# checked explicitly up front instead (HALT_RC=10), before the resumable
+# label is touched, rather than relying on the API call itself to fail (see
+# #106 review). Only once the ticket is confirmed done does a failure to
+# remove the now-stale resumable label (HALT_RC=7) stop being a
 # duplicate-PR risk — the ticket itself is already off the queue by then, so
 # that halt exists only so the label gets cleaned up on the next run.
 resume_stalled_prs() {
@@ -1847,6 +1852,22 @@ PY
     cycle_rc=0
     run_build_cycle "$pr_num" || cycle_rc=$?
     if [ "$cycle_rc" -eq 0 ]; then
+      # This sweep runs before SOURCE-based gating and regardless of which
+      # --source this run was started with, so a resumed PR whose marker
+      # says source=jira can reach ticket_swap_to_terminal's Jira path even
+      # under --source github, which never validates Jira credentials at
+      # startup (that check only fires for --source jira|both — see the
+      # pre-flight block). Check explicitly here, before mark_ticket_done
+      # (and therefore before the resumable label comes off), rather than
+      # relying on jira_api's curl call to fail on an unset URL/token: the
+      # label must still be in place if this halts (see #106 review).
+      if [ "$source" = "jira" ] && { [ -z "${JIRA_BASE_URL:-}" ] || [ -z "${JIRA_TOKEN:-}" ] || [ -z "${JIRA_PROJECT:-}" ]; }; then
+        echo "[build] ERROR: PR #$pr_num's ticket $ticket is a Jira ticket but JIRA_BASE_URL/JIRA_TOKEN/JIRA_PROJECT are not fully set (this run started with --source $SOURCE); cannot mark it done. Halting before reading the ticket queue to avoid rebuilding its still-build-ready ticket into a duplicate PR. Its resumable label is left in place, so the sweep finds this PR again once Jira credentials are configured." >&2
+        discard_build_worktree
+        HALT_RC=10
+        return 0
+      fi
+
       # source/ticket are guaranteed non-empty here: the marker check above
       # halts before this point whenever either is empty.
       #
@@ -1937,6 +1958,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
       7) echo "Halting: stalled-PR sweep could not remove a resumable label from a resumed PR whose ticket was already marked done. Fix the reported condition, then re-run — the sweep will find the same PR again. See $LOG" >&2 ;;
       8) echo "Halting: stalled-PR sweep found a PR with no builder marker; its ticket is still build-ready and cannot be marked done. Its resumable label was left in place, so add a marker to the PR body then re-run — the sweep finds the same PR again — or manually clear the ticket's build-ready label. See $LOG" >&2 ;;
       9) echo "Halting: stalled-PR sweep found a record with no PR number or head branch; its ticket is still build-ready. Fix the reported condition, then re-run — the sweep will find the same PR again. See $LOG" >&2 ;;
+      10) echo "Halting: stalled-PR sweep found a resumed Jira ticket but JIRA_BASE_URL/JIRA_TOKEN/JIRA_PROJECT are not fully set; its ticket is still build-ready. Set Jira credentials (or run with --source jira|both, which requires them at startup), then re-run — the sweep will find the same PR again. See $LOG" >&2 ;;
       11) echo "Halting: stalled-PR sweep could not mark a resumed PR's ticket done; its ticket is still build-ready and its resumable label was left in place. Fix the reported condition, then re-run — the sweep will find the same PR again. See $LOG" >&2 ;;
     esac
     echo "Builder halted during stalled-PR sweep."
