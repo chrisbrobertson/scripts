@@ -2226,13 +2226,20 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
       _current_head=$(gh pr view "$_retry_pr" --json headRefOid -q .headRefOid 2>>"$LOG" || echo "")
       if [ -n "$_recorded_head" ] && [ -n "$_current_head" ] && [ "$_recorded_head" = "$_current_head" ]; then
         echo "[outer] retrying merge for PR #$_retry_pr (review-merge-failed)" | tee -a "$LOG" >&2
-        if ! gh pr edit "$_retry_pr" --remove-label "$_retry_label" >>"$LOG" 2>&1; then
-          echo "[outer] WARNING: failed to remove $_retry_label from PR #$_retry_pr; retrying removal next iteration" | tee -a "$LOG" >&2
-          unset _retry_pick _retry_label _retry_pr _recorded_head _current_head
-          sleep "$SLEEP_SEC"
-          continue
-        fi
+        # Leave the label ON through the merge attempt itself — merge_reviewed_pr
+        # already re-adds it (flag_review_cycle_merge_failed) on every failure
+        # path, so removing it first only opens a window with no upside: if the
+        # wrapper is interrupted between removal and merge completing, the PR
+        # is left open and unlabelled, invisible to the only sweep that finds
+        # stalled PRs (see PR #107 review cycle 3, BLOCKING). Remove it after,
+        # and only once the PR is actually confirmed merged.
         merge_reviewed_pr "$_retry_pr" "retry" "$_current_head"
+        if [ "$(gh pr view "$_retry_pr" --json state -q .state 2>>"$LOG")" = "MERGED" ]; then
+          # Best-effort cleanup: the sweep only ever searches open PRs, so a
+          # merged PR simply won't match next time even if this edit fails.
+          gh pr edit "$_retry_pr" --remove-label "$_retry_label" >>"$LOG" 2>&1 \
+            || echo "[outer] WARNING: failed to remove $_retry_label from merged PR #$_retry_pr; harmless, sweep only searches open PRs" | tee -a "$LOG" >&2
+        fi
         unset _retry_pick _retry_label _retry_pr _recorded_head _current_head
         # A failed merge re-labels the PR review-merge-failed and this sweep
         # retries it again next iteration; without a delay here, a merge that
