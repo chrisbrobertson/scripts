@@ -257,7 +257,15 @@ if blocking_count > 1:
           'log directly.')
     sys.exit(0)
 
-block = lines[start:end]
+# Parse from `span_start`, not `start`. `start` is only the first *header* of the
+# verdict (BLOCKING, or ADJUDICATION when extended back to it); `span_start` is the
+# nearest boundary (a "  [" wrapper bracket or a "tokens used" marker) before it.
+# Any prose Codex emitted in this same final rendering *between* the boundary and
+# the first header would be silently dropped if we sliced from `start`, so a review
+# the wrapper rejects (its awk sets valid=0 on content before the first column-0
+# header) would read here as a clean false positive. Slicing from `span_start`
+# folds that prose into the block so the leading-content guard below flags it.
+block = lines[span_start:end]
 block_text = ''.join(block).rstrip('\n')
 
 # babysit-with-review.sh's review format requires all three section
@@ -329,12 +337,14 @@ for l in block:
         sections[current].append(line)
     else:
         # Nonblank content before the first recognized column-0 "## " header.
-        # The backward span scan above matches "## ADJUDICATION"/"## BLOCKING"
-        # on a *left-stripped* line, so it can anchor `start` on an INDENTED
-        # header that this column-0 parser then silently discards — leaving the
-        # trailing clean sections to read as a false positive on a verdict the
-        # wrapper (whose awk anchors every header at column 0) actually rejects.
-        # Flag any such leading content so the block reads as malformed.
+        # Two shapes reach here now that the block is sliced from `span_start`:
+        #   - prose Codex emitted in the final rendering before the first header
+        #     (the case Codex flagged: the wrapper's awk sets valid=0 on any
+        #     content before the first column-0 header, so it must not read clean);
+        #   - an INDENTED "## ADJUDICATION"/"## BLOCKING" the backward span scan
+        #     matched on a *left-stripped* line and anchored `start` on, which this
+        #     column-0 parser does not recognize as a header.
+        # Both are wrapper-rejected, so flag any such leading content as malformed.
         leading_content = True
 
 # A well-formed verdict block has each required header exactly once, an

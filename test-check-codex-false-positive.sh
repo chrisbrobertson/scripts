@@ -230,6 +230,27 @@ EOF
 run_case "valid ADJUDICATION bullet with continuation reads as false positive" \
   "LIKELY FALSE POSITIVE" "$TMP/case9.log"
 
+# ---------- Case 10: prose before an otherwise clean verdict is malformed ----------
+# Codex can emit prose in the final rendering before "## BLOCKING". The wrapper's
+# awk sets valid=0 on any content before the first column-0 header, so parsing must
+# begin at span_start (the boundary), not at the header — otherwise the trailing
+# clean sections read as a false positive on a verdict the wrapper rejects.
+# (PR #94 cycle-6 NEW finding.)
+cat > "$TMP/case10.log" <<EOF
+  [codex] starting review
+$HANDOFF
+Reviewing the diff now; here is what I found before the structured verdict.
+## BLOCKING
+- (none)
+## RECOMMENDED
+- (none)
+## INFORMATION
+- (none)
+$HALT
+EOF
+run_case "prose before a clean verdict does not read as false positive" \
+  "nonblank content before the first column-0 section header" "$TMP/case10.log"
+
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
