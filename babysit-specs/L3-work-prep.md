@@ -82,8 +82,9 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
   by default, or the first `./*-specs` directory found, overridable via
   `WORK_PREP_SPEC_DIR` — commits it, and opens a PR. Phase 2 (approval sweep): before drafting
   new tickets, the script scans PRs opened by prior work-prep runs for an approval
-  comment; on match it merges the spec PR, labels the *source* ticket
-  `status:ready-to-build`, and files a new sub-ticket for the builder queue.
+  comment; on match it merges the spec PR and files a new GitHub sub-ticket for the
+  builder queue. For a GitHub source only, it also labels the source ticket
+  `status:ready-to-build`.
 - **Adversarial spec review cycle, not a structural check.** Every drafted spec PR opens
   as a **draft PR** and is driven through a convergent reviewer/implementer cycle
   (`run_spec_review_cycle`) — the same pattern `babysit-with-review.sh` and
