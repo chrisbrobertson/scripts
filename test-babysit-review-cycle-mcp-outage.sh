@@ -50,7 +50,16 @@ S
 cat > "$TMP/bin/gh" <<'S'
 #!/bin/bash
 printf 'CALL=gh %s\n' "$*" >> "$RECORD"
-cat >/dev/null 2>&1 || true
+# Only commands that actually receive a body (--body-file -) read stdin.
+# `gh pr checkout` and friends inherit the caller's stdin, which is the
+# terminal in interactive use; draining it here would hang waiting for EOF.
+for a in "$@"; do
+  if [ "$prev" = "--body-file" ] && [ "$a" = "-" ]; then
+    cat >>"$STUB_DIR/gh-comment-body" 2>/dev/null || true
+    break
+  fi
+  prev="$a"
+done
 exit 0
 S
 chmod +x "$TMP"/bin/*
