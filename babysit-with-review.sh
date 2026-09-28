@@ -2101,6 +2101,25 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
   if [ -n "$_retry_pick" ]; then
     _retry_label="${_retry_pick%% *}"
     _retry_pr="${_retry_pick#* }"
+    if [ "$_retry_label" = "review-merge-failed" ]; then
+      # The review already passed (codex-review=success is already set on the
+      # head SHA) — only `gh pr merge` itself failed. Routing this through
+      # run_review_cycle like the other three labels would re-run
+      # reviewer_preflight; a transient preflight failure there calls
+      # fail_review_cycle, which drafts the PR and labels it
+      # review-incomplete, discarding the already-passed review instead of
+      # just retrying the merge (see PR #107 review).
+      echo "[outer] retrying merge for PR #$_retry_pr (review-merge-failed)" | tee -a "$LOG" >&2
+      if ! gh pr edit "$_retry_pr" --remove-label "$_retry_label" >>"$LOG" 2>&1; then
+        echo "[outer] WARNING: failed to remove $_retry_label from PR #$_retry_pr; retrying removal next iteration" | tee -a "$LOG" >&2
+        unset _retry_pick _retry_label _retry_pr
+        sleep "$SLEEP_SEC"
+        continue
+      fi
+      merge_reviewed_pr "$_retry_pr" "retry"
+      unset _retry_pick _retry_label _retry_pr
+      continue
+    fi
     if ! reviewer_binary_available; then
       # Don't remove the label yet: run_review_cycle's own CLI-missing check
       # (reviewer_binary_available, above run_review_cycle's checkout step)

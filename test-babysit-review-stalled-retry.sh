@@ -137,18 +137,24 @@ assert_not_grep "stalled retry (label removal fails): run_review_cycle is not in
 assert_grep "stalled retry (label removal fails): sweep logs the removal failure" "[outer] WARNING: failed to remove review-codex-outdated from PR #96; retrying removal next iteration" "$TMP/err"
 rm -f "$TMP/bin/codex"
 
-# ---------- scenario 1c: reviewer CLI available, a PR is stalled behind
-# review-merge-failed (the #60 orphan class: review already passed, only the
-# merge itself failed) — the generic sweep picks up the 4th label exactly
-# like the other three, retrying via a full review cycle ----------
-ln -s "$TMP/bin/codex.stub" "$TMP/bin/codex"
+# ---------- scenario 1c: a PR is stalled behind review-merge-failed (the #60
+# orphan class: review already passed, only the merge itself failed) — unlike
+# the other three labels, this must NOT go through a full review cycle: a
+# transient reviewer_preflight failure there would draft the PR and label it
+# review-incomplete, discarding the already-passed review (PR #107 review,
+# BLOCKING). It must retry the merge directly instead. No codex stub is
+# installed for this scenario — if the sweep ever called run_review_cycle
+# again, `codex` would be missing from PATH and the test would still pass
+# incorrectly, so this is paired with the explicit assertions below that
+# run_review_cycle/codex never ran at all. ----------
 r="$TMP/merge-failed.record"
 run_outer_iteration "$r" STUB_PR_MERGE_FAILED=60
 assert_grep "stalled retry (merge-failed): sweep removes the label itself" "CALL=gh pr edit 60 --remove-label review-merge-failed" "$r"
-assert_not_line "stalled retry (merge-failed): sweep does not un-draft before the review runs" "CALL=gh pr ready 60" "$r"
-assert_grep "stalled retry (merge-failed): run_review_cycle actually ran for the stalled PR" "=== review handoff: PR #60 @" "$TMP/err"
-assert_grep "stalled retry (merge-failed): outer loop logs which PR/label it's retrying" "[outer] retrying review cycle for PR #60 (review-merge-failed)" "$TMP/err"
-rm -f "$TMP/bin/codex"
+assert_not_line "stalled retry (merge-failed): sweep does not un-draft before merging" "CALL=gh pr ready 60" "$r"
+assert_not_grep "stalled retry (merge-failed): does NOT run a full review cycle" "=== review handoff: PR #60 @" "$TMP/err"
+assert_not_grep "stalled retry (merge-failed): never invokes the reviewer CLI" "CALL=codex" "$r"
+assert_grep "stalled retry (merge-failed): outer loop logs a merge retry, not a review retry" "[outer] retrying merge for PR #60 (review-merge-failed)" "$TMP/err"
+assert_grep "stalled retry (merge-failed): merge_reviewed_pr actually ran for the stalled PR" "CALL=gh repo view --json nameWithOwner -q .nameWithOwner" "$r"
 
 # ---------- scenario 2: reviewer CLI still unavailable — label stays, no
 # review is run, and no new work starts ahead of it ----------
