@@ -1356,10 +1356,16 @@ merge_reviewed_pr() {
       echo "  [review] codex-review status set to success for ${_head_sha:0:8}" | tee -a "$LOG" >&2
     else
       echo "  [review] WARNING: failed to set codex-review status for PR #$pr_num; leaving PR open rather than merging without the status check" | tee -a "$LOG" >&2
+      # A caller reached here via the review-merge-failed retry sweep already
+      # removed that label before calling in; without re-flagging here, this
+      # failure would leave the PR invisible to every future sweep (see PR
+      # #107 review, BLOCKING).
+      flag_review_cycle_merge_failed "$pr_num"
       return 0
     fi
   else
     echo "  [review] WARNING: could not resolve repo or head SHA for PR #$pr_num; leaving PR open rather than merging without the status check" | tee -a "$LOG" >&2
+    flag_review_cycle_merge_failed "$pr_num"
     return 0
   fi
 
