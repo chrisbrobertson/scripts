@@ -39,9 +39,9 @@ scripts" sections) rather than kept in a separate amendments file — no
   several implementation mechanics are flagged `[ASSUMPTION]` pending owner sign-off
   (see "What we assume" in [L3-work-prep.md](L3-work-prep.md)). Its sub-ticket
   dedup and Jira-labelling mechanics were corrected 2026-09-28 to match the shipped
-  `babysit-work-prep.sh` (dedupe by an embedded sub-ticket marker searched across all
-  issues, not by the `status:ready-to-build` label, which the shipped script only
-  ever applies to GitHub-sourced tickets).
+  `babysit-work-prep.sh` (dedupe by an embedded sub-ticket marker searched across the
+  most recent 1000 issues, not by the `status:ready-to-build` label, which the shipped
+  script only ever applies to GitHub-sourced tickets).
 - **L3 builder spec:** `review` — drafted 2026-08-27 from the approved decisions, then
   revised same-day to key off a `build-ready` label across GitHub/Jira tickets (not
   just work-prep sub-tickets) and to kick back gap-having specs for clarification

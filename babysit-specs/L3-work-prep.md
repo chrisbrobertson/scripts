@@ -148,8 +148,10 @@ built against this spec:
   work-prep PR is not re-drafted. Mechanism proposed: search for an existing PR whose
   branch name or body references the ticket ID before creating a worktree. Flips if:
   the owner wants re-drafts on demand (e.g., a `--redraft` flag).
-- [ASSUMPTION] Approval-gate idempotency: the approval sweep dedupes by searching all
-  issues for the embedded sub-ticket marker keyed on `(source, ticket)` — never by a
+- [ASSUMPTION] Approval-gate idempotency: the approval sweep dedupes by searching the
+  most recent 1000 issues (`gh issue list --state all --limit 1000`, see Sub-ticket
+  creation above for the bound and its residual duplicate-creation risk) for the
+  embedded sub-ticket marker keyed on `(source, ticket)` — never by a
   label on the source ticket, since that label is GitHub-only (see Sub-ticket creation
   above) and, even for GitHub sources, could be applied on one run while sub-ticket
   creation itself fails on that same run. Keying on the marker instead means a partial
