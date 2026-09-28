@@ -1,7 +1,7 @@
 # QA Test Plan — babysit-with-review.sh
 
 **Owner:** qa-lead  
-**Status:** Test Suite 4 automated and passing (151/151, last run 2026-09-27), now
+**Status:** Test Suite 4 automated and passing (162/162, last run 2026-09-28), now
 including automated pre-flight coverage for TC-1.2, lock-file-collision coverage
 for TC-1.3/TC-1.3b, lock-file-removal coverage for TC-1.4, sentinel-detection
 coverage for TC-1.5/TC-1.6, and MAX_ITER-exhaustion coverage for TC-1.8 (see
@@ -588,12 +588,13 @@ were drafted (2026-06-28). It is deterministic and requires no live Claude/Codex
 calls, so — unlike Suites 1-3 — it runs in CI-suitable time and is expected to pass
 before every commit that touches harness selection or review-structure validation.
 
-**Run:** `./test-babysit-with-review-cli.sh` — last run 2026-09-27, 161 assertions,
-0 failed (this figure had drifted to a stale 130 before today's TC-2.6 pass; treat
+**Run:** `./test-babysit-with-review-cli.sh` — last run 2026-09-28, 162 assertions,
+0 failed (this figure had drifted to a stale 130 before the TC-2.6 pass; treat
 the count as point-in-time, not a live figure — see the `index.md` precedent in
 `bazaar-builder-specs/log.md` for why these aren't re-chased every iteration). 18 of
-those are the Suite 1 pre-flight cases (TC-1.2) added the same day, and 3 more are
-the TC-2.6 `review-cycles-exhausted` cases added just above; everything else below
+those are the Suite 1 pre-flight cases (TC-1.2) added the same day, and 4 more are
+the TC-2.6 `review-cycles-exhausted` cases added just above (including the
+non-numeric-MAX_REVIEW_CYCLES fail-safe case); everything else below
 is selectable-implementer/reviewer and review-structure coverage.
 
 **Coverage (paraphrased from the harness's own assertions, not a numbered TC list —
