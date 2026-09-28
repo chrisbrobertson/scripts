@@ -156,7 +156,7 @@ for j in range(idx - 1, -1, -1):
 if start is None:
     print(f'Found halt line in {log_path} but no "## BLOCKING" verdict block before it.',
           file=sys.stderr)
-    print(f'Raw transcript: {transcript_path}', file=sys.stderr)
+    print(f'Log referenced by halt line: {transcript_path}', file=sys.stderr)
     sys.exit(1)
 
 # The verdict block ends at the first bracketed wrapper log line
@@ -186,8 +186,8 @@ blocking_count = sum(1 for l in span if l.strip() == '## BLOCKING')
 
 if blocking_count > 1:
     print(f'PR #{pr} — {halting_line}')
-    print(f'Driver log:      {log_path}')
-    print(f'Raw transcript:  {transcript_path}')
+    print(f'Log scanned:                 {log_path}')
+    print(f'Log referenced by halt line: {transcript_path}')
     print()
     print(f'VERDICT: malformed — found {blocking_count} "## BLOCKING" headers in the same '
           'uninterrupted review output preceding the halt, so which one is the real final '
@@ -236,8 +236,8 @@ malformed = bool(duplicate_headers) or bool(unexpected_headers) or bool(missing_
 clean = (not malformed) and all(sections.get(name) == ['- (none)'] for name in REQUIRED_SECTIONS)
 
 print(f'PR #{pr} — {halting_line}')
-print(f'Driver log:      {log_path}')
-print(f'Raw transcript:  {transcript_path}')
+print(f'Log scanned:                 {log_path}')
+print(f'Log referenced by halt line: {transcript_path}')
 print()
 print(block_text)
 print()
