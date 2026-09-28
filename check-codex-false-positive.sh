@@ -159,7 +159,26 @@ for k in range(start, idx):
 
 block = lines[start:end]
 block_text = ''.join(block).rstrip('\n')
-clean = all(('(none)' in l or l.strip().startswith('##') or not l.strip()) for l in block)
+
+# babysit-with-review.sh's review format requires all three section
+# headers, each with a single literal "- (none)" bullet when empty
+# (see CLAUDE.md / babysit-with-review.sh's own is_none check). Match
+# that exactly rather than testing for the substring "(none)" anywhere
+# in the block, and require every section to be present — a finding
+# whose text happens to mention "(none)", or a truncated block missing
+# a section, must not be reported as a clean verdict.
+REQUIRED_SECTIONS = ('BLOCKING', 'RECOMMENDED', 'INFORMATION')
+sections = {}
+current = None
+for l in block:
+    stripped = l.strip()
+    if stripped.startswith('## '):
+        current = stripped[3:].strip()
+        sections[current] = []
+    elif current is not None and stripped:
+        sections[current].append(stripped)
+
+clean = all(sections.get(name) == ['- (none)'] for name in REQUIRED_SECTIONS)
 
 print(f'PR #{pr} — {halting_line}')
 print(f'Driver log:      {log_path}')
