@@ -196,7 +196,7 @@ assert_grep "stalled retry (merge-failed): sweep removes the label itself" "CALL
 assert_not_grep "stalled retry (merge-failed): does NOT run a full review cycle" "=== review handoff: PR #60 @" "$TMP/err"
 assert_not_grep "stalled retry (merge-failed): never invokes the reviewer CLI" "CALL=codex" "$r"
 assert_grep "stalled retry (merge-failed): outer loop logs a merge retry, not a review retry" "[outer] retrying merge for PR #60 (review-merge-failed)" "$TMP/err"
-assert_grep "stalled retry (merge-failed): merge_reviewed_pr actually attempted a merge" "CALL=gh pr merge 60 --squash --delete-branch --auto" "$r"
+assert_grep "stalled retry (merge-failed): merge_reviewed_pr actually attempted a merge" "CALL=gh pr merge 60 --squash --delete-branch --match-head-commit abc1234" "$r"
 
 # ---------- scenario 1d: review-merge-failed, but the PR's head has moved
 # since the review passed (e.g. new commits pushed during the arbitrarily

@@ -1451,9 +1451,20 @@ merge_reviewed_pr() {
   # --match-head-commit pins the merge to the exact SHA the codex-review=success
   # status above was just posted for, so a commit pushed after that point (and
   # thus never reviewed) can never be merged out from under this call.
-  if gh pr merge "$pr_num" --squash --delete-branch --auto --match-head-commit "$_head_sha" >>"$LOG" 2>&1; then
-    echo "  [review] PR #$pr_num queued for auto-merge (merges when CI passes)" | tee -a "$LOG" >&2
-  elif gh pr merge "$pr_num" --squash --delete-branch --match-head-commit "$_head_sha" >>"$LOG" 2>&1; then
+  #
+  # Deliberately NOT using `gh pr merge --auto`: GitHub only validates
+  # --match-head-commit at the moment auto-merge is *enabled*, not at the
+  # moment it actually merges later once CI passes, and does not disable
+  # auto-merge on a subsequent push by anyone with write access — so a commit
+  # pushed after this review verdict (but before CI finished) could get
+  # auto-merged unreviewed, silently defeating the SHA pin above (see PR #107
+  # review, BLOCKING). Attempting an immediate merge only, every time, means
+  # GitHub re-validates the pinned SHA synchronously on every real attempt.
+  # If CI hasn't finished yet the merge just fails here and falls into the
+  # same review-merge-failed retry sweep used for any other merge failure —
+  # already paced with sleep "$SLEEP_SEC" between outer iterations and
+  # already re-checking the recorded head before reusing the green status.
+  if gh pr merge "$pr_num" --squash --delete-branch --match-head-commit "$_head_sha" >>"$LOG" 2>&1; then
     echo "  [review] PR #$pr_num merged." | tee -a "$LOG" >&2
   else
     echo "  [review] WARNING: merge failed for PR #$pr_num; left open for next iteration. See $LOG." | tee -a "$LOG" >&2
