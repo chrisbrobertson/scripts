@@ -98,7 +98,13 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
   `spec-review-codex-no-credits`) and stays draft. The human approval comment is a second,
   independent gate on top of this — it is never asked to bless an unreviewed spec.
 - **Approval detection:** `gh pr list --json comments` on each open spec PR, matched
-  against a case-insensitive `\bapproved\b` regex on comment bodies.
+  against a line starting with `approved` (case-insensitive, anchored to line start —
+  accepts "Approved, let's build this" but rejects "this is not approved yet"), and only
+  when posted by an authorized commenter. Authorization is `WORK_PREP_APPROVERS`
+  (comma-separated GitHub logins, or `*` for any commenter), defaulting to the
+  authenticated `gh` user — so by default only the operator can approve. Comments the
+  wrapper posts itself (review/status comments) are excluded from the match so the
+  wrapper can never self-approve.
 - **Sub-ticket creation:** always a GitHub issue via `gh issue create`, labelled
   `sub-ticket` plus `build-ready` — the label the builder loop actually queues on —
   even when the source ticket was Jira. The *source* ticket separately gets
@@ -137,9 +143,6 @@ built against this spec:
   amended after initial approval).
   Owner should confirm whether re-approval after a spec amendment is a supported flow
   and, if so, what triggers a second sub-ticket.
-  Owner should confirm who is authorized to post the approval comment (any commenter,
-  or only `owners:` from the spec frontmatter / a specific GitHub login) — the `\bapproved\b`
-  regex alone does not restrict by author.
 - [ASSUMPTION] Rejection path: no rejection sentinel is defined yet. Proposed: a
   comment matching `\bchanges requested\b` (or similar) leaves the ticket undrafted and
   logs a note; the ticket is picked up for re-drafting on the next run.
@@ -219,10 +222,10 @@ manual migration of any open spec PRs and unlabelled tickets.
 - **Tenant isolation:** Single-user; PRs/issues created in the authenticated account's
   accessible repos.
 - **PII handling:** Ticket titles/descriptions and code context only; no user data.
-- **Approval spoofing:** [ASSUMPTION-linked] until the "who can approve" question above
-  is resolved, any commenter on the spec PR can trigger a merge + sub-ticket by writing
-  a comment containing "approved" — this is a real gap if the repo has non-owner
-  collaborators with comment access.
+- **Approval spoofing:** resolved by `WORK_PREP_APPROVERS` (default: the authenticated
+  `gh` user only), which restricts who can trigger a merge + sub-ticket. The residual
+  risk is operator misconfiguration — setting `WORK_PREP_APPROVERS=*` on a repo with
+  non-owner collaborators re-opens the gap.
 
 ## Telemetry contract
 Events emitted to stdout:
@@ -271,9 +274,6 @@ Events emitted to stderr:
   spec finding should become a flagged `[ASSUMPTION]`, not an argument with the reviewer.
 
 ## Assumptions-that-could-flip
-- **Single-approver-any-commenter assumption.** If flipped (need restricted approval
-  authority): approval check must filter comment author against `owners:` in the
-  spec's frontmatter or a configured allowlist.
 - **GitHub-bridge-for-Jira assumption.** If flipped (builder should read Jira directly):
   `babysit-builder.sh`'s build-queue query would need its own Jira integration instead
   of a GitHub sub-ticket bridge.
