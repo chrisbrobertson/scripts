@@ -63,6 +63,9 @@ make_stubs() {
 #!/bin/bash
 printf '%s\n' 'CALL=claude' >> "$RECORD"
 printf '<%s>\n' "$@" >> "$RECORD"
+if [ -n "${STUB_RENAME_BRANCH:-}" ]; then
+  git branch -m "$STUB_RENAME_BRANCH" 2>>"$RECORD" || true
+fi
 printf '{"type":"system","subtype":"init","session_id":"test-session"}\n'
 result="${STUB_FINAL_RESULT:-FINAL_RESULT}"
 result=${result//\\/\\\\}
@@ -84,6 +87,25 @@ if [ -n "$out" ]; then printf '%s\n' "${STUB_FINAL_RESULT:-FINAL_RESULT}" > "$ou
 exit "${STUB_RC:-0}"
 STUB
   chmod +x "$bin/claude" "$bin/codex"
+  # Minimal gh stub: the outer loop's stalled-PR retry sweep runs `gh pr
+  # list` at the top of every iteration regardless of BABYSIT_TEST_MODE, so
+  # gh must resolve to *something* even in tests that don't care about it.
+  # `pr list` succeeds with empty stdout ("no PR found for this label" — see
+  # babysit-with-review.sh's gh-pr-list-failure handling, which now treats a
+  # non-zero exit there as a lookup failure rather than "no stalled PR").
+  # Every other subcommand fails, preserving the old "gh not on PATH"
+  # behavior these tests otherwise rely on (e.g. the preflight default-branch
+  # lookup's `|| echo main` fallback).
+  cat > "$bin/gh" <<'STUB'
+#!/bin/bash
+printf '%s\n' 'CALL=gh' >> "$RECORD"
+printf '<%s>\n' "$@" >> "$RECORD"
+if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+  exit 0
+fi
+exit 1
+STUB
+  chmod +x "$bin/gh"
 }
 
 run_script() {
@@ -91,6 +113,54 @@ run_script() {
   shift 3
   RECORD="$record" HOME="$home" PATH="$TMP/bin:/usr/bin:/bin" \
     BABYSIT_TEST_MODE="$mode" "$SCRIPT" "$@"
+}
+
+# Isolated repo with a bare "origin" remote and one commit on branch "main",
+# already pushed (not ahead/behind). The stubbed gh fails every subcommand
+# except `pr list` (see make_stubs), so the pre-flight default-branch lookup
+# falls back to its "main" default, matching this fixture's branch name.
+make_preflight_repo() {
+  local dir="$1"
+  git init -q --bare "$dir/origin.git"
+  git clone -q "$dir/origin.git" "$dir/work" >/dev/null 2>&1
+  (
+    cd "$dir/work"
+    git config user.email test@test.com
+    git config user.name test
+    git checkout -q -b main 2>/dev/null || git checkout -q main
+    echo base > tracked.txt
+    git add tracked.txt
+    git commit -q -m init
+    git push -q -u origin main
+  )
+}
+
+# Runs the outer pre-flight checks (BABYSIT_TEST_MODE=outer-preflight) against
+# a real repo directory, capturing stdout/stderr/rc for assertions.
+run_preflight() {
+  local repo_dir="$1" home="$2" out="$3" err="$4"
+  set +e
+  ( cd "$repo_dir" && HOME="$home" PATH="$TMP/bin:/usr/bin:/bin" \
+      BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) >"$out" 2>"$err"
+  local rc=$?
+  set -e
+  return $rc
+}
+
+# Runs the real outer loop (no BABYSIT_TEST_MODE — an empty value skips the
+# test-hook dispatch the same as unset) against a real repo directory, with
+# claude/codex stubbed on PATH and gh stubbed to no-op (see make_stubs). Used
+# for QA-TEST-PLAN.md TC-1.1, which
+# needs the actual per-iteration worktree/branch-rename mechanics, not a
+# pure-function extraction. MAX_ITER/SLEEP_SEC are set by the caller via env.
+run_single_iteration() {
+  local repo_dir="$1" home="$2" record="$3" out="$4" err="$5"
+  set +e
+  ( cd "$repo_dir" && HOME="$home" PATH="$TMP/bin:/usr/bin:/bin" RECORD="$record" \
+      BABYSIT_TEST_MODE="" "$SCRIPT" ) >"$out" 2>"$err"
+  local rc=$?
+  set -e
+  return $rc
 }
 
 make_stubs "$TMP/bin"
@@ -311,6 +381,20 @@ mv "$TMP/bin/codex.off" "$TMP/bin/codex"
 assert_contains "$TMP/availability.out" 'missing_reviewer=codex' 'missing selected reviewer is detected gracefully'
 assert_contains "$TMP/availability-claude.out" 'available_reviewer=claude' 'available selected reviewer is used even when Codex is missing'
 
+# QA-TEST-PLAN.md TC-2.9: run_review_cycle's own graceful-degradation path
+# (not just the reviewer_binary_available() predicate above) — verifies the
+# exact skip message and that the cycle returns 0 (PR left open) rather than
+# erroring, with no gh call attempted (none stubbed on PATH here).
+mv "$TMP/bin/codex" "$TMP/bin/codex.off"
+run_script review-cycle-missing-reviewer "$TMP/missing-reviewer.record" "$TMP/home" \
+  --reviewer codex > "$TMP/missing-reviewer.out" 2>"$TMP/missing-reviewer.err"
+mv "$TMP/bin/codex.off" "$TMP/bin/codex"
+assert_contains "$TMP/missing-reviewer.out" 'run_review_cycle_rc=0' \
+  'run_review_cycle returns 0 when reviewer CLI is missing'
+assert_contains "$TMP/missing-reviewer.err" \
+  '  [review] codex CLI not found; skipping review cycle (PR #7 remains open for external review)' \
+  'run_review_cycle logs the graceful-degradation skip message'
+
 # Displayed/logged model policy distinguishes Claude stage defaults from Codex
 # configured defaults, including remediation passes.
 run_script model-policy "$TMP/policy-claude.record" "$TMP/home" --implementer claude > "$TMP/policy-claude.out"
@@ -327,6 +411,364 @@ if "$SCRIPT" --help | grep -q -- '--implementer MODEL'; then fail 'help labels h
 for option in implementer implementer-model implementer-effort reviewer reviewer-model reviewer-effort; do
   if "$SCRIPT" --help | grep -q -- "--$option"; then pass "help documents --$option"; else fail "help documents --$option"; fi
 done
+
+# Pre-flight checks: converts QA-TEST-PLAN.md Suite 1 manual smoke tests
+# (clean-tree/branch/ahead-behind gating) into deterministic coverage. No
+# Claude/Codex/gh involved; gh is intentionally absent from PATH so the
+# default-branch lookup falls back to "main", matching make_preflight_repo.
+mkdir -p "$TMP/preflight/home"
+
+mkdir -p "$TMP/preflight/clean"
+make_preflight_repo "$TMP/preflight/clean" >/dev/null 2>&1
+rc=0
+run_preflight "$TMP/preflight/clean/work" "$TMP/preflight/home" \
+  "$TMP/preflight/clean.out" "$TMP/preflight/clean.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'preflight: clean repo on default branch exits 0' || fail 'preflight: clean repo on default branch exits 0'
+assert_contains "$TMP/preflight/clean.out" 'PREFLIGHT_OK branch=main' 'preflight: reports resolved default branch'
+
+mkdir -p "$TMP/preflight/unstaged"
+make_preflight_repo "$TMP/preflight/unstaged" >/dev/null 2>&1
+echo modified >> "$TMP/preflight/unstaged/work/tracked.txt"
+rc=0
+run_preflight "$TMP/preflight/unstaged/work" "$TMP/preflight/home" \
+  "$TMP/preflight/unstaged.out" "$TMP/preflight/unstaged.err" || rc=$?
+[ "$rc" -eq 1 ] && pass 'preflight: unstaged modification exits 1' || fail 'preflight: unstaged modification exits 1'
+if grep -q 'unstaged modifications' "$TMP/preflight/unstaged.err"; then pass 'preflight: unstaged modification error names the cause'; else fail 'preflight: unstaged modification error names the cause'; fi
+
+mkdir -p "$TMP/preflight/staged"
+make_preflight_repo "$TMP/preflight/staged" >/dev/null 2>&1
+echo modified >> "$TMP/preflight/staged/work/tracked.txt"
+(cd "$TMP/preflight/staged/work" && git add tracked.txt)
+rc=0
+run_preflight "$TMP/preflight/staged/work" "$TMP/preflight/home" \
+  "$TMP/preflight/staged.out" "$TMP/preflight/staged.err" || rc=$?
+[ "$rc" -eq 1 ] && pass 'preflight: staged uncommitted change exits 1' || fail 'preflight: staged uncommitted change exits 1'
+if grep -q 'staged but uncommitted changes' "$TMP/preflight/staged.err"; then pass 'preflight: staged change error names the cause'; else fail 'preflight: staged change error names the cause'; fi
+
+mkdir -p "$TMP/preflight/untracked"
+make_preflight_repo "$TMP/preflight/untracked" >/dev/null 2>&1
+echo new > "$TMP/preflight/untracked/work/extra.txt"
+rc=0
+run_preflight "$TMP/preflight/untracked/work" "$TMP/preflight/home" \
+  "$TMP/preflight/untracked.out" "$TMP/preflight/untracked.err" || rc=$?
+[ "$rc" -eq 1 ] && pass 'preflight: untracked non-ignored file exits 1' || fail 'preflight: untracked non-ignored file exits 1'
+if grep -q 'untracked non-ignored file' "$TMP/preflight/untracked.err"; then pass 'preflight: untracked file error names the cause'; else fail 'preflight: untracked file error names the cause'; fi
+
+mkdir -p "$TMP/preflight/otherbranch"
+make_preflight_repo "$TMP/preflight/otherbranch" >/dev/null 2>&1
+(cd "$TMP/preflight/otherbranch/work" && git checkout -q -b wip/other)
+rc=0
+run_preflight "$TMP/preflight/otherbranch/work" "$TMP/preflight/home" \
+  "$TMP/preflight/otherbranch.out" "$TMP/preflight/otherbranch.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'preflight: clean non-default branch auto-switches and exits 0' || fail 'preflight: clean non-default branch auto-switches and exits 0'
+assert_contains "$TMP/preflight/otherbranch.out" 'PREFLIGHT_OK branch=main' 'preflight: auto-switch lands back on default branch'
+if grep -q "switching from 'wip/other' to default branch 'main'" "$TMP/preflight/otherbranch.err"; then pass 'preflight: auto-switch is logged'; else fail 'preflight: auto-switch is logged'; fi
+
+mkdir -p "$TMP/preflight/ahead"
+make_preflight_repo "$TMP/preflight/ahead" >/dev/null 2>&1
+(cd "$TMP/preflight/ahead/work" && git commit -q --allow-empty -m "local only, unpushed")
+rc=0
+run_preflight "$TMP/preflight/ahead/work" "$TMP/preflight/home" \
+  "$TMP/preflight/ahead.out" "$TMP/preflight/ahead.err" || rc=$?
+[ "$rc" -eq 1 ] && pass 'preflight: ahead of origin exits 1' || fail 'preflight: ahead of origin exits 1'
+if grep -q 'ahead of origin/main' "$TMP/preflight/ahead.err"; then pass 'preflight: ahead-of-origin error names the cause'; else fail 'preflight: ahead-of-origin error names the cause'; fi
+
+mkdir -p "$TMP/preflight/behind"
+make_preflight_repo "$TMP/preflight/behind" >/dev/null 2>&1
+mkdir -p "$TMP/preflight/behind/pusher"
+git clone -q "$TMP/preflight/behind/origin.git" "$TMP/preflight/behind/pusher/work" >/dev/null 2>&1
+(
+  cd "$TMP/preflight/behind/pusher/work"
+  git config user.email test@test.com
+  git config user.name test
+  git checkout -q main
+  echo remote-change >> tracked.txt
+  git add tracked.txt
+  git commit -q -m "remote-only commit"
+  git push -q origin main
+)
+rc=0
+run_preflight "$TMP/preflight/behind/work" "$TMP/preflight/home" \
+  "$TMP/preflight/behind.out" "$TMP/preflight/behind.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'preflight: behind origin fast-forwards and exits 0' || fail 'preflight: behind origin fast-forwards and exits 0'
+if grep -q "is 1 commit(s) behind origin; fast-forwarding" "$TMP/preflight/behind.err"; then pass 'preflight: fast-forward is logged'; else fail 'preflight: fast-forward is logged'; fi
+if [ "$(cd "$TMP/preflight/behind/work" && git log --format=%s -1)" = "remote-only commit" ]; then pass 'preflight: fast-forward actually advances local branch'; else fail 'preflight: fast-forward actually advances local branch'; fi
+
+mkdir -p "$TMP/preflight/diverged"
+make_preflight_repo "$TMP/preflight/diverged" >/dev/null 2>&1
+mkdir -p "$TMP/preflight/diverged/pusher"
+git clone -q "$TMP/preflight/diverged/origin.git" "$TMP/preflight/diverged/pusher/work" >/dev/null 2>&1
+(
+  cd "$TMP/preflight/diverged/pusher/work"
+  git config user.email test@test.com
+  git config user.name test
+  git checkout -q main
+  git commit -q --allow-empty -m "remote-only commit"
+  git push -q origin main
+)
+(cd "$TMP/preflight/diverged/work" && git commit -q --allow-empty -m "local-only commit")
+rc=0
+run_preflight "$TMP/preflight/diverged/work" "$TMP/preflight/home" \
+  "$TMP/preflight/diverged.out" "$TMP/preflight/diverged.err" || rc=$?
+[ "$rc" -eq 1 ] && pass 'preflight: diverged from origin exits 1' || fail 'preflight: diverged from origin exits 1'
+if grep -q 'diverged from origin/main' "$TMP/preflight/diverged.err"; then pass 'preflight: diverged error names the cause'; else fail 'preflight: diverged error names the cause'; fi
+
+# Lock file collision: converts QA-TEST-PLAN.md TC-1.3 (lock file semantics)
+# into deterministic coverage. The STOP_FILE collision check runs unconditionally
+# before argument-mode dispatch and before any git/pre-flight work, so it needs
+# neither a git repo nor claude/codex/gh stubs — a bare cwd is enough. Covers
+# both AT3 (pre-existing stop file is a collision, exit 1) and AT3b (no
+# pre-existing stop file lets startup proceed) from
+# L3-autonomous-outer-loop.md.
+mkdir -p "$TMP/lockfile/proj" "$TMP/lockfile/home/sisyphus-logs"
+touch "$TMP/lockfile/home/sisyphus-logs/proj.stop"
+rc=0
+( cd "$TMP/lockfile/proj" && HOME="$TMP/lockfile/home" PATH="$TMP/bin:/usr/bin:/bin" \
+    BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
+  >"$TMP/lockfile/collision.out" 2>"$TMP/lockfile/collision.err" || rc=$?
+[ "$rc" -eq 1 ] && pass 'lock file: pre-existing stop file is a collision, exits 1 (TC-1.3 AT3)' || fail 'lock file: pre-existing stop file is a collision, exits 1 (TC-1.3 AT3)'
+assert_contains "$TMP/lockfile/collision.err" "ERROR: $TMP/lockfile/home/sisyphus-logs/proj.stop already exists." 'lock file: collision error names the existing lock path (TC-1.3 AT3)'
+
+mkdir -p "$TMP/lockfile/nocollision" "$TMP/lockfile/home2"
+make_preflight_repo "$TMP/lockfile/nocollision" >/dev/null 2>&1
+rc=0
+run_preflight "$TMP/lockfile/nocollision/work" "$TMP/lockfile/home2" \
+  "$TMP/lockfile/nocollision.out" "$TMP/lockfile/nocollision.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'lock file: no pre-existing stop file lets startup proceed (TC-1.3 AT3b)' || fail 'lock file: no pre-existing stop file lets startup proceed (TC-1.3 AT3b)'
+assert_contains "$TMP/lockfile/nocollision.out" 'PREFLIGHT_OK branch=main' 'lock file: first iteration setup reaches pre-flight (TC-1.3 AT3b)'
+
+# Sentinel detection: converts QA-TEST-PLAN.md Suite 1 TC-1.5 (STOP halts the
+# loop) and TC-1.6 (HANDOFF_REVIEW <PR> triggers a review cycle) into
+# deterministic coverage. outer-sentinel feeds one simulated iteration's
+# implementer RESULT via stdin through the real parse_sentinel() function
+# extracted from the outer loop; no Claude/Codex/gh involved.
+: > "$TMP/sentinel-stop.record"
+printf 'did some work\nSTOP' | run_script outer-sentinel "$TMP/sentinel-stop.record" "$TMP/home" > "$TMP/sentinel-stop.out"
+assert_contains "$TMP/sentinel-stop.out" 'STOP' 'sentinel: bare STOP on last line is detected'
+
+: > "$TMP/sentinel-handoff.record"
+printf 'opened a PR\nHANDOFF_REVIEW 123' | run_script outer-sentinel "$TMP/sentinel-handoff.record" "$TMP/home" > "$TMP/sentinel-handoff.out"
+assert_contains "$TMP/sentinel-handoff.out" 'HANDOFF_REVIEW 123' 'sentinel: HANDOFF_REVIEW <PR> extracts the bare PR number'
+
+: > "$TMP/sentinel-handoff-space.record"
+printf 'HANDOFF_REVIEW 42 \n' | run_script outer-sentinel "$TMP/sentinel-handoff-space.record" "$TMP/home" > "$TMP/sentinel-handoff-space.out"
+assert_contains "$TMP/sentinel-handoff-space.out" 'HANDOFF_REVIEW 42' 'sentinel: trailing whitespace after the PR number is trimmed'
+
+: > "$TMP/sentinel-invalid.record"
+printf 'HANDOFF_REVIEW abc' | run_script outer-sentinel "$TMP/sentinel-invalid.record" "$TMP/home" > "$TMP/sentinel-invalid.out"
+assert_contains "$TMP/sentinel-invalid.out" 'HANDOFF_REVIEW_INVALID abc' 'sentinel: non-numeric PR is classified invalid, not acted on'
+
+: > "$TMP/sentinel-none.record"
+printf 'still working, no sentinel yet' | run_script outer-sentinel "$TMP/sentinel-none.record" "$TMP/home" > "$TMP/sentinel-none.out"
+assert_contains "$TMP/sentinel-none.out" 'NONE' 'sentinel: ordinary output with no sentinel line is classified NONE'
+
+: > "$TMP/sentinel-mid-text.record"
+printf 'STOP\nbut then kept talking' | run_script outer-sentinel "$TMP/sentinel-mid-text.record" "$TMP/home" > "$TMP/sentinel-mid-text.out"
+assert_contains "$TMP/sentinel-mid-text.out" 'NONE' 'sentinel: STOP is only honored on the final line, not mid-output'
+
+# MAX_ITER exhaustion: converts QA-TEST-PLAN.md Suite 1 TC-1.8 (loop exits
+# with "Hit MAX_ITER" after MAX_ITER iterations without an earlier STOP) into
+# deterministic coverage. outer-maxiter feeds simulated post-iteration
+# counters through the real maxiter_exhausted() function extracted from the
+# outer loop; no Claude/Codex/gh involved.
+: > "$TMP/maxiter-reached.record"
+printf '1\n2\n3\n4\n5\n' | MAX_ITER=5 run_script outer-maxiter "$TMP/maxiter-reached.record" "$TMP/home" > "$TMP/maxiter-reached.out"
+assert_contains "$TMP/maxiter-reached.out" 'iter=5 exhausted=1' 'max-iter: exhaustion fires once iter reaches MAX_ITER'
+assert_not_contains "$TMP/maxiter-reached.out" 'iter=4 exhausted=1' 'max-iter: exhaustion does not fire before MAX_ITER'
+
+: > "$TMP/maxiter-not-reached.record"
+printf '4\n' | MAX_ITER=5 run_script outer-maxiter "$TMP/maxiter-not-reached.record" "$TMP/home" > "$TMP/maxiter-not-reached.out"
+assert_contains "$TMP/maxiter-not-reached.out" 'iter=4 exhausted=0' 'max-iter: an early break (iter < MAX_ITER) is not exhaustion'
+
+: > "$TMP/maxiter-past.record"
+printf '6\n' | MAX_ITER=5 run_script outer-maxiter "$TMP/maxiter-past.record" "$TMP/home" > "$TMP/maxiter-past.out"
+assert_contains "$TMP/maxiter-past.out" 'iter=6 exhausted=1' 'max-iter: uses >= so a counter past MAX_ITER still counts as exhausted'
+
+# Lock file removal mid-run: converts QA-TEST-PLAN.md Suite 1 TC-1.4 (removing
+# the stop file mid-run causes the loop to exit gracefully) into deterministic
+# coverage. outer-lockfile-removed feeds stop-file paths through the real
+# stop_file_removed() function extracted from the outer loop's per-iteration
+# check; no Claude/Codex/gh involved.
+lockfile_path="$TMP/lockfile-removed-mid-run.stop"
+touch "$lockfile_path"
+: > "$TMP/lockfile-removed.record"
+printf '%s\n' "$lockfile_path" | run_script outer-lockfile-removed "$TMP/lockfile-removed.record" "$TMP/home" > "$TMP/lockfile-removed.before.out"
+assert_contains "$TMP/lockfile-removed.before.out" "path=$lockfile_path removed=0" 'lock file removal: still present mid-run is not treated as removed (TC-1.4)'
+
+rm -f "$lockfile_path"
+printf '%s\n' "$lockfile_path" | run_script outer-lockfile-removed "$TMP/lockfile-removed.record" "$TMP/home" > "$TMP/lockfile-removed.after.out"
+assert_contains "$TMP/lockfile-removed.after.out" "path=$lockfile_path removed=1" 'lock file removal: removing the stop file mid-run is detected (TC-1.4)'
+
+# Stalled-PR retry-sweep priority: converts the pre-iteration scan that picks
+# which resumable label (review-mcp-outage, review-codex-outdated,
+# review-codex-no-credits, review-merge-failed) to retry into deterministic
+# coverage. Each outer-retry-sweep input line is four fields
+# (mcp/outdated/credits/merge-failed PR numbers, "-" for none) standing in
+# for what four `gh pr list` calls would return; it drives the real
+# pick_stalled_retry() extracted from the outer loop. No Claude/Codex/gh
+# involved.
+: > "$TMP/retry-sweep-none.record"
+printf -- '- - - -\n' | run_script outer-retry-sweep "$TMP/retry-sweep-none.record" "$TMP/home" > "$TMP/retry-sweep-none.out"
+assert_contains "$TMP/retry-sweep-none.out" 'none' 'retry sweep: no resumable label set finds nothing to retry'
+
+: > "$TMP/retry-sweep-mcp-only.record"
+printf -- '42 - - -\n' | run_script outer-retry-sweep "$TMP/retry-sweep-mcp-only.record" "$TMP/home" > "$TMP/retry-sweep-mcp-only.out"
+assert_contains "$TMP/retry-sweep-mcp-only.out" 'label=review-mcp-outage pr=42' 'retry sweep: review-mcp-outage alone is picked'
+
+: > "$TMP/retry-sweep-outdated-only.record"
+printf -- '- 96 - -\n' | run_script outer-retry-sweep "$TMP/retry-sweep-outdated-only.record" "$TMP/home" > "$TMP/retry-sweep-outdated-only.out"
+assert_contains "$TMP/retry-sweep-outdated-only.out" 'label=review-codex-outdated pr=96' 'retry sweep: review-codex-outdated alone is picked (the label with no prior auto-retry)'
+
+: > "$TMP/retry-sweep-credits-only.record"
+printf -- '- - 12 -\n' | run_script outer-retry-sweep "$TMP/retry-sweep-credits-only.record" "$TMP/home" > "$TMP/retry-sweep-credits-only.out"
+assert_contains "$TMP/retry-sweep-credits-only.out" 'label=review-codex-no-credits pr=12' 'retry sweep: review-codex-no-credits alone is picked'
+
+: > "$TMP/retry-sweep-merge-failed-only.record"
+printf -- '- - - 60\n' | run_script outer-retry-sweep "$TMP/retry-sweep-merge-failed-only.record" "$TMP/home" > "$TMP/retry-sweep-merge-failed-only.out"
+assert_contains "$TMP/retry-sweep-merge-failed-only.out" 'label=review-merge-failed pr=60' 'retry sweep: review-merge-failed alone is picked (the #60 orphan class)'
+
+: > "$TMP/retry-sweep-priority.record"
+printf -- '42 96 12 60\n' | run_script outer-retry-sweep "$TMP/retry-sweep-priority.record" "$TMP/home" > "$TMP/retry-sweep-priority.out"
+assert_contains "$TMP/retry-sweep-priority.out" 'label=review-mcp-outage pr=42' 'retry sweep: review-mcp-outage wins priority over the other three when all four are set'
+
+: > "$TMP/retry-sweep-outdated-over-credits.record"
+printf -- '- 96 12 60\n' | run_script outer-retry-sweep "$TMP/retry-sweep-outdated-over-credits.record" "$TMP/home" > "$TMP/retry-sweep-outdated-over-credits.out"
+assert_contains "$TMP/retry-sweep-outdated-over-credits.out" 'label=review-codex-outdated pr=96' 'retry sweep: review-codex-outdated wins priority over review-codex-no-credits and review-merge-failed'
+
+: > "$TMP/retry-sweep-credits-over-merge-failed.record"
+printf -- '- - 12 60\n' | run_script outer-retry-sweep "$TMP/retry-sweep-credits-over-merge-failed.record" "$TMP/home" > "$TMP/retry-sweep-credits-over-merge-failed.out"
+assert_contains "$TMP/retry-sweep-credits-over-merge-failed.out" 'label=review-codex-no-credits pr=12' 'retry sweep: review-codex-no-credits wins priority over review-merge-failed (lowest priority: not a backend problem)'
+
+# Blocking-finding count: converts the branch point behind QA-TEST-PLAN.md
+# TC-2.1 (Codex review with N>0 BLOCKING findings triggers the
+# addressing-findings path) and TC-2.2 (zero BLOCKING findings triggers
+# auto-merge) into deterministic coverage. review-blocking-count feeds a
+# review markdown document on stdin through the real count_blocking()
+# function used by run_review_cycle; no Claude/Codex/gh involved.
+: > "$TMP/blocking-count-none-bullet.record"
+printf '## BLOCKING\n- (none)\n\n## RECOMMENDED\n- (none)\n' \
+  | run_script review-blocking-count "$TMP/blocking-count-none-bullet.record" "$TMP/home" > "$TMP/blocking-count-none-bullet.out"
+assert_contains "$TMP/blocking-count-none-bullet.out" '0' 'blocking count: a sole "- (none)" bullet under BLOCKING counts as zero (TC-2.2)'
+
+: > "$TMP/blocking-count-one.record"
+printf '## BLOCKING\n- undefined variable used at line 42\n\n## RECOMMENDED\n- (none)\n' \
+  | run_script review-blocking-count "$TMP/blocking-count-one.record" "$TMP/home" > "$TMP/blocking-count-one.out"
+assert_contains "$TMP/blocking-count-one.out" '1' 'blocking count: a single real BLOCKING bullet counts as one (TC-2.1)'
+
+: > "$TMP/blocking-count-multi.record"
+printf '## BLOCKING\n- finding one\n  indented continuation detail\n- finding two\n\n## RECOMMENDED\n- (none)\n' \
+  | run_script review-blocking-count "$TMP/blocking-count-multi.record" "$TMP/home" > "$TMP/blocking-count-multi.out"
+assert_contains "$TMP/blocking-count-multi.out" '2' 'blocking count: multiple BLOCKING bullets count once each, ignoring indented continuation lines (TC-2.1)'
+
+: > "$TMP/blocking-count-other-sections.record"
+printf '## BLOCKING\n- (none)\n\n## RECOMMENDED\n- non-blocking finding\n- another one\n' \
+  | run_script review-blocking-count "$TMP/blocking-count-other-sections.record" "$TMP/home" > "$TMP/blocking-count-other-sections.out"
+assert_contains "$TMP/blocking-count-other-sections.out" '0' 'blocking count: bullets under RECOMMENDED are not counted as BLOCKING'
+
+: > "$TMP/blocking-count-no-section.record"
+printf '## RECOMMENDED\n- (none)\n\n## INFORMATION\n- (none)\n' \
+  | run_script review-blocking-count "$TMP/blocking-count-no-section.record" "$TMP/home" > "$TMP/blocking-count-no-section.out"
+assert_contains "$TMP/blocking-count-no-section.out" '0' 'blocking count: a review with no BLOCKING heading at all counts as zero'
+
+# Review-cycle sentinel detection: converts QA-TEST-PLAN.md Suite 2 TC-2.4
+# (STUCK_REVIEW bails the review cycle) into deterministic coverage.
+# review-sentinel feeds one simulated implementer RESULT via stdin through
+# the real parse_review_sentinel() function extracted from run_review_cycle;
+# no Claude/Codex/gh involved.
+: > "$TMP/review-sentinel-stuck.record"
+printf 'tried a few things\nSTUCK_REVIEW cannot fix without external API change' \
+  | run_script review-sentinel "$TMP/review-sentinel-stuck.record" "$TMP/home" > "$TMP/review-sentinel-stuck.out"
+assert_contains "$TMP/review-sentinel-stuck.out" 'STUCK_REVIEW cannot fix without external API change' 'review sentinel: STUCK_REVIEW on last line is detected with its reason (TC-2.4)'
+
+: > "$TMP/review-sentinel-done.record"
+printf 'addressed the findings\nDONE_REVIEW' \
+  | run_script review-sentinel "$TMP/review-sentinel-done.record" "$TMP/home" > "$TMP/review-sentinel-done.out"
+assert_contains "$TMP/review-sentinel-done.out" 'DONE_REVIEW' 'review sentinel: bare DONE_REVIEW on last line is detected'
+
+: > "$TMP/review-sentinel-none.record"
+printf 'still working, no sentinel yet' \
+  | run_script review-sentinel "$TMP/review-sentinel-none.record" "$TMP/home" > "$TMP/review-sentinel-none.out"
+assert_contains "$TMP/review-sentinel-none.out" 'NONE' 'review sentinel: ordinary output with no sentinel line is classified NONE, treated as DONE_REVIEW by the caller'
+
+: > "$TMP/review-sentinel-mid-text.record"
+printf 'STUCK_REVIEW blocked\nbut then kept talking' \
+  | run_script review-sentinel "$TMP/review-sentinel-mid-text.record" "$TMP/home" > "$TMP/review-sentinel-mid-text.out"
+assert_contains "$TMP/review-sentinel-mid-text.out" 'NONE' 'review sentinel: STUCK_REVIEW is only honored on the final line, not mid-output'
+
+# HEAD-unchanged defensive check: converts QA-TEST-PLAN.md Suite 2 TC-2.5
+# (DONE_REVIEW with no commits made bails the review cycle) into
+# deterministic coverage. review-head-unchanged feeds "pre_sha post_sha"
+# pairs on stdin through the real review_head_unchanged() function extracted
+# from run_review_cycle; no Claude/Codex/gh involved.
+: > "$TMP/review-head-unchanged.record"
+printf 'abc123 abc123\n' \
+  | run_script review-head-unchanged "$TMP/review-head-unchanged.record" "$TMP/home" > "$TMP/review-head-unchanged.out"
+assert_contains "$TMP/review-head-unchanged.out" 'pre=abc123 post=abc123 unchanged=1' 'HEAD unchanged: identical pre/post SHA is detected as no commits made (TC-2.5)'
+
+: > "$TMP/review-head-changed.record"
+printf 'abc123 def456\n' \
+  | run_script review-head-unchanged "$TMP/review-head-changed.record" "$TMP/home" > "$TMP/review-head-changed.out"
+assert_contains "$TMP/review-head-changed.out" 'pre=abc123 post=def456 unchanged=0' 'HEAD unchanged: differing pre/post SHA is not flagged (commits were made)'
+
+: > "$TMP/review-head-empty-pre.record"
+printf ' \n' \
+  | run_script review-head-unchanged "$TMP/review-head-empty-pre.record" "$TMP/home" > "$TMP/review-head-empty-pre.out"
+assert_contains "$TMP/review-head-empty-pre.out" 'pre= post= unchanged=0' 'HEAD unchanged: an empty pre-SHA (e.g. detached HEAD lookup failure) never counts as unchanged'
+
+# Full single-iteration outer-loop run: converts QA-TEST-PLAN.md Suite 1
+# TC-1.1 (one MAX_ITER=1 pass, including the real per-iteration git worktree
+# and the implementer's branch rename) into deterministic coverage. Unlike
+# the pure-function extractions above, this drives the actual outer loop
+# end to end against a real repo fixture with no BABYSIT_TEST_MODE (an empty
+# value skips the test-hook dispatch the same as unset — see
+# run_single_iteration): claude is stubbed to rename the worktree's
+# placeholder branch (as the real implementer prompt instructs) and return a
+# sentinel-free result, so the loop completes iter 1 cleanly and stops on
+# MAX_ITER without a HANDOFF_REVIEW (the stalled-PR retry sweep still calls
+# the stubbed `gh pr list` at the top of the iteration; see make_stubs).
+make_preflight_repo "$TMP/single-iter" >/dev/null 2>&1
+mkdir -p "$TMP/single-iter/home"
+: > "$TMP/single-iter.record"
+set +e
+MAX_ITER=1 SLEEP_SEC=0 \
+  STUB_FINAL_RESULT='Investigated the project state; nothing actionable surfaced this iteration.' \
+  STUB_RENAME_BRANCH='chore/tc-1-1-test' \
+  run_single_iteration "$TMP/single-iter/work" "$TMP/single-iter/home" \
+    "$TMP/single-iter.record" "$TMP/single-iter.out" "$TMP/single-iter.err"
+single_iter_rc=$?
+set -e
+[ "$single_iter_rc" -eq 0 ] && pass 'single iteration: exits 0 (TC-1.1)' || fail 'single iteration: exits 0 (TC-1.1)'
+
+single_iter_log=$(find "$TMP/single-iter/home/sisyphus-logs" -maxdepth 1 -name '*.log' | head -1)
+if [ -n "$single_iter_log" ]; then
+  pass 'single iteration: log file created'
+else
+  fail 'single iteration: log file created'
+  single_iter_log="$TMP/single-iter.err"
+fi
+
+if [ "$(grep -c '^=== iter ' "$single_iter_log")" -eq 1 ]; then
+  pass 'single iteration: exactly one iteration header logged (TC-1.1)'
+else
+  echo "  actual iter headers:" >&2
+  grep '^=== iter ' "$single_iter_log" | sed 's/^/    /' >&2
+  fail 'single iteration: exactly one iteration header logged (TC-1.1)'
+fi
+if grep -Eq '^=== iter 1 @ [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z ===$' "$single_iter_log"; then
+  pass 'single iteration: header matches "=== iter 1 @ <timestamp> ===" (TC-1.1)'
+else
+  fail 'single iteration: header matches "=== iter 1 @ <timestamp> ===" (TC-1.1)'
+fi
+assert_not_contains "$single_iter_log" 'STOP signal received on iter 1.' 'single iteration: no STOP sentinel output (TC-1.1)'
+if grep -Eq '^  \[outer\] worktree: /tmp/babysit-work-iter1-[0-9]+ \(branch: wip/work/iter-1\)$' "$single_iter_log"; then
+  pass 'single iteration: per-iteration worktree created on the placeholder branch (TC-1.1)'
+else
+  fail 'single iteration: per-iteration worktree created on the placeholder branch (TC-1.1)'
+fi
+assert_contains "$single_iter_log" '  [outer] iter 1 branch: chore/tc-1-1-test' \
+  "single iteration: implementer's branch rename is reflected before worktree teardown (TC-1.1)"
+assert_contains "$TMP/single-iter.out" 'Done after 1 iterations. See '"$single_iter_log" \
+  'single iteration: loop reports exactly 1 completed iteration'
 
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]

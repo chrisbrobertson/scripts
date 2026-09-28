@@ -1,10 +1,10 @@
 ---
 spec_type: task
-id: ARLO-TASK-SELECTABLE-IMPLEMENTER
+id: ASF-TASK-SELECTABLE-IMPLEMENTER
 status: ready
 owners: [Chris Robertson]
 depends_on: []
-parent_feature: ARLO-FEAT-OUTER-LOOP
+parent_feature: ASF-FEAT-OUTER-LOOP
 fit_check: passed
 complexity:
   total: 2
@@ -21,7 +21,7 @@ Allow operators to select Claude or Codex as the implementation harness and inde
 
 ## Parent feature
 
-ARLO-FEAT-OUTER-LOOP.
+ASF-FEAT-OUTER-LOOP.
 
 # Substance
 

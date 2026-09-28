@@ -1,7 +1,20 @@
 # QA Test Plan — babysit-with-review.sh
 
 **Owner:** qa-lead  
-**Status:** Recommended plan (not yet executed)  
+**Status:** Test Suite 4 automated and passing (176/176, last run 2026-09-28), now
+including automated pre-flight coverage for TC-1.2, lock-file-collision coverage
+for TC-1.3/TC-1.3b, lock-file-removal coverage for TC-1.4, sentinel-detection
+coverage for TC-1.5/TC-1.6, single-iteration outer-loop coverage for TC-1.1, and
+MAX_ITER-exhaustion coverage for TC-1.8 (see
+Suite 1), plus blocking-count coverage for TC-2.1/TC-2.2, merge-mechanics and
+merge-failed-label coverage for TC-2.2 via `test-babysit-review-merge-draft.sh`
+(16/16), stalled-PR retry-sweep coverage for TC-1.9 via
+`test-babysit-review-stalled-retry.sh` (28/28), sentinel/HEAD-unchanged coverage
+for TC-2.4/TC-2.5, missing-reviewer graceful-degradation coverage for TC-2.9, and
+a separate `test-babysit-review-feedback.sh` harness covering the
+`collect_pr_feedback()` filter (TC-2.10/TC-2.11, see Suite 2; 16/16); Test Suites
+1-3 otherwise remain manual smoke tests against live Claude/Codex/gh, not yet
+executed  
 **Priority:** Medium (internal tool, existing implementation to verify)
 
 ## Test Strategy
@@ -24,6 +37,18 @@
 **Reference:** L3-autonomous-outer-loop.md Acceptance Tests (lines 167-176)
 
 ### TC-1.1: Single Iteration Execution
+**Status: automated, not manual (added 2026-09-27).** A full `MAX_ITER=1`
+pass — including the real per-iteration `git worktree add` and the
+implementer's branch rename — is covered deterministically in
+`test-babysit-with-review-cli.sh` via `run_single_iteration()`, which runs
+the actual script with no `BABYSIT_TEST_MODE` (an empty value skips the
+test-hook dispatch the same as unset) against a real repo fixture, with
+`claude` stubbed to rename the worktree's placeholder branch and return a
+sentinel-free result. No Codex/gh involved — the stubbed run never reaches a
+`HANDOFF_REVIEW`. This TC's manual steps below remain as the original
+acceptance reference; the automated case is the one that actually runs
+before every commit.
+
 **Given:** Clean git repo on default branch  
 **When:** `MAX_ITER=1 ./babysit-with-review.sh`  
 **Then:** 
@@ -42,6 +67,16 @@
 ---
 
 ### TC-1.2: Pre-flight Check — Unstaged Changes
+**Status: automated, not manual (added 2026-09-27).** The full pre-flight gate —
+unstaged modifications, staged-uncommitted changes, untracked non-ignored files,
+auto-switch off a non-default branch, ahead/diverged/behind-then-fast-forward
+against origin — now has deterministic coverage in
+`test-babysit-with-review-cli.sh` via `BABYSIT_TEST_MODE=outer-preflight`, which
+runs the real pre-flight block (git state only; no live Claude/Codex/gh) against
+disposable repos with a bare `origin` remote and exits before the outer loop's
+first iteration. This TC's manual steps below remain as the original acceptance
+reference; the automated cases are the ones that actually run before every commit.
+
 **Given:** Unstaged changes in working tree  
 **When:** `./babysit-with-review.sh` starts  
 **Then:** 
@@ -59,19 +94,60 @@
 ---
 
 ### TC-1.3: Lock File Semantics
-**Given:** Lock file exists  
+**Status: automated, not manual (added 2026-09-27).** This TC previously
+described a single scenario ("lock file exists → first iteration executes
+normally") that contradicts both the shipped code and
+`L3-autonomous-outer-loop.md` acceptance tests 3/3b: a *pre-existing* stop
+file is a startup collision (`exit 1`), not something the script tolerates.
+The two real scenarios — collision on a pre-existing lock file, and normal
+startup when none exists — are covered deterministically in
+`test-babysit-with-review-cli.sh` via `BABYSIT_TEST_MODE=outer-preflight`
+against a bare (collision case) or real (no-collision case) directory; no
+Claude/Codex/gh involved. The corrected manual steps below remain as the
+acceptance reference.
+
+**Given:** Lock file exists before start-up  
 **When:** Script runs  
-**Then:** First iteration executes normally
+**Then:** Exit 1 — collision (another instance may be running; the script
+creates the lock file itself and never expects to find one already there)
 
 **Test steps:**
 1. Create test repo
 2. Pre-create lock file: `mkdir -p ~/sisyphus-logs && touch ~/sisyphus-logs/test-babysit.stop`
 3. Run: `MAX_ITER=1 ~/repo/scripts/babysit-with-review.sh`
-4. Verify: Exit code 0, iteration executed
+4. Verify: Exit code 1, stderr contains `already exists`, no iteration executed
+
+---
+
+### TC-1.3b: Lock File Semantics — No Pre-Existing Lock
+**Status: automated, not manual (added 2026-09-27).** Split out of TC-1.3
+in the same commit that corrected it (both describe the shipped
+`BABYSIT_TEST_MODE=outer-preflight` collision check, not two independent
+behaviors). This scenario — no pre-existing stop file, startup proceeds
+normally — is covered deterministically in `test-babysit-with-review-cli.sh`
+as the "TC-1.3 AT3b" case, run against a real (non-bare) preflight repo; no
+Claude/Codex/gh involved. The manual steps below remain as the acceptance
+reference.
+
+**Given:** No lock file exists before start-up  
+**When:** Script runs  
+**Then:** Script creates the lock file itself; first iteration executes normally
+
+**Test steps:**
+1. Create test repo (ensure `~/sisyphus-logs/test-babysit.stop` does not exist)
+2. Run: `MAX_ITER=1 ~/repo/scripts/babysit-with-review.sh`
+3. Verify: Exit code 0, iteration executed, lock file present during the run
 
 ---
 
 ### TC-1.4: Lock File Removal Mid-Run
+**Status: automated, not manual (added 2026-09-27).** The per-iteration
+stop-file check now has deterministic coverage in
+`test-babysit-with-review-cli.sh` via `BABYSIT_TEST_MODE=outer-lockfile-removed`,
+which drives the real `stop_file_removed()` function extracted from the outer
+loop against a real file on disk (present, then removed) — no Claude/Codex/gh
+involved. The manual steps below remain as the original acceptance reference.
+
 **Given:** Lock file removed during run  
 **When:** Next iteration checks lock file  
 **Then:** Loop exits gracefully
@@ -87,6 +163,15 @@
 ---
 
 ### TC-1.5: STOP Sentinel Detection
+**Status: automated, not manual (added 2026-09-27).** The trailing-line
+classification (STOP recognized only as the final line, not mid-output) is
+extracted into `parse_sentinel()` and covered deterministically in
+`test-babysit-with-review-cli.sh` via `BABYSIT_TEST_MODE=outer-sentinel`,
+which feeds one simulated iteration's implementer RESULT through the real
+function (no Claude/Codex/gh involved). The manual steps below remain as the
+original acceptance reference; the automated cases are the ones that
+actually run before every commit.
+
 **Given:** Claude outputs `STOP` sentinel  
 **When:** Iteration completes  
 **Then:** Loop exits with code 0
@@ -102,6 +187,13 @@
 ---
 
 ### TC-1.6: HANDOFF_REVIEW Sentinel Detection
+**Status: automated (parsing only), not manual (added 2026-09-27).** The
+same `parse_sentinel()`/`outer-sentinel` harness covers PR-number extraction,
+whitespace trimming, and the non-numeric "ignore" path. The actual
+`run_review_cycle` invocation this sentinel triggers is not exercised by this
+harness (it needs a real PR and gh/codex) — the manual steps below remain the
+acceptance reference for that end-to-end behavior.
+
 **Given:** Claude outputs `HANDOFF_REVIEW 123`  
 **When:** Iteration completes  
 **Then:** Review cycle runs before next iteration
@@ -130,6 +222,14 @@
 ---
 
 ### TC-1.8: MAX_ITER Exhaustion
+**Status: automated, not manual (added 2026-09-27).** The exhaustion check
+is extracted into `maxiter_exhausted()` and covered deterministically in
+`test-babysit-with-review-cli.sh` via `BABYSIT_TEST_MODE=outer-maxiter`,
+which feeds simulated post-iteration counters through the real function (no
+Claude/Codex/gh involved). This TC's manual steps below remain as the
+original acceptance reference; the automated cases are the ones that
+actually run before every commit.
+
 **Given:** MAX_ITER=5  
 **When:** 5 iterations complete without STOP  
 **Then:** Loop exits with "Hit MAX_ITER"
@@ -142,11 +242,71 @@
 
 ---
 
+### TC-1.9: Stalled-PR Retry Sweep (Four Resumable Labels)
+**Status: automated, not manual (added 2026-09-28).** `test-babysit-review-stalled-retry.sh`
+(28 assertions) drives the outer loop's pre-iteration sweep over
+`RESUMABLE_STALL_LABELS` (`review-mcp-outage`, `review-codex-outdated`,
+`review-codex-no-credits`, `review-merge-failed`, checked in that priority order —
+see L3-autonomous-outer-loop.md's "Stalled-PR pre-iteration retry" acceptance
+criterion) against stubbed `claude`/`codex`/`gh` on PATH, with no live network
+calls. This is the regression coverage for #82/#104/#107.
+
+Covered scenarios:
+- **Reviewer available, one of the first three labels:** the sweep removes the
+  label itself before calling `run_review_cycle` (so a review that then bails
+  to `review-incomplete` — a label the sweep must not retry — doesn't leave a
+  stale resumable label behind for the next sweep to pick up), never merges an
+  unreviewed PR, and logs which PR/label it is retrying.
+- **Label removal fails:** the sweep does not invoke `run_review_cycle` over a
+  now-stale label state and logs the removal failure.
+- **`review-merge-failed`, head unchanged:** the sweep takes the merge-only
+  shortcut — calls `merge_reviewed_pr` directly, without invoking the reviewer
+  CLI or running a full review cycle — attempts the merge before removing the
+  label, and only removes the label once the merge is confirmed.
+- **`review-merge-failed`, merge still fails:** the label is never removed,
+  `merge_reviewed_pr` re-flags the PR for the next retry, and the failure is
+  logged.
+- **`review-merge-failed`, stale head (current head no longer matches the head
+  recorded when the merge failed):** the sweep logs the mismatch, removes the
+  stale label, and falls through to a full `run_review_cycle` retry instead of
+  merging the unreviewed head.
+- **Reviewer unavailable:** the sweep defers — logs that it's deferring, leaves
+  the label in place for a later retry, never invokes `run_review_cycle`, and
+  does not fall through to starting new implementer work.
+- **No stalled PR:** the sweep is a no-op — never removes a label, never calls
+  `gh pr ready`.
+
+**Given:** An open PR carries one of the four resumable labels  
+**When:** The outer loop starts its next iteration  
+**Then:** The sweep resumes or merge-retries that PR before reading the ticket
+queue for new work, per the scenario table above
+
+**Test steps (manual acceptance reference):**
+1. Label an open PR `review-codex-outdated` (or any of the other three)
+2. Run: `MAX_ITER=1 ~/repo/scripts/babysit-with-review.sh`
+3. Verify: Log shows the sweep found and retried/merge-retried the labelled PR
+   before considering any new ticket
+4. Verify: the label removal timing matches the scenario table above (removed
+   before `run_review_cycle` for the first three labels; removed only after
+   the merge is confirmed for `review-merge-failed`)
+
+---
+
 ## Test Suite 2: L3-review-cycle
 
 **Reference:** L3-review-cycle.md Acceptance Tests (lines 184-196)
 
 ### TC-2.1: Review Cycle with BLOCKING Issues
+**Status: automated (blocking-count only), not manual (added 2026-09-27).**
+`review-blocking-count` in `test-babysit-with-review-cli.sh` drives the real
+`count_blocking()` (the function whose output branches `run_review_cycle`
+between "addressing findings" and auto-merge) over review markdown on stdin —
+covering a single real finding and multiple findings with an indented
+continuation line, counted once each. The `[claude] addressing findings...`
+log line and the cycle-repeats behavior are not exercised by this harness (no
+Claude/Codex/gh involved); the manual steps below remain the acceptance
+reference for those.
+
 **Given:** PR #123 with BLOCKING issues  
 **When:** Review cycle runs  
 **Then:** 
@@ -165,9 +325,42 @@
 ---
 
 ### TC-2.2: Zero BLOCKING Findings — Auto-Merge
+**Status: automated (blocking-count + merge mechanics), not manual (added
+2026-09-27, extended same day).**
+The `review-blocking-count` harness covers a sole `- (none)` bullet under
+`## BLOCKING` counting as zero, a review with no `## BLOCKING` heading at
+all counting as zero, and non-blocking bullets under `## RECOMMENDED` not
+leaking into the count. `test-babysit-review-merge-draft.sh` drives the real
+`merge_reviewed_pr()` (extracted from `run_review_cycle`'s zero-blocking
+branch) against a stubbed `gh`/`git` on PATH, covering the actual merge
+mechanics that the blocking-count harness doesn't reach: the
+`codex-review=success` status POST, that `gh pr ready` is called before
+`gh pr merge` (a PR can still be draft at this point — see below), that a
+`gh pr ready` failure doesn't abort the merge attempt, and that a status-POST
+failure skips both `gh pr ready` and `gh pr merge` entirely. The single merge
+attempt is pinned to the reviewed head via `--match-head-commit`; `--auto` is
+deliberately never used, since GitHub only validates `--match-head-commit` at
+merge time, not when queuing an auto-merge (see the script's own comment
+above the call). It also covers the case where that merge attempt fails:
+`flag_review_cycle_merge_failed` labels the PR `review-merge-failed`, posts an
+explanatory comment, and does **not** re-draft it (the review already
+passed — see TC-1.9 for how the outer loop's stalled-PR sweep picks this
+label back up), and a `gh pr edit --add-label` failure itself halts the
+wrapper rather than continuing silently unlabelled. The full
+`gh pr view N --json state` end-to-end assertion remains the manual acceptance
+reference below.
+
+**Regression note (2026-09-27):** a real PR in this repo's own backlog (#60)
+reached a clean zero-BLOCKING review and had `codex-review=success` set, but
+stayed open and in draft forever — `gh pr merge` fails silently on a draft
+PR, and nothing in the success path un-drafted it first (only the
+`review-mcp-outage` retry path called `gh pr ready`). Fixed by adding a
+best-effort `gh pr ready` call before the merge attempt in
+`merge_reviewed_pr`; see `test-babysit-review-merge-draft.sh` and issue #82.
+
 **Given:** Codex returns 0 BLOCKING findings  
 **When:** Cycle completes  
-**Then:** PR is merged via `gh pr merge --squash [--auto]`
+**Then:** PR is merged via `gh pr merge --squash --delete-branch --match-head-commit <reviewed-head-sha>`
 
 **Test steps:**
 1. Create test PR with clean code (no issues)
@@ -194,6 +387,18 @@
 ---
 
 ### TC-2.4: STUCK_REVIEW Sentinel
+**Status: automated (sentinel classification only), not manual (added
+2026-09-27).** `review-sentinel` in `test-babysit-with-review-cli.sh` drives
+the real `parse_review_sentinel()` (extracted from `run_review_cycle`'s
+implementer-response handling) over a simulated implementer RESULT on
+stdin — covering `STUCK_REVIEW <reason>` on the last line, bare
+`DONE_REVIEW`, no sentinel at all (classified `NONE`, treated as
+`DONE_REVIEW` by the caller), and a `STUCK_REVIEW`-looking line that isn't
+the final line (not honored). The `review-incomplete` label application and
+the function's return code are not exercised by this harness (no
+Claude/Codex/gh involved); the manual steps below remain the acceptance
+reference for those.
+
 **Given:** Claude outputs `STUCK_REVIEW cannot fix X`  
 **When:** Cycle processes response  
 **Then:** 
@@ -209,6 +414,16 @@
 ---
 
 ### TC-2.5: HEAD Unchanged After DONE_REVIEW (Defensive Check)
+**Status: automated (predicate only), not manual (added 2026-09-27).**
+`review-head-unchanged` in `test-babysit-with-review-cli.sh` drives the real
+`review_head_unchanged()` (extracted from `run_review_cycle`'s post-pass
+check) over `pre_sha post_sha` pairs on stdin — covering identical SHAs
+(flagged), differing SHAs (not flagged), and an empty pre-SHA (never
+flagged, since a failed `git rev-parse` shouldn't be conflated with "no
+commits made"). The `review-incomplete` label application is not exercised
+by this harness (no Claude/Codex/gh involved); the manual steps below
+remain the acceptance reference for that.
+
 **Given:** Claude outputs `DONE_REVIEW` but HEAD SHA unchanged  
 **When:** Cycle checks HEAD  
 **Then:** PR labeled `review-incomplete`
@@ -218,8 +433,6 @@
 2. Mock Claude to output DONE_REVIEW without making commits (requires test harness)
 3. Verify: Log shows "HEAD unchanged (no commits made) — bailing review cycle"
 4. Verify: PR labeled `review-incomplete`
-
-**Note:** Difficult to test without mocking. May skip in favor of code review verification.
 
 ---
 
@@ -271,6 +484,16 @@
 ---
 
 ### TC-2.9: Codex CLI Not Installed (Graceful Degradation)
+**Status: automated, not manual (added 2026-09-27).**
+`BABYSIT_TEST_MODE=review-cycle-missing-reviewer` drives the real
+`run_review_cycle()` with the selected reviewer binary removed from PATH,
+exercising the graceful-degradation return in full (not just the
+`reviewer_binary_available()` predicate that Suite 4 already covered) — no
+gh/git call happens before that check, so no stub is needed. Asserts both the
+exact skip log line and that the function returns 0 (PR left open for
+external review). The manual steps remain the acceptance reference for an
+actually-uninstalled system `codex` binary.
+
 **Given:** Codex CLI not installed  
 **When:** Cycle starts  
 **Then:** Logged message, function returns 0
@@ -285,6 +508,15 @@
 ---
 
 ### TC-2.10: Existing CodeRabbit Comments Included
+**Status: automated, not manual (added 2026-09-27).** `test-babysit-review-feedback.sh`
+drives the real `collect_pr_feedback()` (via `BABYSIT_TEST_MODE=review-feedback`)
+against a `gh` stub that forwards the function's actual `--json`/`-q`/`--jq`
+arguments to the real `jq` binary against canned review/comment/inline-comment
+fixtures — so the embedded jq filters run unmodified, not a bash
+re-implementation of them. This directly verifies the unit-test alternative this
+TC's note below already proposed. The manual steps remain the acceptance
+reference for the live-PR path (the actual prompt Claude receives).
+
 **Given:** PR has existing CodeRabbit comments  
 **When:** collect_pr_feedback runs  
 **Then:** Comments included in Claude prompt
@@ -300,6 +532,28 @@
 ---
 
 ### TC-2.11: Self-Posted Codex Comments Excluded
+**Status: automated, not manual (added 2026-09-27; inline-comment gap closed
+2026-09-27).** Same `test-babysit-review-feedback.sh` harness as TC-2.10: the
+`--json reviews` fixture covers all three self-posted prefixes (`**Codex
+review`, `**Claude review`, `**babysit-with-review:`), and the assertions
+confirm `collect_pr_feedback()` excludes all three from that call. The
+`--json comments` fixture additionally confirms exclusion of a self-posted
+`**Codex review` in top-level PR comments. Inline review comments (`gh api
+.../comments`) previously had no self-posted fixture and, on inspection, the
+function didn't actually filter that source — reviews and top-level comments
+applied the three-prefix filter but inline comments were appended
+unconditionally. Fixed by applying the same filter to the inline `--jq`
+query (and its `babysit-builder.sh` and `lib/bazaar-review.sh` copies, per
+their versioning convention of staying in lockstep on shared logic); a
+self-posted inline fixture in `test-babysit-review-feedback.sh` and a new
+`collect_pr_feedback` case in `test-bazaar-review-lib.sh` now cover the
+exclusion for both. In practice no code path in these scripts posts inline
+comments (only `gh pr comment`, which is top-level), so this was latent
+rather than an active feedback loop — but it matches this function's own
+"filters out comments posted by the babysitter itself" contract, which named
+no exception for inline. The manual steps remain the acceptance reference
+for the live-PR path.
+
 **Given:** PR has self-posted Codex review comment  
 **When:** collect_pr_feedback runs  
 **Then:** Comment excluded
@@ -433,6 +687,63 @@
 
 ---
 
+## Test Suite 4: L4-selectable-implementer / L4-selectable-reviewer
+
+**Reference:** L4-selectable-implementer.md, L4-selectable-reviewer.md
+
+**Status: automated, not manual.** This suite postdates the rest of this plan — the
+selectable-implementer/reviewer feature and its test harness
+(`test-babysit-with-review-cli.sh`, using `BABYSIT_TEST_MODE` recording stubs for
+`claude`/`codex`/`gh`/`sleep`) landed 2026-07-15, after this plan's Test Suites 1-3
+were drafted (2026-06-28). It is deterministic and requires no live Claude/Codex/gh
+calls, so — unlike Suites 1-3 — it runs in CI-suitable time and is expected to pass
+before every commit that touches harness selection or review-structure validation.
+
+**Run:** `./test-babysit-with-review-cli.sh` — last run 2026-09-28, 176 assertions,
+0 failed. 18 of those are the Suite 1 pre-flight cases (TC-1.2) added 2026-09-27;
+everything else below is selectable-implementer/reviewer and review-structure
+coverage. (The stalled-PR retry sweep and merge-failed-label mechanics are
+separate harnesses — `test-babysit-review-stalled-retry.sh` (TC-1.9) and
+`test-babysit-review-merge-draft.sh` (TC-2.2) — not part of this file's count.)
+
+**Coverage (paraphrased from the harness's own assertions, not a numbered TC list —
+add TC IDs here if this suite is ever split into individually-run cases):**
+- Default implementer is Claude, default reviewer is Codex, with no model/effort
+  forced unless explicitly requested
+- `--name VALUE` and `--name=VALUE` both parse for every selectable flag
+- Per-role model/effort selection does not leak across roles (an implementer model
+  never reaches the reviewer invocation and vice versa) or across harnesses (Claude
+  settings never reach a Codex invocation and vice versa), including when the same
+  harness is selected for both roles
+- Claude implementer gets `--dangerously-skip-permissions`; Codex implementer gets
+  `--dangerously-bypass-approvals-and-sandbox` — neither bypass is ever granted to a
+  reviewer invocation
+- Codex reviewer runs sandboxed and read-only (`-s read-only`); Claude reviewer runs
+  in plan mode (`--permission-mode plan`)
+- Model policy: a Claude implementer defaults to the stage default at startup but
+  keeps whatever model a review cycle selected on remediation passes; a Codex
+  implementer's configured default applies at both startup and remediation unless a
+  model is explicitly set, in which case the explicit model applies at both stages
+- A selected reviewer binary that is missing is detected gracefully (falls back
+  rather than crashing) and reported when the other selected harness is present
+- `--help` documents `--implementer`, `--implementer-model`, `--implementer-effort`,
+  `--reviewer`, `--reviewer-model`, `--reviewer-effort` without confusing a harness
+  name for a model name
+- Review-structure validation (`valid_review_structure`, shared with
+  `ASF-FEAT-REVIEW-CYCLE`): rejects headings with no bullets, bulletless
+  BLOCKING/RECOMMENDED/INFORMATION sections, duplicate or out-of-order core headings,
+  prose outside/between sections, unknown top-level headings, and a "none" bullet
+  followed by more bullets in the same section — while accepting prescriptive
+  multiline findings, a leading ADJUDICATION section, and multiple real findings with
+  indented detail lines
+
+This suite does not exercise the outer loop, the review-cycle state machine, or MCP
+resilience (Test Suites 1-3 still cover those, manually, until a
+`BABYSIT_TEST_MODE`-style harness exists for them too — see "Test Automation
+Recommendations" below).
+
+---
+
 ## Test Execution Plan
 
 ### Phase 1: Smoke Tests (1 hour)
@@ -442,7 +753,7 @@ Run TC-1.1, TC-1.2, TC-2.1, TC-3.1 to verify basic functionality.
 Run TC-1.5, TC-1.8, TC-2.2, TC-2.9, TC-3.1 to verify typical usage.
 
 ### Phase 3: Error Handling (3 hours)
-Run TC-1.7, TC-2.4, TC-2.6, TC-2.8, TC-3.4 to verify error recovery.
+Run TC-1.7, TC-1.9, TC-2.4, TC-2.6, TC-2.8, TC-3.4 to verify error recovery.
 
 ### Phase 4: Edge Cases (2 hours)
 Run TC-1.4, TC-2.5, TC-2.7, TC-3.2, TC-3.3 to verify edge cases.
@@ -456,15 +767,66 @@ Run all test cases as regression suite after code changes.
 
 ## Test Automation Recommendations
 
-### Short-term (Manual Testing)
+**Done, for the selectable-implementer/reviewer surface:** the "mock Claude/Codex
+output via a stub" recommendation below is no longer future work for that surface —
+`test-babysit-with-review-cli.sh` is exactly that harness, gated by
+`BABYSIT_TEST_MODE`, and it is Test Suite 4 above. Run it before any commit that
+touches flag parsing, harness selection, model/effort forwarding, or
+`valid_review_structure`.
+
+**Partially done, for Suite 1's outer-loop mechanics:** `BABYSIT_TEST_MODE` now has
+sibling stub modes (`outer-preflight`, `outer-sentinel`, `outer-maxiter`,
+`outer-lockfile-removed`) that extract the pre-flight gate, sentinel parsing, MAX_ITER
+exhaustion, and mid-run lock-file removal into pure functions and drive them
+deterministically — no Claude/Codex/gh involved. This covers TC-1.2 through TC-1.6 and
+TC-1.8 (see each TC's own status note above). TC-1.1 (a full single-iteration run,
+including the per-iteration git worktree and branch rename) is covered a different way:
+`run_single_iteration()` runs the real script end to end (no `BABYSIT_TEST_MODE`) against
+a repo fixture with `claude` stubbed, rather than extracting a pure function — the thing
+under test is the worktree/rename mechanics themselves, not a predicate. TC-1.9
+(stalled-PR retry sweep) is covered a third way: its own standalone recording-stub
+harness, `test-babysit-review-stalled-retry.sh`, with `claude`/`codex`/`gh` stubs on
+PATH rather than a `BABYSIT_TEST_MODE` mode. TC-1.7 (stuck-loop detection) has not been
+converted this way as of this writing; check each TC's own status note for the current
+state, since this file is not always updated when a new stub mode ships.
+
+**Partially done, for Suite 2's PR-feedback filter:** `BABYSIT_TEST_MODE=review-feedback`
+drives the real `collect_pr_feedback()` against a stubbed `gh` (`test-babysit-review-feedback.sh`),
+covering TC-2.10/TC-2.11.
+
+**Partially done, for Suite 2's review-cycle sentinel handling:**
+`BABYSIT_TEST_MODE` has sibling stub modes `review-sentinel` and
+`review-head-unchanged` that extract `run_review_cycle`'s implementer-sentinel
+classification and its HEAD-unchanged defensive check into pure functions
+(`parse_review_sentinel()`, `review_head_unchanged()`) and drive them
+deterministically — no Claude/Codex/gh involved. This covers TC-2.4 and TC-2.5
+(see each TC's own status note above). A third sibling mode,
+`review-cycle-missing-reviewer`, drives `run_review_cycle`'s own
+graceful-degradation early return (not a pure-function extraction, since that
+return happens before any gh/git call) and covers TC-2.9. The cycle loop
+itself, label application, and TC-2.6/2.8 remain untouched — no stub exists
+yet for those.
+
+**Still open, for the rest of Test Suite 2 and all of Suite 3** (review-cycle state
+machine, MCP resilience): those cases still require live Claude/Codex/gh calls or
+manual network interference (blocking `chatgpt.com` to simulate MCP failures)
+because no `BABYSIT_TEST_MODE`-style stub exists yet for `run_review_cycle`'s cycle
+loop or for `codex_review_with_retry`'s transport-failure paths. Extending
+`BABYSIT_TEST_MODE` (or a sibling stub mode) to cover those two surfaces would let
+the rest of Suites 2-3 collapse into the same fast, deterministic run as Suite 4
+and Suite 1's/Suite 2's automated cases.
+
+### Short-term (Manual Testing, Suites 1-3 only)
 - Use test repo: `~/test-babysit-repo/` for isolated testing
 - Document test results in spreadsheet or markdown table
 - Run smoke tests before each release
 
-### Long-term (Automated Testing)
-- Create test harness to mock Claude/Codex output (stub via environment variable or wrapper script)
-- Use bats (Bash Automated Testing System) for test runner
-- Add CI pipeline (GitHub Actions) to run smoke tests on each push
+### Long-term (Automated Testing, Suites 1-3 only)
+- Extend `BABYSIT_TEST_MODE` (or a comparable stub mode) to cover the outer loop and
+  MCP-resilience retry paths, following the pattern `test-babysit-with-review-cli.sh`
+  already established for the selectable-harness surface
+- Add CI pipeline (GitHub Actions) to run the fast suites (4, and 1-3 once stubbed)
+  on each push
 
 **Example bats test:**
 ```bash

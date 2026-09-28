@@ -1,11 +1,11 @@
 ---
 spec_type: feature
-id: ARLO-FEAT-RETROSPECTIVE-REVIEW
-status: review
+id: ASF-FEAT-RETROSPECTIVE-REVIEW
+status: approved
 owners: [Chris Robertson]
-depends_on: [ARLO-FEAT-REVIEW-CYCLE, ARLO-FEAT-MCP-RESILIENCE]
-parent_l1: ARLO-PROD-BABYSIT-WITH-REVIEW
-parent_l2: ARLO-SYS-AUTONOMOUS-DEV
+depends_on: [ASF-FEAT-REVIEW-CYCLE, ASF-FEAT-MCP-RESILIENCE]
+parent_l1: ASF-PROD-BABYSIT-WITH-REVIEW
+parent_l2: ASF-SYS-AUTONOMOUS-DEV
 fit_check: passed
 complexity:
   total: 3
@@ -68,7 +68,7 @@ Design decisions:
   silently fixed issues.
 - **Worktree isolation.** Each PR is reviewed in a temporary `git worktree`. The main
   checkout is never touched. The trap cleans up the worktree on exit.
-- **Codex prompt is Cycle 1 template + `[RETROSPECTIVE]` preamble.** The preamble includes
+- **Codex prompt is Cycle 1 template + `[RETROSPECTIVE REVIEW]` preamble.** The preamble includes
   the PR number, merge date, and the full `gh pr diff` output so Codex sees the exact
   change set without needing to compute it from the worktree state alone.
 - **Idempotency via HTML comment marker.** Before posting, the script checks existing PR
@@ -79,7 +79,7 @@ Design decisions:
 - **One issue per blocking finding** (not one issue per PR). Title format:
   `[retrospective] <one-line finding> (merged PR #N)`. Deduplication: if an issue with
   this exact title already exists (open or closed), it is skipped.
-- **Structural validation (weaker than forward-path).** `run-retrospective-review.sh` uses three bare `grep -qE` header checks (`^## BLOCKING`, `^## RECOMMENDED`, `^## INFORMATION`) — it does NOT use the `valid_review_structure` function from ARLO-FEAT-MCP-RESILIENCE. As a consequence it accepts some output that the forward-path script rejects (e.g., bare headers with no bullets, `- (none)` mixed with other bullets). This is a known divergence.
+- **Structural validation (weaker than forward-path).** `run-retrospective-review.sh` uses three bare `grep -qE` header checks (`^## BLOCKING`, `^## RECOMMENDED`, `^## INFORMATION`) — it does NOT use the `valid_review_structure` function from ASF-FEAT-MCP-RESILIENCE. As a consequence it accepts some output that the forward-path script rejects (e.g., bare headers with no bullets, `- (none)` mixed with other bullets). This is a known divergence.
 - **Codex compat failure skips the PR.** If Codex returns the `compat_re` pattern, the
   PR is logged to stderr as skipped. The operator must first upgrade Codex before
   retrospective review can run.
@@ -105,10 +105,13 @@ Design decisions:
 
 ### Request shape
 ```bash
-run-retrospective-review.sh [--repo OWNER/REPO] [--dry-run] [--no-issues] PR_NUMBER [PR_NUMBER ...]
+run-retrospective-review.sh [--repo OWNER/REPO] [--dry-run] [--no-issues]
+                             [--label LABEL ...] PR_NUMBER [PR_NUMBER ...]
 # --repo: optional; auto-detected via `gh repo view` when omitted
+# --label: repeatable; adds an extra label to every created issue
 # PR_NUMBER: merged PR number (open PRs are skipped with a note)
-# Unknown flags: exit 2 with usage message
+# Unknown flags: exit 2 with a one-line "Unknown argument: <flag>" error
+#   (no usage text — usage/help is only printed via -h|--help)
 ```
 
 ### Response shape
@@ -116,7 +119,7 @@ run-retrospective-review.sh [--repo OWNER/REPO] [--dry-run] [--no-issues] PR_NUM
 # stdout: per-PR summary
 PR #133: 2 blocking finding(s) → review posted, 2 issue(s) created
 PR #134: 0 blocking finding(s) → review posted (PASSED)
-PR #135: Codex failure (compat) → skipped (see stderr)
+PR #135: Codex failure (compat) → skipped (upgrade Codex CLI before retrying)
 PR #136: already reviewed → skipped (idempotent)
 
 # exit 0 even with skipped PRs; exit 1 only on fatal errors
@@ -168,7 +171,7 @@ Events emitted to stdout:
 
 Events emitted to stderr:
 - `PR #N: Codex failure (compat) → skipped`
-- `PR #N: worktree creation failed → skipped`
+- `PR #N: worktree creation failed at $merge_sha → skipped`
 - `PR #N: gh pr view failed → skipped`
 
 ## Verifiers
@@ -215,7 +218,7 @@ Events emitted to stderr:
   - `find-bailed-merged-prs.sh` (detection — pipes PR list)
   - `backfill-codex-reviews.py` (log-based backfill — different use case: posts reviews
     that WERE captured in logs but never posted to GitHub; retrospective runs NEW reviews)
-  - ARLO-FEAT-MCP-RESILIENCE (conceptually related; this script uses a simpler three-header grep rather than `valid_review_structure`)
+  - ASF-FEAT-MCP-RESILIENCE (conceptually related; this script uses a simpler three-header grep rather than `valid_review_structure`)
 - **Distinct from `backfill-codex-reviews.py`:** That script posts review content already
   captured in sisyphus logs. This script runs a new Codex review for PRs where no valid
   review was ever captured.
@@ -224,8 +227,8 @@ Events emitted to stderr:
 
 ## Acceptance tests
 1. **Given** a merged PR with no `<!-- retrospective-review: pr=N -->` marker, **when**
-   script runs, **then** Codex review is posted as a PR comment with the `[RETROSPECTIVE]`
-   header and the marker.
+   script runs, **then** Codex review is posted as a PR comment with a
+   `[RETROSPECTIVE REVIEW — ...]` header and the marker.
 2. **Given** the script is run twice on the same PR, **then** the second run outputs
    `already reviewed → skipped` and no duplicate comment is posted.
 3. **Given** Codex returns 2 blocking findings, **when** review completes, **then** 2

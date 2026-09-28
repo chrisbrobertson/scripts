@@ -1,9 +1,9 @@
 # scripts
 
-Personal helper scripts for working with Claude Code and the home-lab fleet:
-autonomous Claude loop (`babysit-with-review.sh`), `gh` CLI wrappers (`prs`, `issues`,
-`specs`), and one-off empirical tests (`test-*`). No formal test suite, no build
-step, no CI.
+Personal helper scripts for working with Claude Code and the home-lab fleet: the
+autonomous loop family (`babysit-work-prep.sh` → `babysit-builder.sh` →
+`babysit-with-review.sh`), `gh` CLI wrappers (`prs`, `issues`, `specs`), and one-off
+empirical tests (`test-*`). No formal test suite, no build step, no CI.
 
 ## Conventions
 
@@ -13,6 +13,13 @@ step, no CI.
   operate on whichever repo the caller is in. Don't add cwd-specific assumptions
   to them.
 - **New scripts** need a shebang and the executable bit (`chmod +x`).
+- **Specs follow `spec-guide.md`.** That file is the schema for every
+  `<project>-specs/` corpus here — read it before drafting or editing a spec, and
+  follow its frontmatter, section layout, and ID scheme. Two standing rules from it:
+  never infer a design decision into a spec (surface it and get an explicit answer),
+  and only the owner moves a spec to `status: ready`. When a spec and the shipped
+  code disagree, that's a lint finding to raise — not licence to edit the code to
+  match the spec.
 - **Tests are exploratory.** Document outcomes in commit messages or in specs
   under `~/repos/home-lab-monitor/specs/`; don't add them as assertions here.
 
@@ -21,25 +28,44 @@ step, no CI.
 | File | Purpose |
 | --- | --- |
 | `new-fleet.sh` | Provision a staff-team fleet (staff-swe/sre/pm) for a service; see `docs/STAFF-FLEET.md` |
-| `claude-code-proxy.py` | OpenAI-compatible HTTP proxy routing to `claude -p`; used by new-fleet.sh |
-| `babysit-with-review.sh` | Autonomous implementation loop with independently selectable Claude/Codex implementer and reviewer harnesses, stop-file lock, and convergent PR-review cycle; see `--help` for role-specific model/effort switches. Pass `--repo-base PATH` (or `REPO_BASE` env var) if helper scripts live outside `~/repos/scripts` — auto-detects `~/repos` then `~/repo`. Versioned via semver (`--version`); current: 1.1.0. |
+| `claude-code-proxy.py` | Orphaned. OpenAI-compatible HTTP proxy that used to bridge Hermes to `claude -p`; `new-fleet.sh` dropped it for Hermes's native `openai-codex` provider in 84364ea (2026-05-11) — no longer wired to anything. |
+| `install-poolside-s21-mac.sh` | One-shot installer/validator for running Poolside Laguna S 2.1 locally on a 128 GB Apple Silicon Mac (unrelated to the home-lab fleet — self-contained, no remote hosts). Installs Ollama, the model, Poolside Agent CLI, uv, LiteLLM, Claude Code, and Codex CLI as needed; runs Ollama/LiteLLM as per-user launchd services; creates `pool-poolside`/`claude-poolside`/`codex-poolside` wrapper commands; runs a protocol + end-to-end test suite. `--repoint-opus`/`--repoint-codex`/`--repoint-all` persistently reroute Claude Code's Opus tier or the Codex CLI to the local model; `--restore-harnesses` reverts. Requires `--accept-poolside-eula` (the Poolside installer is interactive otherwise). |
+| `babysit-with-review.sh` | Autonomous implementation loop with independently selectable Claude/Codex implementer and reviewer harnesses, stop-file lock, and convergent PR-review cycle; see `--help` for role-specific model/effort switches. Pass `--repo-base PATH` (or `REPO_BASE` env var) if helper scripts live outside `~/repos/scripts` — auto-detects `~/repos` then `~/repo`. Versioned via semver (`--version`); current: 1.3.1. |
+| `babysit-work-prep.sh` | Ticket-to-spec intake loop. Drafts one TIF spec per GitHub/Jira ticket in an isolated worktree and opens a marked **draft** PR, then drives it through an adversarial spec review cycle (contradiction with existing specs, undeclared duplication, dangling references, schema violations, invented design decisions) — the PR only leaves draft at 0 BLOCKING, and the approval sweep refuses to act on a draft. Then merges approved spec PRs and creates idempotent `sub-ticket` + `build-ready` sub-tickets for `babysit-builder.sh` to pick up (the *source* ticket gets `status:ready-to-build`, meaning "spec approved, sub-ticket exists"). Approval defaults to the authenticated GitHub user; see `--help` for source, model, dry-run, and approver settings. |
+| `babysit-builder.sh` | Spec-to-PR build loop. Pulls any GitHub/Jira ticket labelled `build-ready`, implements its referenced spec in a per-ticket worktree, then runs the same convergent review cycle as `babysit-with-review.sh` — but **never merges**: it halts with the PR labelled for a human. Specs with gaps are kicked back (`SPEC_GAP` → `build-needs-clarification`) rather than built as-is. Own `build-*` label namespace and own stop file, so it runs concurrently with the other two loops. `resume_stalled_prs()` sweeps all three resumable quarantine labels (`build-mcp-outage`, `build-codex-outdated`, `build-codex-no-credits`) before the queue is read, mirroring the outer-loop fix in `babysit-with-review.sh` (#104) — the older `resume_outage_prs()` only covered `build-mcp-outage`, so a `build-codex-outdated`/`build-codex-no-credits` PR was never resumed and its ticket could be rebuilt into a duplicate PR. See `babysit-specs/L3-builder.md` and `--help`. Current: 0.2.1. |
 | `setup-branch-protection.sh` | Enable the `codex-review` required status check on a repo's default branch; run once per repo after deploying the updated wrapper |
 | `backfill-codex-reviews.py` | Post historical Codex reviews to closed PRs |
 | `run-retrospective-review.sh` | One-shot Codex review for PRs that merged without automated review; posts findings as PR comments and opens issues for each BLOCKING finding |
 | `find-bailed-merged-prs.sh` | Scan babysit logs for review-cycle bails, then query GitHub to find which bailed PRs were subsequently merged (unreviewed code audit) |
 | `test-babysit-with-review-cli.sh` | Deterministic CLI regression harness for babysit-with-review.sh using recording stubs (`BABYSIT_TEST_MODE`) |
+| `test-babysit-review-feedback.sh` | Recording-stub coverage for `collect_pr_feedback()`'s CodeRabbit-inclusion / self-posted-exclusion filter (QA-TEST-PLAN.md TC-2.10/TC-2.11); `gh` stub on PATH forwards the script's real `--json`/`-q`/`--jq` args to the real `jq` binary against canned fixtures, so the actual embedded filters run |
+| `test-babysit-review-merge-draft.sh` | Recording-stub coverage for `merge_reviewed_pr()` — the zero-blocking-findings merge path always calls `gh pr ready` (best-effort) before `gh pr merge`, since a PR can reach that path still marked draft (see #82/#60); also covers the case where both merge attempts fail: `flag_review_cycle_merge_failed` labels the PR `review-merge-failed` and posts a comment, without re-drafting it |
+| `test-babysit-review-stalled-retry.sh` | Recording-stub coverage for the outer loop's stalled-PR retry sweep (all four resumable labels, see #82/#104): sweep removes the label itself only once the reviewer CLI is confirmed available, never un-drafts before the re-review completes, defers (leaving the label in place) rather than starting new implementer work when the reviewer is still unavailable, skips the review cycle if the label-removal `gh pr edit` call itself fails, and picks up `review-merge-failed` (the #60 orphan class) exactly like the other three |
+| `test-babysit-builder-stalled-retry.sh` | Recording-stub coverage for `babysit-builder.sh`'s `resume_stalled_prs()` (the build-loop counterpart of the fix above): all three resumable labels — `build-mcp-outage`, `build-codex-outdated`, `build-codex-no-credits` — get swept and resumed, not just `build-mcp-outage` as the pre-fix `resume_outage_prs()` did |
 | `test-llm-routing.py` | Empirical test: model-alias forwarding + OAuth rejection by Anthropic |
 | `test-codex-review.sh` | Codex review helper |
 | `prs` | `gh pr list` with CI rollup and review state |
 | `issues` | `gh issue list` sorted by priority labels |
 | `specs` | List spec files with frontmatter status and components; searches any `specs/` or `*-specs/` directory |
-| `babysit-specs/` | TIF specs for `babysit-with-review.sh` (L1–L4 + QA + security plans); see `babysit-specs/README.md` |
+| `spec-guide.md` | **Schema document for spec-driven work in this repo — read it before creating or editing any spec.** Defines the TIF L1–L4 format (frontmatter, section layout by layer, ID scheme), the raw-sources/wiki/schema architecture, and the ingest/query/lint workflows. |
+| `babysit-specs/` | TIF specs for the babysit script family (L1–L4 + QA + security plans); see `babysit-specs/README.md` |
+| `bazaar-builder-specs/` | TIF specs + implementation plan for **Bazaar Builder**, the two-controller successor to work-prep/builder (prefix `BZR`); read `index.md` first |
+| `docs/BAZAAR-BUILDER.md` | **Operator guide for Bazaar Builder**: quickstart, prerequisites, label state machine, debugging, recovery recipes, config reference. Read this before running the controllers. |
+| `lib/bazaar-review.sh` | Sourced library: convergent implementer/reviewer cycle (`run_review_cycle --mode code\|spec`), extracted from the builder and work-prep for Bazaar. Never labels, toggles draft, posts status, or merges. `babysit-with-review.sh` keeps its own copy. |
+| `test-bazaar-review-lib.sh` | Recording-stub harness for `lib/bazaar-review.sh` (claude/codex/gh/sleep stubs on PATH, throwaway git origin); run before touching the lib |
+| `lib/bazaar-common.sh` | Shared controller loop for the two Bazaar controllers: label queue, pid-held claims (no time lease), three-attempt escalation, comment guard, role hooks. bash 3.2 + python3, no jq. |
+| `bazaar-issues.sh` | Bazaar issue controller: intake (open issue with no `bzr-*` label) → `bazaar-issue-worker.sh`; sweeps for human replies, spec-PR approval (status flip, `codex-review` status, merge, sub-issue reconcile), and rejected spec PRs. `--help`. |
+| `bazaar-build.sh` | Bazaar build controller: `bzr-ready` → `bazaar-build-worker.sh`; merged-PR sweep closes the parent or queues the next round. `--issue N [--force]`. Never merges. |
+| `bazaar-issue-worker.sh` | Bazaar issue worker (spawned by `bazaar-issues.sh`): verify → questions or normalise → draft specs on `bzr/spec-N` → draft-time sub-issues → spec review cycle → sentinel |
+| `bazaar-build-worker.sh` | Bazaar build worker (spawned by `bazaar-build.sh`): precheck → plan → implement each sub-issue on one branch with a review cycle per unit, skip-and-revert on non-convergence → PR ready. Never merges. |
+| `test-bazaar-*.sh` | Harnesses for the Bazaar libs, controllers, and workers plus `test-bazaar-e2e.sh` (both controllers driving the real workers end to end); seven scripts, all offline: fake gh + throwaway git origin + scripted claude/codex stubs. Run them all before committing Bazaar changes |
+| `test-support/fake-gh.py` | Stateful `gh` stand-in over a JSON file used by `test-bazaar-common.sh`, `test-bazaar-build.sh`, `test-bazaar-issues.sh` |
 
 ## Staff-fleet agents
 
 `new-fleet.sh` scaffolds three always-on AI agents (staff-swe, staff-sre, staff-pm) for a
-service, using `claude-code-proxy.py` to bridge Hermes Agent (needs OpenAI endpoint) with
-Claude Code CLI (OAuth, no API key). One fleet per service, each fully isolated.
+service, running on Hermes Agent's native `openai-codex` provider (ChatGPT OAuth, model
+`gpt-5.5`) — no proxy in front of it. One fleet per service, each fully isolated.
 
 Full operator guide: **`docs/STAFF-FLEET.md`** — quick start, architecture, tuning, troubleshooting.
 
@@ -80,11 +106,16 @@ Exemplar: `test-llm-routing.py:18-25`. Notes:
 **PR labels.** The review cycle uses four distinct labels:
 
 - `review-incomplete` — a bail for a human-action reason (STUCK, no progress, max cycles exhausted). The wrapper will NOT retry; manual operator review is required before the PR can merge.
-- `review-mcp-outage` — the codex MCP backend was unreachable. No code-quality review took place. The wrapper retries automatically at the top of each outer iteration. Remove the label manually if you merge the PR without waiting.
-- `review-codex-outdated` — Codex CLI is too old for the configured model. Run `codex update`, remove this label, then restart the babysitter.
-- `review-codex-no-credits` — Codex workspace has no credits. Add credits to the Codex workspace, remove this label, then restart the babysitter.
+- `review-mcp-outage` — the codex MCP backend was unreachable. No code-quality review took place. The wrapper retries automatically at the top of each outer iteration. Remove the label manually only if you merge the PR without waiting — do not remove it as a "recovery" step, since removing it prematurely is what disables the retry (see below).
+- `review-codex-outdated` — Codex CLI is too old for the configured model. The wrapper halts (exits) when this happens, so there's no running process left to "wait" on: run `codex update`, then restart the babysitter — the retry sweep finds the labelled PR at the top of the first outer iteration and resumes it automatically. Do NOT remove this label yourself.
+- `review-codex-no-credits` — Codex workspace has no credits. Same as `review-codex-outdated`: the wrapper has already halted, so add credits then restart the babysitter. Do NOT remove this label yourself.
+- `review-merge-failed` — the review already passed (zero BLOCKING findings, `codex-review=success` already set) but `gh pr merge` itself failed, typically a transient CI or branch-protection race. Unlike the three labels above, this does **not** halt the wrapper and does **not** re-draft the PR — the reviewer backend is fine and the review result is still valid, so the pre-iteration sweep retries it on the very next outer iteration of the same run, no restart needed. Do NOT remove this label yourself; regression coverage for a real orphaned PR in this repo's backlog (#60) that predates this label — see below.
 
-**Retry policy.** When a codex transport failure is detected (telltales: `Transport send error:`, `tool call failed for \`codex_apps/`, or `error sending request for url (https://chatgpt.com/`), the wrapper retries codex up to 3 times with 0 / 60s / 300s delays. If all retries fail, it labels the PR `review-mcp-outage`, marks it draft, and halts the babysitter. The next babysitter run picks up the labelled PR and retries.
+**Retry policy.** When a codex transport failure is detected (telltales: `Transport send error:`, `tool call failed for \`codex_apps/`, or `error sending request for url (https://chatgpt.com/`), the wrapper retries codex up to 3 times with 0 / 60s / 300s delays. If all retries fail, it labels the PR `review-mcp-outage`, marks it draft, and halts the babysitter.
+
+**Stalled-PR retry sweep (all four resumable labels, wrapper ≥1.3.0; three as of 1.2.0).** At the top of every outer-loop iteration, the wrapper checks for an open PR labelled `review-mcp-outage`, `review-codex-outdated`, `review-codex-no-credits`, or `review-merge-failed`, in that priority order, and — if found — removes the label, before considering any new work. For the first three, it re-runs the review cycle immediately (PR stays in draft throughout — only a clean review un-drafts it). `review-merge-failed` is different: the sweep compares the head SHA recorded when the merge failed against the PR's current head, and only when they still match does it take a merge-only retry shortcut (no reviewer CLI invoked, PR stays ready/un-drafted); on any mismatch it falls back to a full review cycle instead of reusing a stale `codex-review=success` status against a since-changed head. The label must still be on the PR for this sweep to find it — **the operator must never remove it by hand**; before 1.2.0, only `review-mcp-outage` had this sweep, so removing a `review-codex-outdated`/`review-codex-no-credits` label (even after fixing the underlying cause and restarting the babysitter) left the PR sitting in draft forever — skipped by the priority-order rules — while the loop started new work each restart instead. That gap is what produced a growing backlog of draft PRs stuck behind an outdated Codex CLI; see issue #82. Manually removing the label reproduces the exact same symptom on any wrapper version, since the sweep has nothing left to find — see issue #104. `review-merge-failed` (added in 1.3.0) closes a related but distinct gap: a PR that passed review cleanly but whose `gh pr merge` call itself failed had *no label at all* before this fix (see PR #60 in this repo's own backlog), so it was invisible to every version of this sweep, label-priority order notwithstanding.
+
+**Known false-positive class on `review-codex-outdated` / `review-codex-no-credits` (see #82, fixed by #83).** In wrapper versions before this fix, `codex_review_with_retry()` scanned the *entire* raw Codex transcript for the compat/credits telltale regexes before checking whether the review itself had actually succeeded. Codex reviews agentically with full repo read access, so it can surface those literal regex strings as incidental exploration noise — they live permanently in `codex_review_with_retry()`'s own source and in `L3-mcp-resilience.md` — and get flagged even when the real review came back structurally valid with zero BLOCKING findings. If you see either label on a PR whose diff has no plausible connection to a real Codex CLI-version or credits problem, pull the actual review transcript and check for a clean, structurally valid verdict before trusting the label; a wrapper with the fix applied checks review success first and can't produce this false positive. Full incident trace and per-PR verification: issue #82; the fix itself: PR #83.
 
 **Pre-flight.** Before the outer loop starts, the wrapper ensures the working tree is clean and on the default branch. It auto-switches to the default branch and fast-forwards if the branch is behind origin (both are safe when the tree is otherwise clean). It refuses to start — with corrective instructions — if there are uncommitted modifications, untracked non-ignored files, or a diverged/ahead-of-origin default branch. Seeing `[preflight] switching from 'fix/...' to 'main'` is **normal** after every review cycle: `run_review_cycle` calls `gh pr checkout` and doesn't switch back, so the auto-switch is the expected recovery path on re-run.
 

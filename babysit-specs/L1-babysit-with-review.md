@@ -1,7 +1,7 @@
 ---
 spec_type: product
-id: ARLO-PROD-BABYSIT-WITH-REVIEW
-status: review
+id: ASF-PROD-BABYSIT-WITH-REVIEW
+status: approved
 owners: [Chris Robertson]
 depends_on: []
 experience_authority: none
@@ -35,7 +35,7 @@ From the existing implementation (babysit-with-review.sh):
 - Two companion scripts extend the loop: `babysit-work-prep.sh` (ticket → spec pipeline with human approval gate) and `babysit-builder.sh` (spec → PR pipeline with human merge gate). Both reuse the same REPO_BASE infrastructure, stop-file protocol, and selectable implementer/reviewer harnesses.
 - Codex review integration is optional (graceful degradation when codex CLI unavailable)
 - Logging infrastructure exists at ~/sisyphus-logs/ with per-project lock files
-- Helper scripts (prs, issues, specs) provide state collection via --json output
+- Helper scripts (prs, issues, specs) provide state collection via their default table output (`collect_state()` calls `prs`, `issues`, and `specs --check-impl` with no `--json` flag); `--json` is available for Claude to invoke itself mid-iteration for ad hoc queries, but is not how the wrapper's own state collection works
 
 ## What we assume
 
@@ -81,6 +81,7 @@ From the existing implementation (babysit-with-review.sh):
 - If review cycle produces false positives (flags valid code): Developer time wasted investigating non-issues; mitigated by prescriptive mode requiring concrete suggested fixes
 - If review cycle misses bugs (false negatives): Code quality degrades; mitigated by human review still required before production deployment
 - If MCP outage persists: PRs stall with review-mcp-outage label; graceful - developer can manually review and merge
+- If a clean-reviewed PR fails to merge (transient CI/branch-protection race): PR stalls with review-merge-failed label instead of sitting silently unlabelled and unreviewable-by-sweep; wrapper retries automatically without operator action, does not halt
 
 # Bounds
 

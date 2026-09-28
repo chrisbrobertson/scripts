@@ -15,9 +15,9 @@ Security review of babysit-with-review.sh autonomous development system across L
 **Risk:** Two processes start simultaneously before lock file created, both run until collision detected.
 
 **Review checklist:**
-- [ ] Analyze lock file creation timing (line 94: `touch "$LOG" "$STOP_FILE"`)
+- [ ] Analyze lock file creation timing (line 243: `touch "$LOG" "$STOP_FILE"`)
 - [ ] Verify PID-based log filename prevents most collisions
-- [ ] Check trap handler cleanup (line 95: removes lock file on EXIT)
+- [ ] Check trap handler cleanup (line 244: removes lock file on EXIT)
 - [ ] Assess blast radius: Both processes halt gracefully when collision detected
 - [ ] Determine if TOCTOU (time-of-check-to-time-of-use) window is acceptable for single-user tool
 
@@ -64,7 +64,7 @@ Security review of babysit-with-review.sh autonomous development system across L
 **Risk:** Attacker-controlled input in Codex output could manipulate telltale regex detection.
 
 **Review checklist:**
-- [ ] Confirm telltale regex patterns (line 484) are fixed strings, not user input
+- [ ] Confirm telltale regex patterns (line 1143) are fixed strings, not user input
 - [ ] Verify Codex output is captured from stdout/stderr, not constructed from variables
 - [ ] Check if regex patterns could match benign error messages (false positive risk)
 - [ ] Assess whether false positives cause wasteful retries or security issues (Answer: wasteful retries, not security)
@@ -95,10 +95,10 @@ local mcp_re='Transport send error:|...'
 **Risk:** User-controlled input (PR numbers, commit messages) passed to shell commands.
 
 **Review checklist:**
-- [ ] Verify PR_NUMBER validation (line 864: `[[ "$pr_num" =~ ^[0-9]+$ ]]` — numeric only)
+- [ ] Verify PR_NUMBER validation (line 1572: `[[ "$pr_num" =~ ^[0-9]+$ ]]` — numeric only)
 - [ ] Check git/gh command construction for proper quoting
 - [ ] Audit Claude/Codex prompt assembly for command injection via `--append-system-prompt`
-- [ ] Confirm temp files use mktemp (line 90-93: secure temp file creation)
+- [ ] Confirm temp files use mktemp (line 239-242: secure temp file creation)
 
 **Recommendation:** Accept as-is. PR numbers are validated as numeric; temp files use mktemp; prompts are passed via stdin or --flag (not shell eval).
 
@@ -151,12 +151,14 @@ local mcp_re='Transport send error:|...'
 | Auto-merge approval | Medium | **Resolved** — `codex-review` status gate + `setup-branch-protection.sh` shipped in v1.1.0 |
 | Telltale regex injection | Low | **Resolved** — maintenance comment added to source |
 | Command injection | Low | Accepted (validated input, proper quoting) |
-| Secrets exposure in logs | Low | Accepted for personal use, document log sensitivity |
+| Secrets exposure in logs | Low | **Resolved** — log sensitivity documented in README.md |
 | Dependency trust | Medium | Accepted, document installation sources, monitor Codex CLI |
 
 **Remaining action items:**
 1. ~~**Owner decision:** Auto-merge behavior~~ — resolved; optional follow-up: decide on `required_approving_review_count` for team repos
 2. ~~Add telltale regex maintenance comment~~ — done
-3. Document log sensitivity in README/CLAUDE.md (10-minute doc update) — still open
+3. ~~Document log sensitivity in README/CLAUDE.md~~ — done (`README.md`'s "Logs" section, added in `c73cf53`)
 
-**Estimated remaining effort:** ~10 minutes (log sensitivity doc update)
+**Estimated remaining effort:** None — all tracked action items resolved. The
+only open item in this plan is the optional `required_approving_review_count`
+follow-up noted in item 1, which is an owner decision, not a doc/code task.

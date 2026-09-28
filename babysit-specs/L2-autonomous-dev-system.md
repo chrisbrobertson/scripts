@@ -1,10 +1,10 @@
 ---
 spec_type: system
-id: ARLO-SYS-AUTONOMOUS-DEV
-status: review
+id: ASF-SYS-AUTONOMOUS-DEV
+status: approved
 owners: [Chris Robertson]
-depends_on: [ARLO-PROD-BABYSIT-WITH-REVIEW]
-serves_l1: [ARLO-PROD-BABYSIT-WITH-REVIEW]
+depends_on: [ASF-PROD-BABYSIT-WITH-REVIEW]
+serves_l1: [ASF-PROD-BABYSIT-WITH-REVIEW]
 fit_check: passed
 complexity:
   total: 2
@@ -31,10 +31,11 @@ Engineering leads implementing autonomous development tools — understand compo
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│ babysit-with-review.sh v1.1.0 (orchestrator, 1921 lines)            │
+│ babysit-with-review.sh v1.3.0 (orchestrator, 2437 lines)            │
 │  - Outer loop: git worktree → collect_state → run_implementer        │
 │  - Review cycle: review_with_retry → run_implementer → convergence   │
-│  - Pre-flight: working tree + git worktree prune + reviewer probe    │
+│  - Pre-flight: working tree + git worktree prune (reviewer probe     │
+│    runs per review cycle, not at startup — see run_review_cycle)     │
 │  - Stuck detection: SHA256 hash comparison                           │
 │  - Merge gate: gh api codex-review=success + setup-branch-protection│
 └─────────────────────┬───────────────────────────────────────────────┘
@@ -82,7 +83,7 @@ babysit-builder.sh (implementation + convergent review loop)
 
 From the existing implementation:
 
-- Orchestrator: Single bash script (1,921 lines, `VERSION="1.1.0"`) with no external dependencies beyond standard Unix tools
+- Orchestrator: Single bash script (2,437 lines, `VERSION="1.3.0"`) with no external dependencies beyond standard Unix tools
 - Components run as subprocesses; orchestrator captures stdout/stderr and exit codes
 - Temp files: `TMP_RESULT` (implementer output), `TMP_REVIEW` (reviewer output), `TMP_REVIEW_RESULT` (implementer review response), `TMP_CODEX_FULL` (full Codex output for telltale scanning)
 - Logs written to `$HOME/sisyphus-logs/<project>-<timestamp>-<pid>.log`
@@ -108,9 +109,10 @@ From the existing implementation:
   ```bash
   claude -p "<prompt>" \
     --model <cycle-default or IMPLEMENTER_MODEL> \
+    [--effort LEVEL] \
     --dangerously-skip-permissions \
     --output-format stream-json \
-    [--effort LEVEL]
+    --verbose
   ```
   Cycle defaults: `claude-sonnet-5` (cycles 1–3), `claude-opus-4-8` (cycles 4+), overridable via `IMPLEMENTER_MODEL`.
 - **Response shape:** JSON stream with events ending in `{"type": "result", "result": "<text>"}`
@@ -138,9 +140,9 @@ From the existing implementation:
   codex exec --output-last-message "$TMP_REVIEW" -s read-only \
     [--model MODEL] [-c "model_reasoning_effort=\"LEVEL\""] "<prompt>"
   ```
-- **Response shape:** Markdown passing `valid_review_structure` (see ARLO-FEAT-MCP-RESILIENCE for the full awk contract)
+- **Response shape:** Markdown passing `valid_review_structure` (see ASF-FEAT-MCP-RESILIENCE for the full awk contract)
 - **Retry policy:** 3 attempts with 0 / 60s / 300s delays on MCP transport failure
-- **MCP failure telltales:** `Transport send error:`, `tool call failed for \`codex_apps/`, `error sending request for url (https://chatgpt\.com/`
+- **MCP failure telltales:** `Transport send error:`, `tool call error: tool call failed for \`codex_apps/`, `error sending request for url (https://chatgpt\.com/`
 - **Idempotency:** Idempotent within a review cycle (same PR state → same review)
 
 ### Orchestrator → Claude Code CLI (reviewer role, optional)
@@ -150,7 +152,7 @@ From the existing implementation:
   ```bash
   claude -p "<prompt>" --permission-mode plan \
     [--model MODEL] [--effort LEVEL] \
-    --output-format stream-json
+    --output-format stream-json --verbose
   ```
 - **Response shape:** Same markdown structure as Codex reviewer; `valid_review_structure` applies
 - **No MCP retry:** Claude reviewer failures take the generic `review-incomplete` path
@@ -199,12 +201,12 @@ From the existing implementation:
 
 ### Orchestrator → Helper Scripts
 
-- **Protocol:** Subprocess invocation with --json flag
+- **Protocol:** Subprocess invocation, no `--json` flag (`collect_state()` calls each script with its default table output; `specs` is called with `--check-impl`, not `--json`)
 - **Scripts:**
   - `$SCRIPTS_DIR/prs` (PR list with CI rollup)
   - `$SCRIPTS_DIR/issues` (issue list sorted by priority)
-  - `$SCRIPTS_DIR/specs` (spec file list with status)
-- **Response shape:** JSON array or table format
+  - `$SCRIPTS_DIR/specs --check-impl` (spec file list with status and implementation check)
+- **Response shape:** Table format (`--json` remains available as a flag the implementer Claude may invoke itself for ad hoc queries mid-iteration, but is not part of the orchestrator's own state-collection protocol)
 - **Auth/deps:** Inherit from gh CLI authentication
 - **Idempotency:** Idempotent read-only operations
 
@@ -225,11 +227,27 @@ From the existing implementation:
 
 ### babysit-builder.sh → GitHub CLI
 
-- `gh issue list --label status:ready-to-build,sub-ticket --json` (build queue)
-- `gh issue edit --add-label/--remove-label` (sub-ticket label transitions)
+- `gh issue list --state open --label build-ready --json` (build queue — any ticket
+  carrying the label, not only work-prep sub-tickets)
+- `gh issue edit --remove-label build-ready --add-label <terminal>` (ticket label
+  transitions; the swap is one call so a terminal ticket is never re-queued)
+- `gh issue comment` (kickback and completion notes on the ticket)
+- `gh api -X POST repos/OWNER/REPO/statuses/<sha>` (`codex-review=success` on
+  convergence, so branch protection permits the human's merge)
 - `gh pr create`, `gh pr view`, `gh pr comment` (build PR lifecycle)
 - Same `gh pr edit`, `gh pr ready`, `gh label create` as `babysit-with-review.sh`
 - Note: `gh pr merge` is NOT used (human merge gate)
+
+### babysit-builder.sh → Jira REST API (when `--source jira|both`)
+
+- **Queue:** `$JIRA_BASE_URL/rest/api/3/search?jql=project=$JIRA_PROJECT+AND+labels=build-ready`
+- **Label transitions:** `PUT /rest/api/3/issue/<key>` with an
+  `update.labels` remove/add pair — label writes only, never a workflow/status
+  transition, per the Jira scope `ASF-PROD-BABYSIT-WITH-REVIEW` declares
+- **Comments:** `POST /rest/api/3/issue/<key>/comment` (ADF body)
+- **Auth:** Bearer token from `JIRA_TOKEN` — read AND write, unlike work-prep's
+  read-only use
+- **Failure mode:** Jira API unavailable → skip Jira tickets, continue with GitHub
 
 ## SLOs and latency budgets
 
@@ -250,7 +268,7 @@ Latency budget honors L1 product promise: Tool must complete tasks faster than m
 - **Cell scope:** Single developer workstation, single git repository
 - **Blast radius per failure class:**
   - **Claude API unavailable:** Outer loop halts at current iteration; no data loss (git state preserved)
-  - **Codex MCP transport failure:** Review cycle retries 3× (intra-retry in ARLO-FEAT-MCP-RESILIENCE); if all fail, labels PR `review-mcp-outage` and halts babysitter. Next babysitter run detects the label at the top of each outer iteration and retries `run_review_cycle` automatically.
+  - **Codex MCP transport failure:** Review cycle retries 3× (intra-retry in ASF-FEAT-MCP-RESILIENCE); if all fail, labels PR `review-mcp-outage` and halts babysitter. Next babysitter run detects the label at the top of each outer iteration and retries `run_review_cycle` automatically.
   - **gh CLI auth failure:** Outer loop halts; developer must re-authenticate via `gh auth login`
   - **git CLI failure:** Pre-flight catches most issues; in-flight failures halt iteration
   - **Disk full / log write failure:** Log writes fail silently (stdout to /dev/null behavior); orchestration continues
@@ -259,11 +277,11 @@ Latency budget honors L1 product promise: Tool must complete tasks faster than m
   - **Codex unavailable:** Review cycle skips automatically (logged message), outer loop continues
   - **Helper scripts unavailable:** State collection returns "(unavailable)" placeholder, Claude continues with degraded context
 
-## arlo-infra.yaml dependencies
+## asf-infra.yaml dependencies
 
-N/A — this is a developer workstation tool with no arlo-infra.yaml dependencies.
+N/A — this is a developer workstation tool with no asf-infra.yaml dependencies.
 
-External dependencies (not arlo-infra.yaml):
+External dependencies (not asf-infra.yaml):
 
 - `claude` CLI (Claude Code, installed via `curl` or package manager)
 - `codex` CLI (optional, installed via package manager)

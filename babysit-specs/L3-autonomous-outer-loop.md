@@ -1,11 +1,11 @@
 ---
 spec_type: feature
-id: ARLO-FEAT-OUTER-LOOP
-status: review
+id: ASF-FEAT-OUTER-LOOP
+status: approved
 owners: [Chris Robertson]
-depends_on: [ARLO-SYS-AUTONOMOUS-DEV]
-parent_l1: ARLO-PROD-BABYSIT-WITH-REVIEW
-parent_l2: ARLO-SYS-AUTONOMOUS-DEV
+depends_on: [ASF-SYS-AUTONOMOUS-DEV]
+parent_l1: ASF-PROD-BABYSIT-WITH-REVIEW
+parent_l2: ASF-SYS-AUTONOMOUS-DEV
 fit_check: passed
 complexity:
   total: 2
@@ -29,13 +29,18 @@ Implementing engineer: understand the iteration lifecycle, sentinel protocol, an
 ```bash
 # Entry point (with selectable implementer/reviewer harnesses)
 MAX_ITER=50 SLEEP_SEC=10 STUCK_N=3 babysit-with-review.sh \
+  [-h|--help] [--version] \
   [--implementer claude|codex] [--implementer-model MODEL] [--implementer-effort LEVEL] \
   [--reviewer claude|codex] [--reviewer-model MODEL] [--reviewer-effort LEVEL] \
-  [--repo-base PATH] [--version] PROJECT [GOAL_DESCRIPTION]
+  [--repo-base PATH]
 
-# Also accepts REPO_BASE env var; autodetects ~/repos then ~/repo if neither set.
+# No positional arguments. Run from inside the project root — PROJECT is
+# derived from `basename "$PWD"`, not passed on the command line, and there is
+# no freeform goal-description argument. Also accepts REPO_BASE env var;
+# autodetects ~/repos then ~/repo if neither set.
 # All switches accept both --name value and --name=value forms.
-# Invalid harness value or missing option value: exit 2 before any side effects.
+# Invalid harness value, missing option value, or any positional/unknown
+# argument: exit 2 before any side effects.
 
 # Sentinels (output by implementer in final message — trimmed last line)
 HANDOFF_REVIEW 123        # triggers review cycle for PR #123
@@ -63,7 +68,7 @@ Developer invoking babysit-with-review.sh from project root directory.
 
 ## What we know
 From implementation (babysit-with-review.sh):
-- Script version: `VERSION="1.1.0"` (accessible via `--version`)
+- Script version: `VERSION="1.3.0"` (accessible via `--version`)
 - Loop runs from iter=1 to MAX_ITER (default 50)
 - Each iteration: MCP-outage retry check → `git worktree add` → collect_state() → `run_implementer` → worktree teardown → detect sentinel → stuck check → sleep
 - `run_implementer` dispatches to `run_claude` (default) or `run_codex_implementer` based on `$IMPLEMENTER`
@@ -72,7 +77,7 @@ From implementation (babysit-with-review.sh):
 - Temp files: `TMP_RESULT` (implementer output), `TMP_REVIEW` (reviewer output), `TMP_REVIEW_RESULT` (implementer review response), `TMP_CODEX_FULL` (full codex output for telltale scanning)
 - Pre-flight checks (`reviewer_binary_available`, `reviewer_preflight`, git state) ensure clean state before first iteration; `git worktree prune` runs at pre-flight
 - **Per-iteration worktree:** `git worktree add -b wip/<project>/iter-N` before each implementer invocation. The implementer's first instruction is `git branch -m <type>/<slug>-<issue>` to rename the branch. Any unpushed commits are pushed to origin as a safety net before the worktree is discarded. Worktree is removed (`worktree remove --force` + `branch -D`) *before* sentinel handling so `gh pr checkout` in `run_review_cycle` does not conflict.
-- **MCP-outage pre-iteration retry:** At the top of each outer-loop iteration, if the current PR is labelled `review-mcp-outage`, `run_review_cycle` is retried immediately (up to the outer loop's normal iteration budget). This is distinct from the intra-retry in ARLO-FEAT-MCP-RESILIENCE.
+- **Stalled-PR pre-iteration retry:** At the top of each outer-loop iteration, the sweep checks for an open PR labelled `review-mcp-outage`, `review-codex-outdated`, `review-codex-no-credits`, or `review-merge-failed` (in that priority order via `RESUMABLE_STALL_LABELS`/`pick_stalled_retry`) and, if found, removes the label. For the first three (backend-outage) labels it retries `run_review_cycle` immediately (up to the outer loop's normal iteration budget). `review-merge-failed` is handled differently: the review already passed and `codex-review` is already green, so re-running `run_review_cycle` would re-invoke `reviewer_preflight` and risk a transient probe failure discarding the passed review via `fail_review_cycle`. But the sweep only takes the merge-only shortcut — calling `merge_reviewed_pr` directly with the validated head so it skips its own head fetch — when the PR's current head still matches the reviewed head recorded via `review_merge_failed_recorded_head` (which trusts only comments authored by the wrapper's own authenticated gh user, so a forged marker from another commenter can't pass this check); `merge_reviewed_pr` also pins `gh pr merge` to that same SHA with `--match-head-commit` so a head that moves between the check and the merge call can't be merged unreviewed. On any mismatch or unknown head, the sweep falls through to a full `run_review_cycle` retry instead of merging. This is distinct from the intra-retry in ASF-FEAT-MCP-RESILIENCE.
 - **Crash-quarantine sweep:** On implementer non-zero exit, any WIP commits are pushed to origin, the worktree is torn down, then every open non-draft PR assigned to `@me` that lacks a `review-*` label is quarantined via `fail_review_cycle` (labeled `review-incomplete`, marked draft).
 - Helper scripts resolve via `SCRIPTS_DIR="$REPO_BASE/scripts"`. `REPO_BASE` precedence: `--repo-base` flag > `REPO_BASE` env var > autodetect `~/repos` (if exists) then `~/repo`.
 
@@ -131,7 +136,7 @@ REPO_BASE=<path>        # override helper-script base path (also via --repo-base
 Non-idempotent. Each iteration advances git state (commits, PRs). Re-running after halt resumes from current git state, not from start.
 
 ### Versioning policy
-Script version: `1.1.0` (semver, `--version` flag). Breaking changes (env var renames, sentinel format changes) require manual migration by user.
+Script version: `1.3.0` (semver, `--version` flag). Breaking changes (env var renames, sentinel format changes) require manual migration by user.
 
 ## Performance budget
 - **p50 iteration latency:** ~2 minutes (dominated by Claude inference)
@@ -195,8 +200,8 @@ Script version: `1.1.0` (semver, `--version` flag). Breaking changes (env var re
 ## Composes with / replaces
 - **Replaces:** Manual loop of (think about task → write code → commit → review)
 - **Composes with:**
-  - ARLO-FEAT-REVIEW-CYCLE (triggered by HANDOFF_REVIEW sentinel)
-  - ARLO-FEAT-MCP-RESILIENCE (provides Codex retry logic for review cycle)
+  - ASF-FEAT-REVIEW-CYCLE (triggered by HANDOFF_REVIEW sentinel)
+  - ASF-FEAT-MCP-RESILIENCE (provides Codex retry logic for review cycle)
   - Helper scripts (prs, issues, specs for state collection)
 
 # Signals

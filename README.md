@@ -7,7 +7,6 @@ Personal helper scripts for Claude Code workflows and the home-lab fleet.
 | File / Dir | Purpose |
 |---|---|
 | `new-fleet.sh` | Provision a staff-team fleet (3 AI agents) for a service |
-| `claude-code-proxy.py` | OpenAI-compatible proxy routing to `claude -p` |
 | `babysit-with-review.sh` | Autonomous `claude -p` loop with Codex PR-review cycle |
 | `backfill-codex-reviews.py` | Post historical Codex reviews to closed PRs |
 | `prs` | `gh pr list` with CI rollup and review state |
@@ -18,9 +17,9 @@ Personal helper scripts for Claude Code workflows and the home-lab fleet.
 
 ## Staff-fleet agents
 
-`new-fleet.sh` + `claude-code-proxy.py` together let you run three always-on
-AI agents (SWE, SRE, PM) per service. They post morning digests over Telegram
-and answer on-demand questions via CLI or DM.
+`new-fleet.sh` lets you run three always-on AI agents (SWE, SRE, PM) per
+service on Hermes Agent's native `openai-codex` provider. They post morning
+digests over Telegram and answer on-demand questions via CLI or DM.
 
 See **[docs/STAFF-FLEET.md](docs/STAFF-FLEET.md)** for the full guide:
 quick start, architecture deep-dive, tuning, troubleshooting, and file layout.

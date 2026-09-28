@@ -1,0 +1,168 @@
+---
+spec_type: feature
+id: BZR-FEAT-ISSUE-WORKER
+status: review
+owners: [Chris Robertson]
+depends_on: [BZR-SYS-BAZAAR, BZR-FEAT-REVIEW-LIB]
+parent_l1: BZR-PROD-BAZAAR-BUILDER
+parent_l2: BZR-SYS-BAZAAR
+fit_check: passed
+complexity:
+  total: 3
+  band: moderate
+  drivers: [novelty, scope, external_integration]
+  scored_on: 2026-09-19
+---
+
+# Frame
+
+## TL;DR
+Given one claimed issue, the issue worker verifies that the issue is actionable, asks the human when it is not, rewrites the body into the standard template, classifies it as bug or feature, drafts the specs it needs into a spec branch, runs the corpus-wide spec review cycle until 0 BLOCKING, and parks the issue in `bzr-spec-review` with a ready (non-draft) spec PR. It never approves anything and never marks a spec `ready`.
+
+## Analog
+Like a product analyst refining a ticket into a PRD and a task list, then handing it to the lead for sign-off.
+
+## Reader & next action
+Implementing agent: build the worker prompt set and its bash wrapper in `bazaar-issue-worker.sh`. Chris Robertson: confirm the template.
+
+## API surface fragment
+*Implemented 2026-09-20: `bazaar-issue-worker.sh` v0.1.0; `test-bazaar-issue-worker.sh` 46 cases green.*
+```bash
+# Spawned by bazaar-issues.sh; not a user-facing command.
+bazaar-issue-worker.sh <issue>    # env from controller: BZR_ISSUE BZR_REPO BZR_REPO_DIR BZR_HOME BZR_HOST BZR_LOG
+                                  # DEFAULT_BRANCH BZR_SENTINEL SCRIPTS_DIR BZR_APPROVERS IMPLEMENTER* REVIEWER*
+                                  # MAX_SPEC_REVIEW_CYCLES
+                                  # branch: bzr/spec-<issue>   worktree: $BZR_HOME/<owner>-<name>/wt/spec-<issue>
+
+# Sentinel (last line of $BZR_SENTINEL, bare):
+SPEC_REVIEW <pr>                  # spec PR non-draft, review converged; controller moves bzr-drafting → bzr-spec-review
+NEEDS_INFO <n>                    # n questions posted; issue → bzr-needs-info
+NOT_ACTIONABLE <reason>           # question, duplicate, no spec corpus, won't-fix candidate; issue → bzr-blocked + comment
+BLOCKED <reason>                  # spec-only violation, endless bounce, or review cap/bail; issue → bzr-blocked
+STUCK <reason>                    # environmental, including reviewer unavailable (transport/outdated/no-credits);
+                                  # controller counts an attempt, claim label removed (issue is intake again)
+
+# Agent comment marker (every comment the agent posts starts with this line):
+<!-- bzr-issue-worker phase=verify|questions|review ts=<iso8601> -->
+```
+
+### Implementation notes (2026-09-20)
+- Two implementer passes, not four: pass A verifies, asks, or normalises and classifies in one go (writes to a scratch dir, edits nothing in the repo); pass B drafts. The wrapper does every GitHub write.
+- The body rewrite is wrapper-owned: agent sections plus the original report verbatim in a details block (the original is recovered from an existing details block on re-entry), so invariant 8 holds by construction.
+- Resume signal before a PR exists is the `bzr/spec-<n>` branch on origin; an open PR on that branch is reused, never duplicated. **Since 2026-09-20 (owner decision):** when the branch AND an open spec PR exist, the worker skips the verify and draft passes and resumes at the review cycle; the body is not rewritten and the classification is read from the PR marker. Scope checks diff against the merge-base with the default branch, not its moving tip.
+- Spec-only contract is enforced by the wrapper (`--validate-cmd` bound to the worktree path): a violation caught at drafting time (before a PR exists) → `BLOCKED`, no PR yet; a violation caught on a resumed branch (before the review cycle starts) or during a remediation cycle → `BLOCKED`, but the already-open (still-draft) spec PR is left in place, not closed — the resumed-branch check only ever runs once `gh pr list` has found that open PR.
+- Draft-time sub-issues go through the shared `bzr_reconcile_sub_issues` before and after the review cycle, so the set always matches the current L4 set.
+- The EXIT trap safety-pushes the branch, removes the worktree, and writes `STUCK` if no sentinel was reached.
+
+## Consumer
+[BZR-FEAT-CONTROLLER](L3-controller.md) (role issue). Output consumed by the controller's approval sweep and then by [BZR-FEAT-BUILD-WORKER](L3-build-worker.md).
+
+# Substance
+
+## What we know
+- Owner decisions (2026-09-19): human approval is the only gate to ready (4); the agent may edit the issue body (5); bug vs feature is label-first, judgement fallback, and the plan ships a template (10); sub-issues are native and the issue loop may create them (7).
+- Spec drafting and the adversarial spec review already exist in `babysit-work-prep.sh` v0.2.0: the drafting prompt, `run_spec_review_cycle` (line 1040), the review checklist (contradiction with existing specs, undeclared duplication, dangling references, schema violations, invented design decisions), and the convergence note that a recurring design-decision finding becomes an `[ASSUMPTION]`, not an argument (lines 973, 1007).
+- `spec-guide.md` is the schema. Its standing rules apply: never infer a design decision into a spec; only the owner moves a spec to `ready`.
+- Comment authorship carries no signal; the marker line is the only way to tell agent comments apart.
+
+## What we assume
+- [ASSUMPTION] Verification is a checklist the agent answers against the issue, its linked issues, and the code: problem statement present, desired outcome present, acceptance criteria present or derivable, scope bounded, no contradiction with the codebase or existing specs. Any "no" that the agent cannot resolve from the repo becomes a numbered question. Flips if: the owner wants the agent to resolve more by exploring (fewer bounces, more guesses) or less (more bounces).
+- [ASSUMPTION] The body rewrite preserves the original text verbatim inside a `<details><summary>Original report</summary>` block below the templated sections. Flips if: the owner prefers the agent to comment the structured version instead of editing.
+- [ASSUMPTION] Classification: `bug` label → L4 against the existing L3 that owns the behaviour (or a new L3 if none exists); `enhancement`/`feature` label → new or amended L3 plus one L4 per PR-sized unit; no label → agent decides (evidence for the decision is produced during verification but is not carried into the PR body — only the resulting `bug`/`feature` label is). Flips if: the owner adds more labels (e.g. `chore`, `docs`) with their own mapping.
+- [ASSUMPTION] Sub-issues are created by the worker at draft time, one per L4 when there are two or more, and reconciled on every spec revision (create missing, close dropped) so the human always sees the current breakdown on the parent issue (owner, 2026-09-19). Each carries the `<!-- bzr-sub-issue parent=<n> spec=<L4 ID> -->` marker and `Refs #<parent>`. Flips if: churn from reconciliation is annoying, in which case sub-issues are created only when the spec PR first reaches 0 BLOCKING.
+- [ASSUMPTION] Specs go under the repo's existing `specs/` or first `*-specs/` directory (same discovery as `WORK_PREP_SPEC_DIR`). A repo with no such directory makes every issue `NOT_ACTIONABLE no spec corpus` (owner, 2026-09-19); bootstrapping a corpus is a human task. Flips if: the owner later wants a `--bootstrap-specs` mode.
+- [ASSUMPTION] `MAX_SPEC_REVIEW_CYCLES` stays 4 and prescriptive mode starts at cycle 3, as in work-prep. Flips if: convergence data says otherwise. **Data point 2026-09-20 (pilot, bazaar#745, Claude reviewer):** substantive findings cleared by cycle 3; cycles 3-4 recurred only on log/index bookkeeping the remediation prompt forbade. Prompt fixed. **Flipped 2026-09-20:** owner raised the spec-mode cap to 6 (matching code mode) after run 3 escalated with legitimate findings still arriving at cycle 4. Fix: `MAX_SPEC_REVIEW_CYCLES` default 6 in the lib, common lib, and worker.
+
+## Contract
+
+### Request shape
+One issue number, already labelled `bzr-drafting` by the controller.
+
+### Response shape
+One sentinel; the issue in exactly one of `bzr-needs-info`, `bzr-spec-review`, `bzr-blocked`, or unlabelled (intake again); for `SPEC_REVIEW`, an open non-draft PR on branch `bzr/spec-<issue>` whose body links the issue with `Refs #<issue>` (not `Closes`, the issue must stay open).
+
+### Phases
+1. **verify** — read issue, comments, linked issues, referenced files. Produce the checklist. If unresolved gaps: post one comment with numbered questions, `NEEDS_INFO`. On a re-entry after a bounce, read the human's replies first and do not repeat answered questions.
+2. **normalise** — rewrite the body into the template (`ISSUE-TEMPLATE.md`), original preserved.
+3. **classify** — bug vs feature per the mapping; the decision alone (not the supporting evidence, which is discarded) is recorded in the spec PR body's heading and marker comment.
+4. **draft** — in the worktree, write or amend specs per `spec-guide.md`; every unknown is `[ASSUMPTION]` with a flip clause or `[OPEN]` with owner; update `index.md` and append `log.md`. Commit, push, open draft PR (body: `Refs #<issue>` and the spec file paths only — no sub-issue list yet). Then create or reconcile sub-issues from the L4 list, each with its own `<!-- bzr-sub-issue -->`-marked body and attached via the sub-issues API. `DRAFT_DONE`.
+5. **review** (wrapper) — `run_review_cycle --mode spec` from the lib, then reconcile sub-issues again (the review may have changed the L4 set). At 0 BLOCKING: mark PR ready, comment on the issue with the PR link, the spec file paths, and the sub-issue list, write `SPEC_REVIEW <pr>` to `$BZR_SENTINEL` (the controller moves `bzr-drafting` → `bzr-spec-review`; see the controller L3's implementation notes, 2026-09-19). On cap or bail: `BLOCKED <reason>` with a one-line failure summary posted on the PR pointing back at the reviewer's own comments (which carry the actual findings, unmarked).
+
+### Invariants
+1. The worker never writes `status: ready` and never merges.
+2. No agent comment *claims* approval. The word "approved" itself is permitted inside the worker's own `<!-- bzr- -->`-marked comments when explaining how a human approves (e.g. "comment approved to merge"); `bzr_comment` exempts marker-carrying bodies from the approval-word block for exactly this reason.
+3. Every agent comment begins with the marker line.
+4. Questions are numbered and each names what decision it unblocks.
+5. A re-entry never re-asks a question the human has answered.
+6. The spec PR touches only files under the spec directory (any depth, any type: specs, `index.md`, `log.md`, `_evidence/`, `_decisions/`, `plans/` …). **Clarified 2026-09-20** after a pilot draft was blocked for updating an evidence file; the check had allowed only top-level `*.md`.
+7. The issue leaves `bzr-drafting` on every exit path, including crash (the controller's dead-pid release covers crash).
+8. Original issue text is never lost.
+9. The set of open sub-issues carrying this parent's marker always equals the L4 set in the current spec PR head.
+
+### Error model
+- Cannot read issue (`gh` fails): `STUCK`, claim released.
+- Issue is closed: `NOT_ACTIONABLE` (the worker checks issue state directly). A sub-issue is never dispatched to the worker in the first place — the controller's intake filter excludes any issue carrying a `parent` link or a `bzr-sub-issue` marker before it is claimed.
+- Duplicate of an open issue (agent finds it): `NOT_ACTIONABLE duplicate of #N`; human decides.
+- Reviewer unavailable (transport failure after the lib's retries, Codex CLI too old, or Codex workspace out of credits): all three fold into `STUCK reviewer unavailable: <reason>`; PR stays draft, the controller counts an attempt and the issue is intake again; re-entry resumes the existing branch and PR. Nothing distinguishes the three causes at the controller.
+- Spec review cap hit: `bzr-blocked`, findings summarised on the PR.
+
+### Idempotency
+Resume is binary, not phase-granular: re-entry fetches origin; if the `bzr/spec-<issue>` branch exists with an open PR, the worker skips straight to the review cycle (body not rewritten, classification read from the PR marker); otherwise it restarts at phase 1 (verify). No rebase is performed.
+
+### Versioning policy
+Prompts versioned with `bazaar-issues.sh`; a prompt change bumps the minor version.
+
+## Performance budget
+Verify + normalise + classify: 3-10 min Sonnet-class. Draft: 10-30 min. Review cycles: 1-7 min reviewer plus 5-15 min revision each, up to 6 (`MAX_SPEC_REVIEW_CYCLES`, raised from 4 on 2026-09-20). Cost per issue: roughly $2-10 depending on cycles.
+
+## Security model
+Inherits `gh` auth. The worker can edit issue bodies and open PRs but cannot merge (no code path) and, with branch protection, cannot push to main.
+
+## Telemetry contract
+Log lines carry the tag `[issue-worker]` (set via `BZR_LOG_TAG`, not `[issue:<n>]`); the issue number is in the message body as `#<n>`, e.g. `[issue-worker] #123 sentinel=SPEC_REVIEW`, `[issue-worker] #123 draft PR #456 opened`, `[issue-worker] #123 resuming existing branch bzr/spec-123`. Phase is recorded as a marker line (`<!-- bzr-issue-worker phase=<p> ts=<t> -->`) prepended to every issue comment the worker posts (or, on a spec-review failure, to the one-line PR comment that reports the failure reason and points back at the reviewer's own — unmarked — comments) — never in the PR body itself and not as a log line. Review-cycle detail comes from the shared review lib's `run_review_cycle --mode spec`: `[review:spec] cycle=<k> blocking=<b> recommended=<r> new=<n> recurrence=<r>` (no `/<max>` suffix — that appears only on the separate `[<REVIEWER> reviewer] template=<t> cycle=<k>/<max>` line logged just before the reviewer runs). Sink: `$BZR_HOME/<owner>-<name>/logs/issues-<n>-<ts>.log` (filename prefix is the controller's `BZR_ROLE=issues`, not `issue`).
+
+## Verifiers
+- Tech lead: Chris Robertson
+- QA: stubbed transcripts for each sentinel path (plan phase 3).
+
+## Failure modes & blast radius
+- **Agent answers its own question:** a guess becomes a spec. Blast: wrong build. Mitigation: review cycle's "invented decision" check; approval gate.
+- **Body rewrite mangles the report:** original block preserved; blast is cosmetic.
+- **Endless bounce loop:** human answers vaguely, agent asks again. Blast: stalled issue. Mitigation: after 2 bounces the worker exits `BLOCKED "needs a synchronous conversation..."`, which the controller (not the worker) turns into the `bzr-blocked` label.
+- **Spec PR opened against the wrong corpus directory:** review fails schema check; blast one issue.
+
+# Bounds
+
+## Out of scope
+Approval, merging, any code change, Jira, multi-repo issues, bootstrapping a spec corpus, time limits.
+
+## Assumptions-that-could-flip
+- **Agent edits the body.** Flipping back to comment-only removes phase 2 and moves the template into a required issue form.
+
+## Composes with / replaces
+Composes with [BZR-FEAT-REVIEW-LIB](L3-review-lib.md) (`--mode spec`) and `spec-guide.md`. Replaces `babysit-work-prep.sh`'s draft-and-review path for repos managed by Bazaar.
+
+# Signals
+
+## Acceptance tests
+1. **Given** an issue with only a title, **when** the worker runs, **then** it posts numbered questions, labels `bzr-needs-info`, and exits `NEEDS_INFO`.
+2. **Given** that issue with human answers, **when** re-entered, **then** it does not repeat the questions, normalises the body, and proceeds.
+3. **Given** a `bug`-labelled issue whose behaviour is owned by an existing L3, **when** it drafts, **then** the PR adds exactly one L4 with `parent_feature` set to that L3.
+4. **Given** a feature issue needing three PR-sized units, **when** it drafts, **then** the PR contains one L3 and three L4s, `index.md`/`log.md` are updated, and three sub-issues with markers hang off the parent.
+4b. **Given** a review cycle drops one L4, **when** the revision is pushed, **then** the matching sub-issue is closed with a comment and the other two remain.
+5. **Given** the spec reviewer returns 2 BLOCKING then 0 after revision, **when** the cycle ends, **then** the PR is non-draft, the issue is `bzr-spec-review`, and the issue has a marker comment linking the PR.
+6. **Given** the reviewer keeps a BLOCKING finding that is a design decision, **when** cycle 3 runs, **then** the revision converts it to `[ASSUMPTION]` and the finding clears.
+7. **Given** an issue that duplicates an open issue, **when** verified, **then** `NOT_ACTIONABLE duplicate of #N` and `bzr-blocked`.
+8. **Given** any agent comment authored to claim approval (as opposed to a marker comment explaining how to approve), **when** grepped case-insensitively for `approved`, **then** no match.
+9. **Given** a body rewrite, **when** the issue is read back, **then** the original text is present verbatim in the details block.
+10. **Given** a crash mid-draft, **when** the worker re-enters after the dead-pid release, **then** it resumes on the existing branch without a second PR.
+11. **Given** a repo with no `specs/` or `*-specs/` directory, **when** any issue is verified, **then** `NOT_ACTIONABLE no spec corpus` and `bzr-blocked`.
+
+## Telemetry events tied to L1 KPIs
+`NEEDS_INFO` count per issue → bounce indicator; `spec-review cycle` count → convergence indicator.
+
+## AEAB cases
+N/A. A future eval would replay stored issues and score question quality and classification accuracy.
+
+## Kill criteria
+Median spec review cycles above 3 for 30 days; two or more bounces on more than half of issues.

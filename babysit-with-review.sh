@@ -19,17 +19,31 @@
 #   MAX_REVIEW_CYCLES  default 6    max reviewer/implementer cycles per PR
 #
 # MCP-outage resilience: when Codex is selected as reviewer and cannot reach
-# its backend, the wrapper
-# retries up to 3 times (0 / 60s / 300s back-off), labels the PR
-# `review-mcp-outage`, and halts. On the next babysitter run the pre-iter
-# scan retries the labelled PR automatically before running the implementer.
-# `review-incomplete` = human action required; `review-mcp-outage` = auto-retry.
-# `review-codex-outdated` = Codex CLI too old for model; upgrade CLI then remove label.
-# `review-codex-no-credits` = Codex workspace out of credits; add credits then remove label.
+# its backend, the wrapper retries up to 3 times (0 / 60s / 300s back-off),
+# labels the PR `review-mcp-outage`, and halts. `review-codex-outdated` and
+# `review-codex-no-credits` label and halt the same way for their own
+# failure classes. All three halt the wrapper — there is no in-process
+# retry once a label is applied. At the top of every outer iteration
+# (i.e. after the operator addresses the cause and restarts the wrapper),
+# the pre-iter scan retries whichever labelled PR it finds first (in that
+# priority order) automatically before running the implementer. The label
+# itself must NOT be removed by hand: the sweep finds the stalled PR by
+# that label and removes it itself; removing it manually leaves the PR
+# stuck in draft with nothing to find it.
+# `review-incomplete` = human action required, no auto-retry.
+# `review-mcp-outage` = transport failure, often transient; restart the wrapper to retry.
+# `review-codex-outdated` = Codex CLI too old for model; upgrade CLI then restart.
+# `review-codex-no-credits` = Codex workspace out of credits; add credits then restart.
+# `review-merge-failed` = review already passed (codex-review=success already set) but
+# `gh pr merge` itself failed; unlike the other three this does NOT halt the wrapper
+# on the merge failure itself (the reviewer backend is fine) — it's picked up by the
+# same pre-iter sweep, lowest priority, on the next outer iteration of the same run,
+# no restart needed. It DOES halt, fail-closed, if the label itself can't be applied,
+# since the sweep can only find this PR again by that label.
 
 set -uo pipefail
 
-VERSION="1.1.0"
+VERSION="1.3.1"
 
 usage() {
   cat <<'EOF'
@@ -73,10 +87,19 @@ PR labels used by the review cycle:
   review-incomplete      Human intervention required; wrapper will NOT retry.
   review-mcp-outage      Codex MCP backend was unreachable; wrapper retries
                          automatically at the top of each outer iteration.
-  review-codex-outdated  Codex CLI is too old for the configured model; run
-                         \`codex update\`, remove this label, then restart.
-  review-codex-no-credits  Codex workspace has no credits; add credits, remove
-                           this label, then restart.
+  review-codex-outdated  Codex CLI is too old for the configured model; the
+                         wrapper halts when this happens, so run
+                         \`codex update\` then restart it — the retry sweep
+                         finds the PR by this label at the top of the first
+                         outer iteration and resumes it automatically. Do
+                         NOT remove the label yourself.
+  review-codex-no-credits  Codex workspace has no credits; same as above —
+                           the wrapper has already halted, so add credits
+                           then restart. Do NOT remove the label yourself.
+  review-merge-failed    Review already passed (codex-review=success already
+                         set) but \`gh pr merge\` itself failed; does NOT
+                         halt the wrapper, retried by the same sweep on the
+                         next outer iteration.
 
 Logs land in ~/sisyphus-logs/<project>-<timestamp>-<pid>.log.
 
@@ -270,7 +293,7 @@ Pick the next unit of work in this priority order — stop at the first level th
 
    SKIP any PR whose STATE is `draft` or `BLOCKED` in the prs table (or `isDraft: true` / labels include `review-incomplete` in the JSON). These PRs were marked by a previous review cycle as needing human intervention — re-attempting them wastes iterations. Move on to item 2.
 
-   Also SKIP PRs labelled `review-mcp-outage` or `review-codex-no-credits` — these are managed by the wrapper itself and require operator action before the review cycle can proceed. Do not touch them.
+   Also SKIP PRs labelled `review-mcp-outage`, `review-codex-no-credits`, or `review-merge-failed` — these are managed by the wrapper itself and require operator action (or just its own automatic retry) before the review cycle can proceed. `review-merge-failed` in particular may already be un-drafted and passing CI — do not merge it yourself; the wrapper's sweep retries it. Do not touch any of these.
 2. Open issues you can complete in one iteration. See open issues in the project state above. Pick the highest-priority one that fits the scope discipline below.
 3. Approved specs with no implementation. See specs in the project state above — look for rows where IMPL is `no` or `?`. Scaffold the next missing piece — project skeleton, an interface stub, the first integration test, etc.
 4. Proto definitions without consumers. Files under ./proto/ that no service implements. Generate stubs or wire a service skeleton that consumes them.
@@ -863,7 +886,11 @@ collect_pr_feedback() {
   # Inline review comments (line-level diff annotations).
   local inline
   inline=$(gh api "repos/${owner_repo}/pulls/${pr_num}/comments" \
-    --jq '.[] | "### Inline comment by \(.user.login) on \(.path):\(.line // .original_line // "?")\n\(.body)\n"' \
+    --jq '.[]
+          | select(.body | startswith("**Codex review") | not)
+          | select(.body | startswith("**Claude review") | not)
+          | select(.body | startswith("**babysit-with-review:") | not)
+          | "### Inline comment by \(.user.login) on \(.path):\(.line // .original_line // "?")\n\(.body)\n"' \
     2>/dev/null || true)
   [ -n "$inline" ] && out="${out}${inline}"$'\n'
 
@@ -986,7 +1013,7 @@ fail_review_cycle_codex_outdated() {
 
   gh label create review-codex-outdated \
     --color e4e669 \
-    --description "Babysit codex review stalled by CLI version incompatibility; upgrade Codex then remove label" \
+    --description "Babysit codex review stalled by CLI version incompatibility; upgrade Codex then restart" \
     --force >>"$LOG" 2>&1 || true
 
   # Fail-closed: if we can't draft the PR, halt — it must not remain mergeable.
@@ -1008,7 +1035,7 @@ Reason: ${reason}
 
 The Codex CLI is too old for the configured model. No code-quality review took place.
 
-To resume: upgrade the Codex CLI (\`codex update\`), then remove the \`review-codex-outdated\` label and restart the babysitter."
+The babysitter has halted — this is not recoverable while it's running. To resume: upgrade the Codex CLI (\`codex update\`), then restart the babysitter. Do NOT remove the \`review-codex-outdated\` label yourself — the stalled-PR retry sweep finds this PR by that label, removes it, and re-runs the review automatically on the next start; removing it manually leaves the PR stuck in draft."
   printf '%s\n' "$body" \
     | gh pr comment "$pr_num" --body-file - >>"$LOG" 2>&1 \
     || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
@@ -1027,7 +1054,7 @@ fail_review_cycle_codex_no_credits() {
 
   gh label create review-codex-no-credits \
     --color d93f0b \
-    --description "Babysit codex review stalled: workspace out of credits; add credits then remove label" \
+    --description "Babysit codex review stalled: workspace out of credits; add credits then restart" \
     --force >>"$LOG" 2>&1 || true
 
   # Fail-closed: if we can't draft the PR, halt — it must not remain mergeable.
@@ -1049,10 +1076,100 @@ Reason: ${reason}
 
 The Codex workspace has no credits remaining. No code-quality review took place.
 
-To resume: add credits to the Codex workspace, then remove the \`review-codex-no-credits\` label and restart the babysitter."
+The babysitter has halted — this is not recoverable while it's running. To resume: add credits to the Codex workspace, then restart the babysitter. Do NOT remove the \`review-codex-no-credits\` label yourself — the stalled-PR retry sweep finds this PR by that label, removes it, and re-runs the review automatically on the next start; removing it manually leaves the PR stuck in draft."
   printf '%s\n' "$body" \
     | gh pr comment "$pr_num" --body-file - >>"$LOG" 2>&1 \
     || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
+}
+
+# Mark a PR as stalled by a `gh pr merge` failure after an already-clean
+# review (see #82/#60: a PR reached this point with BLOCKING=0 and
+# codex-review=success already set, but nothing labelled it, so the stalled-PR
+# retry sweep — which only ever searches by label — could never find it again
+# and it sat open forever).
+#
+# Unlike fail_review_cycle_mcp/_codex_outdated/_codex_no_credits, this does not
+# re-draft the PR: the review already passed, the codex-review status is
+# already green, and the only thing that failed is the git-hosting-side merge
+# op (commonly a transient CI/branch-protection race), so leaving it
+# ready-and-mergeable is correct, not a hole to close. The label itself is
+# still fail-closed, same as the other three: the stalled-PR retry sweep only
+# ever searches by label, so a labelling failure here would leave the PR
+# undiscoverable while the outer loop moves on to new work (the exact #60
+# orphan class this function exists to close) — halt instead.
+# Args: <pr_num> [head_sha] [stage]
+# head_sha, when known, is the commit that codex-review=success was actually
+# posted for; it is recorded on the PR (see review_merge_failed_recorded_head)
+# so a later merge-only retry can confirm the PR head hasn't moved since the
+# review passed before reusing that green status (see PR #107 review).
+#
+# stage says which step actually failed — "status" (the codex-review status
+# POST itself, or resolving the repo/head needed to make it, so no status was
+# set and no merge was attempted) or "merge" (default; status was set green
+# but `gh pr merge` failed) — so the posted comment doesn't claim a status
+# was set, or a merge was attempted, when it wasn't (see PR #107 review,
+# RECOMMENDED). Either way the retry sweep calls merge_reviewed_pr() again in
+# full, which redoes the status POST before merging, so one label/retry path
+# correctly covers both failure points.
+flag_review_cycle_merge_failed() {
+  local pr_num="$1"
+  local head_sha="${2:-}"
+  local stage="${3:-merge}"
+
+  gh label create review-merge-failed \
+    --color b60205 \
+    --description "Babysit review passed but the merge could not be completed; wrapper retries automatically" \
+    --force >>"$LOG" 2>&1 || true
+
+  # Fail-closed: if we can't label the PR, halt — it must not sit unlabelled
+  # while the loop starts new work, since only this label lets the retry
+  # sweep find it again.
+  if ! gh pr edit "$pr_num" --add-label review-merge-failed >>"$LOG" 2>&1; then
+    echo "ERROR: gh pr edit --add-label failed for PR #$pr_num — merge failed and PR is unlabelled; manually add 'review-merge-failed' or merge by hand before restarting" | tee -a "$LOG" >&2
+    exit 1
+  fi
+
+  local body
+  if [ "$stage" = "status" ]; then
+    body="**babysit-with-review: review passed but the \`codex-review\` status could not be set**
+
+The review cycle completed with zero BLOCKING findings, but posting the \`codex-review=success\` status failed (or the repo/head SHA needed to post it could not be resolved) — see the wrapper log for the exact error. No \`gh pr merge\` was attempted. No code changes are needed."
+  else
+    body="**babysit-with-review: review passed but merge failed**
+
+The review cycle completed with zero BLOCKING findings and \`codex-review\` was already set to success, but \`gh pr merge\` itself failed — see the wrapper log for the exact error (often a transient CI or branch-protection race). No code changes are needed."
+  fi
+  body="${body}
+
+Label \`review-merge-failed\` has been added. The stalled-PR retry sweep will find this PR by that label and retry automatically on a later iteration — do NOT remove it yourself (see #82/#104 for why removing a resumable label by hand strands the PR instead of helping). Remove it only if you merge this PR by hand."
+  if [ -n "$head_sha" ]; then
+    body="${body}
+<!-- babysit:merge-failed-head=${head_sha} -->"
+  fi
+  printf '%s\n' "$body" \
+    | gh pr comment "$pr_num" --body-file - >>"$LOG" 2>&1 \
+    || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
+}
+
+# Read back the head SHA recorded by the most recent flag_review_cycle_merge_failed
+# comment, if any. Empty output means "no recorded head" — callers must treat
+# that as unknown/stale, never as "head unchanged" (see PR #107 review).
+#
+# Only trusts comments authored by the wrapper's own authenticated gh user:
+# any PR commenter can otherwise post a forged `babysit:merge-failed-head=`
+# marker after pushing an unreviewed commit, making that commit look
+# already-reviewed to the merge-only retry shortcut (see PR #107 review,
+# BLOCKING).
+review_merge_failed_recorded_head() {
+  local pr_num="$1"
+  local _bot_login
+  _bot_login=$(gh api user -q .login 2>/dev/null) || return 0
+  [ -n "$_bot_login" ] || return 0
+  gh pr view "$pr_num" --json comments \
+    -q ".comments[] | select(.author.login == \"${_bot_login}\") | .body" 2>/dev/null \
+    | grep -o 'babysit:merge-failed-head=[0-9a-f]\{7,40\}' \
+    | tail -n1 \
+    | sed 's/.*=//'
 }
 
 # Validate the strict review parser contract shared by all reviewer harnesses.
@@ -1156,6 +1273,17 @@ codex_review_with_retry() {
     rc=${PIPESTATUS[0]}
     set -e
 
+    # Structural success first: a clean, valid review always wins, even if the
+    # transcript also contains a telltale substring — Codex's own commentary can
+    # quote back reviewed source/spec text verbatim (e.g. reviewing this very
+    # function, whose source defines compat_re/credits_re/mcp_re literally),
+    # which must not be mistaken for a real backend error.
+    if [ "$rc" -eq 0 ] && [ -s "$TMP_REVIEW" ]; then
+      if valid_review_structure "$TMP_REVIEW"; then return 0; fi
+      echo "  [codex] exit 0 but review missing required section headers (## BLOCKING / ## RECOMMENDED / ## INFORMATION); treating as failure" | tee -a "$LOG" >&2
+      # fall through to telltale checks
+    fi
+
     # Compat check first (before mcp_re): version mismatch → return 3, no retry.
     if grep -qE "$compat_re" "$TMP_CODEX_FULL" 2>/dev/null; then
       echo "  [codex] FATAL: backend compatibility failure on attempt $attempt (rc=$rc); Codex CLI is too old for the configured model" | tee -a "$LOG" >&2
@@ -1166,14 +1294,6 @@ codex_review_with_retry() {
     if grep -qE "$credits_re" "$TMP_CODEX_FULL" 2>/dev/null; then
       echo "  [codex] FATAL: Codex workspace out of credits on attempt $attempt (rc=$rc); add credits and restart" | tee -a "$LOG" >&2
       return 4
-    fi
-
-    # Structural validation: require all three section headers before treating as success.
-    # This closes the exit-0-garbage hole (e.g. a deprecation warning in place of a review).
-    if [ "$rc" -eq 0 ] && [ -s "$TMP_REVIEW" ]; then
-      if valid_review_structure "$TMP_REVIEW"; then return 0; fi
-      echo "  [codex] exit 0 but review missing required section headers (## BLOCKING / ## RECOMMENDED / ## INFORMATION); treating as failure" | tee -a "$LOG" >&2
-      # fall through to return 1
     fi
 
     if grep -qE "$mcp_re" "$TMP_CODEX_FULL" 2>/dev/null; then
@@ -1257,6 +1377,114 @@ reviewer_preflight() {
 
 reviewer_binary_available() {
   command -v "$REVIEWER" >/dev/null 2>&1
+}
+
+# Finish a review cycle that reached zero blocking findings: set the
+# codex-review status, ensure the PR isn't left in draft, merge it, and
+# reset the local worktree to the default branch. Extracted from
+# run_review_cycle so BABYSIT_TEST_MODE=review-merge can drive it
+# deterministically.
+# Args: <pr_num> <cycle> <expected_head>
+merge_reviewed_pr() {
+  local pr_num="$1"
+  local cycle="$2"
+  # expected_head is the SHA the caller knows was actually reviewed: the
+  # fresh-review call site (run_review_cycle) passes the local HEAD captured
+  # right after the review pass succeeded, and the review-merge-failed retry
+  # sweep passes the current head only after confirming it matches its
+  # recorded reviewed head. Using it directly instead of re-fetching
+  # headRefOid here closes the TOCTOU window where a commit pushed after the
+  # review verdict (but before this function runs) would otherwise get a
+  # green status posted against it — and merged — despite never having been
+  # reviewed (see PR #107 review, BLOCKING).
+  #
+  # A missing/empty value means the caller couldn't determine what was
+  # actually reviewed (e.g. `git rev-parse HEAD` failed) — fail closed rather
+  # than falling back to the PR's current remote head, which could be a
+  # commit pushed after the review verdict and never examined (see PR #107
+  # review, BLOCKING).
+  local expected_head="${3:-}"
+
+  if [ -z "$expected_head" ]; then
+    echo "  [review] FATAL: no reviewed head SHA available for PR #$pr_num; refusing to post codex-review status or merge against an unverified head" | tee -a "$LOG" >&2
+    fail_review_cycle "$pr_num" "reviewed head SHA unavailable before merge (cycle $cycle)"
+    return 0
+  fi
+
+  echo "  [review] zero blocking findings; PR #$pr_num cleared after $cycle cycle(s)" | tee -a "$LOG" >&2
+
+  # Set codex-review=success commit status so branch protection allows the merge.
+  # This is the ONLY place this status is set green — the implementation agent never sets it.
+  local _owner_repo _head_sha
+  _owner_repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
+  _head_sha="$expected_head"
+  if [ -n "$_owner_repo" ] && [ -n "$_head_sha" ]; then
+    if gh api -X POST "repos/${_owner_repo}/statuses/${_head_sha}" \
+        -f state=success \
+        -f context=codex-review \
+        -f description="$REVIEWER review passed (cycle ${cycle} of ${MAX_REVIEW_CYCLES})" \
+        -f target_url="https://github.com/${_owner_repo}/pull/${pr_num}" \
+        >>"$LOG" 2>&1; then
+      echo "  [review] codex-review status set to success for ${_head_sha:0:8}" | tee -a "$LOG" >&2
+    else
+      echo "  [review] WARNING: failed to set codex-review status for PR #$pr_num; leaving PR open rather than merging without the status check" | tee -a "$LOG" >&2
+      # A caller reached here via the review-merge-failed retry sweep already
+      # removed that label before calling in; without re-flagging here, this
+      # failure would leave the PR invisible to every future sweep (see PR
+      # #107 review, BLOCKING).
+      flag_review_cycle_merge_failed "$pr_num" "$_head_sha" status
+      return 0
+    fi
+  else
+    echo "  [review] WARNING: could not resolve repo or head SHA for PR #$pr_num; leaving PR open rather than merging without the status check" | tee -a "$LOG" >&2
+    flag_review_cycle_merge_failed "$pr_num" "$_head_sha" status
+    return 0
+  fi
+
+  # The PR can reach this point still marked draft — e.g. the implementer
+  # opened it with `gh pr create --draft`, or an earlier bail drafted it via
+  # a label with no undraft retry sweep (only review-mcp-outage has one).
+  # `gh pr merge` fails silently (from this script's point of view — the
+  # failure just lands in $LOG) on a draft PR, so always attempt to un-draft
+  # first; a failure here is not fatal, since the merge attempt below fails
+  # the same safe way (left open for next iteration) if the PR is still draft.
+  gh pr ready "$pr_num" >>"$LOG" 2>&1 \
+    || echo "  [review] WARNING: gh pr ready failed for PR #$pr_num; attempting merge anyway" | tee -a "$LOG" >&2
+
+  # --match-head-commit pins the merge to the exact SHA the codex-review=success
+  # status above was just posted for, so a commit pushed after that point (and
+  # thus never reviewed) can never be merged out from under this call.
+  #
+  # Deliberately NOT using `gh pr merge --auto`: GitHub only validates
+  # --match-head-commit at the moment auto-merge is *enabled*, not at the
+  # moment it actually merges later once CI passes, and does not disable
+  # auto-merge on a subsequent push by anyone with write access — so a commit
+  # pushed after this review verdict (but before CI finished) could get
+  # auto-merged unreviewed, silently defeating the SHA pin above (see PR #107
+  # review, BLOCKING). Attempting an immediate merge only, every time, means
+  # GitHub re-validates the pinned SHA synchronously on every real attempt.
+  # If CI hasn't finished yet the merge just fails here and falls into the
+  # same review-merge-failed retry sweep used for any other merge failure —
+  # already paced with sleep "$SLEEP_SEC" between outer iterations and
+  # already re-checking the recorded head before reusing the green status.
+  if gh pr merge "$pr_num" --squash --delete-branch --match-head-commit "$_head_sha" >>"$LOG" 2>&1; then
+    echo "  [review] PR #$pr_num merged." | tee -a "$LOG" >&2
+  else
+    echo "  [review] WARNING: merge failed for PR #$pr_num; left open for next iteration. See $LOG." | tee -a "$LOG" >&2
+    flag_review_cycle_merge_failed "$pr_num" "$_head_sha"
+    return 0
+  fi
+
+  # Clean up: switch back to default branch so the next outer-loop iteration
+  # starts from the right base, and delete the local PR branch.
+  local _pr_branch
+  _pr_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  git checkout "$DEFAULT_BRANCH" >>"$LOG" 2>&1 || true
+  git pull --ff-only origin "$DEFAULT_BRANCH" >>"$LOG" 2>&1 || true
+  if [ -n "$_pr_branch" ] && [ "$_pr_branch" != "$DEFAULT_BRANCH" ]; then
+    git branch -D "$_pr_branch" >>"$LOG" 2>&1 || true
+  fi
+  return 0
 }
 
 # Run the selected implementer/reviewer cycle for a PR number.
@@ -1367,7 +1595,7 @@ ${_hb}--- end prior review cycles ---
     echo "  [$REVIEWER reviewer] template=${_tmpl_name} has_history=${_has_history} cycle=${cycle}/${MAX_REVIEW_CYCLES}" | tee -a "$LOG" >&2
     unset _has_history _tmpl_name
 
-    echo "  [$REVIEWER reviewer] reviewing PR #$pr_num..." >&2
+    echo "  [$REVIEWER reviewer] reviewing PR #$pr_num..." | tee -a "$LOG" >&2
     local reviewer_rc=0
     review_with_retry "$codex_prompt" || reviewer_rc=$?
 
@@ -1385,6 +1613,16 @@ ${_hb}--- end prior review cycles ---
       fail_review_cycle "$pr_num" "$REVIEWER review failed during cycle $cycle"
       return 0
     fi
+
+    # Pin the SHA the reviewer actually examined: nothing mutates the local
+    # worktree between the review pass above and this point, so local HEAD
+    # is exactly the reviewed commit. Using this (instead of re-fetching the
+    # PR's current head later in merge_reviewed_pr) closes the window where a
+    # commit pushed to the branch after the verdict — but before the status
+    # post and merge — would get waved through on an unreviewed SHA (see PR
+    # #107 review, BLOCKING).
+    local reviewed_head_sha
+    reviewed_head_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
 
     local review
     review=$(cat "$TMP_REVIEW")
@@ -1418,48 +1656,7 @@ ${_hb}--- end prior review cycles ---
     fi
 
     if [ "$n_blocking" -eq 0 ]; then
-      echo "  [review] zero blocking findings; PR #$pr_num cleared after $cycle cycle(s)" | tee -a "$LOG" >&2
-
-      # Set codex-review=success commit status so branch protection allows the merge.
-      # This is the ONLY place this status is set green — the implementation agent never sets it.
-      local _owner_repo _head_sha
-      _owner_repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
-      _head_sha=$(gh pr view "$pr_num" --json headRefOid -q .headRefOid 2>/dev/null || echo "")
-      if [ -n "$_owner_repo" ] && [ -n "$_head_sha" ]; then
-        if gh api -X POST "repos/${_owner_repo}/statuses/${_head_sha}" \
-            -f state=success \
-            -f context=codex-review \
-            -f description="$REVIEWER review passed (cycle ${cycle} of ${MAX_REVIEW_CYCLES})" \
-            -f target_url="https://github.com/${_owner_repo}/pull/${pr_num}" \
-            >>"$LOG" 2>&1; then
-          echo "  [review] codex-review status set to success for ${_head_sha:0:8}" | tee -a "$LOG" >&2
-        else
-          echo "  [review] WARNING: failed to set codex-review status for PR #$pr_num; leaving PR open rather than merging without the status check" | tee -a "$LOG" >&2
-          return 0
-        fi
-      else
-        echo "  [review] WARNING: could not resolve repo or head SHA for PR #$pr_num; leaving PR open rather than merging without the status check" | tee -a "$LOG" >&2
-        return 0
-      fi
-
-      if gh pr merge "$pr_num" --squash --delete-branch --auto >>"$LOG" 2>&1; then
-        echo "  [review] PR #$pr_num queued for auto-merge (merges when CI passes)" | tee -a "$LOG" >&2
-      elif gh pr merge "$pr_num" --squash --delete-branch >>"$LOG" 2>&1; then
-        echo "  [review] PR #$pr_num merged." | tee -a "$LOG" >&2
-      else
-        echo "  [review] WARNING: merge failed for PR #$pr_num; left open for next iteration. See $LOG." | tee -a "$LOG" >&2
-        return 0
-      fi
-
-      # Clean up: switch back to default branch so the next outer-loop iteration
-      # starts from the right base, and delete the local PR branch.
-      local _pr_branch
-      _pr_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-      git checkout "$DEFAULT_BRANCH" >>"$LOG" 2>&1 || true
-      git pull --ff-only origin "$DEFAULT_BRANCH" >>"$LOG" 2>&1 || true
-      if [ -n "$_pr_branch" ] && [ "$_pr_branch" != "$DEFAULT_BRANCH" ]; then
-        git branch -D "$_pr_branch" >>"$LOG" 2>&1 || true
-      fi
+      merge_reviewed_pr "$pr_num" "$cycle" "$reviewed_head_sha"
       return 0
     fi
 
@@ -1509,14 +1706,13 @@ ${_hb}--- end prior review cycles ---
       return 0
     fi
 
-    local result trimmed last_line
+    local result review_sentinel
     result=$(cat "$TMP_REVIEW_RESULT")
-    trimmed=$(printf '%s' "$result" | sed -e 's/[[:space:]]*$//')
-    last_line=$(printf '%s' "$trimmed" | tail -n 1)
+    review_sentinel=$(parse_review_sentinel "$result")
 
-    case "$last_line" in
+    case "$review_sentinel" in
       "STUCK_REVIEW"*)
-        echo "  [$IMPLEMENTER implementer] $last_line — bailing review cycle" | tee -a "$LOG" >&2
+        echo "  [$IMPLEMENTER implementer] $review_sentinel — bailing review cycle" | tee -a "$LOG" >&2
         fail_review_cycle "$pr_num" "$IMPLEMENTER reported STUCK_REVIEW (cycle $cycle)"
         return 0
         ;;
@@ -1528,7 +1724,7 @@ ${_hb}--- end prior review cycles ---
           echo "  [$IMPLEMENTER implementer] resolution justifications posted to PR #$pr_num" | tee -a "$LOG" >&2
         fi
         ;;
-      *)
+      "NONE")
         echo "  [$IMPLEMENTER implementer] no review-cycle sentinel on last line; treating as DONE_REVIEW" | tee -a "$LOG" >&2
         # Capture resolution justifications for next cycle (cycle 4+)
         if [ "$cycle" -ge 4 ]; then
@@ -1539,7 +1735,7 @@ ${_hb}--- end prior review cycles ---
     esac
 
     post_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
-    if [ -n "$pre_sha" ] && [ "$pre_sha" = "$post_sha" ]; then
+    if review_head_unchanged "$pre_sha" "$post_sha"; then
       echo "  [$IMPLEMENTER implementer] HEAD unchanged (no commits made) — bailing review cycle to avoid infinite loop" | tee -a "$LOG" >&2
       fail_review_cycle "$pr_num" "$IMPLEMENTER reported DONE_REVIEW but made no commits (cycle $cycle)"
       return 0
@@ -1550,9 +1746,118 @@ ${_hb}--- end prior review cycles ---
   fail_review_cycle "$pr_num" "exhausted MAX_REVIEW_CYCLES=$MAX_REVIEW_CYCLES without clearing all blocking findings"
 }
 
+# Classify an implementer RESULT's trailing sentinel line. Echoes one of:
+#   STOP
+#   HANDOFF_REVIEW <pr_num>
+#   HANDOFF_REVIEW_INVALID <raw>
+#   NONE
+# Extracted from the outer loop so BABYSIT_TEST_MODE=outer-sentinel can drive
+# it deterministically without gh/codex/git.
+parse_sentinel() {
+  local result="$1"
+  local trimmed last_line
+  trimmed=$(printf '%s' "$result" | sed -e 's/[[:space:]]*$//')
+  last_line=$(printf '%s' "$trimmed" | tail -n 1)
+  case "$last_line" in
+    "HANDOFF_REVIEW "*)
+      local pr_num="${last_line#HANDOFF_REVIEW }"
+      pr_num="${pr_num%% *}"
+      if [[ "$pr_num" =~ ^[0-9]+$ ]]; then
+        echo "HANDOFF_REVIEW $pr_num"
+      else
+        echo "HANDOFF_REVIEW_INVALID $pr_num"
+      fi
+      ;;
+    "STOP")
+      echo "STOP"
+      ;;
+    *)
+      echo "NONE"
+      ;;
+  esac
+}
+
+# MAX_ITER exhaustion predicate: true once the outer loop's iteration counter
+# has reached the configured cap. Extracted from the post-loop check so
+# BABYSIT_TEST_MODE=outer-maxiter can drive it deterministically.
+maxiter_exhausted() {
+  local iter_val="$1" max_val="$2"
+  [ "$iter_val" -ge "$max_val" ]
+}
+
+# Stop-file removal predicate: true once the lock file the outer loop created
+# at startup is no longer present (the documented mid-run graceful-stop
+# signal). Extracted from the per-iteration check so
+# BABYSIT_TEST_MODE=outer-lockfile-removed can drive it deterministically.
+stop_file_removed() {
+  local stop_file="$1"
+  [ ! -f "$stop_file" ]
+}
+
+# Classify an implementer RESULT's trailing sentinel line during a review
+# cycle. Echoes one of:
+#   STUCK_REVIEW <reason>
+#   DONE_REVIEW
+#   NONE   (no recognized sentinel; run_review_cycle treats this like
+#           DONE_REVIEW, but callers can tell the two apart if needed)
+# Extracted from run_review_cycle so BABYSIT_TEST_MODE=review-sentinel can
+# drive it deterministically without gh/codex/git.
+parse_review_sentinel() {
+  local result="$1"
+  local trimmed last_line
+  trimmed=$(printf '%s' "$result" | sed -e 's/[[:space:]]*$//')
+  last_line=$(printf '%s' "$trimmed" | tail -n 1)
+  case "$last_line" in
+    "STUCK_REVIEW"*)
+      echo "$last_line"
+      ;;
+    "DONE_REVIEW")
+      echo "DONE_REVIEW"
+      ;;
+    *)
+      echo "NONE"
+      ;;
+  esac
+}
+
+# HEAD-unchanged predicate: true when the implementer reported DONE_REVIEW (or
+# no sentinel) but made no commits during the review pass — the defensive
+# check that avoids an infinite review-cycle loop. Extracted from
+# run_review_cycle so BABYSIT_TEST_MODE=review-head-unchanged can drive it
+# deterministically without gh/codex/git.
+review_head_unchanged() {
+  local pre_sha="$1" post_sha="$2"
+  [ -n "$pre_sha" ] && [ "$pre_sha" = "$post_sha" ]
+}
+
+# Priority-ordered labels that mark a review cycle stalled in a way an
+# operator can resolve without abandoning the PR (as opposed to
+# review-incomplete, which always requires a human to pick the work back up).
+RESUMABLE_STALL_LABELS=(review-mcp-outage review-codex-outdated review-codex-no-credits review-merge-failed)
+
+# Given one "<label> <pr_num_or_empty>" pair per entry in
+# RESUMABLE_STALL_LABELS (in the same order, as gh would return them), pick
+# the first label with a non-empty PR number. Echoes "<label> <pr_num>" and
+# returns 0, or returns 1 if none are set. Pure — no gh/git — so callers and
+# BABYSIT_TEST_MODE=outer-retry-sweep can drive it deterministically.
+pick_stalled_retry() {
+  local pair label pr
+  for pair in "$@"; do
+    label="${pair%% *}"
+    pr="${pair#* }"
+    if [ -n "$pr" ] && [ "$pr" != "$label" ]; then
+      echo "$label $pr"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Narrow deterministic test hook for argument and provider-command regression
 # coverage. Normal execution is unchanged when BABYSIT_TEST_MODE is unset.
-if [ -n "${BABYSIT_TEST_MODE:-}" ]; then
+# outer-preflight is handled separately below: it needs the real pre-flight
+# checks (git state) to run, so it is excluded from this early-exit dispatch.
+if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight" ]; then
   case "$BABYSIT_TEST_MODE" in
     config)
       printf 'implementer=%s\nimplementer_model=%s\nimplementer_effort=%s\n' \
@@ -1582,9 +1887,112 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ]; then
         printf 'missing_reviewer=%s\n' "$REVIEWER"
       fi
       ;;
+    review-cycle-missing-reviewer)
+      # Drives the real run_review_cycle() through its graceful-degradation
+      # early return when the selected reviewer binary is absent from PATH
+      # (QA-TEST-PLAN.md TC-2.9). That check runs before any gh/git call, so
+      # no gh stub is needed here. PR number comes from TEST_PR_NUM.
+      _rc=0
+      run_review_cycle "${TEST_PR_NUM:-7}" || _rc=$?
+      printf 'run_review_cycle_rc=%s\n' "$_rc"
+      ;;
     model-policy)
       printf 'startup_model=%s\n' "$(implementer_startup_model_policy)"
       printf 'remediation_model=%s\n' "$(resolved_implementer_model 'claude-opus-4-8')"
+      ;;
+    outer-sentinel)
+      parse_sentinel "$(cat)"
+      ;;
+    outer-maxiter)
+      # Each stdin line is the outer loop's iter counter at the point the
+      # loop condition is re-checked. Prints "iter=N exhausted=0|1" per line
+      # using the real maxiter_exhausted() against $MAX_ITER.
+      while IFS= read -r _iter_line; do
+        if maxiter_exhausted "$_iter_line" "$MAX_ITER"; then
+          echo "iter=$_iter_line exhausted=1"
+        else
+          echo "iter=$_iter_line exhausted=0"
+        fi
+      done
+      ;;
+    outer-lockfile-removed)
+      # Each stdin line is a stop-file path to check. Prints "path=<p>
+      # removed=0|1" per line using the real stop_file_removed() against
+      # that path.
+      while IFS= read -r _path_line; do
+        if stop_file_removed "$_path_line"; then
+          echo "path=$_path_line removed=1"
+        else
+          echo "path=$_path_line removed=0"
+        fi
+      done
+      ;;
+    review-feedback)
+      # Drives the real collect_pr_feedback() against a stubbed gh on PATH
+      # (QA-TEST-PLAN.md TC-2.10/TC-2.11). PR number comes from TEST_PR_NUM
+      # so callers don't have to smuggle it past this script's own CLI parser.
+      collect_pr_feedback "${TEST_PR_NUM:-7}"
+      ;;
+    review-blocking-count)
+      # Drives the real count_blocking() over a review markdown document on
+      # stdin (QA-TEST-PLAN.md TC-2.1/TC-2.2: the blocking-count check that
+      # decides between "addressing findings" and "auto-merge"). No
+      # Claude/Codex/gh involved.
+      count_blocking
+      ;;
+    review-sentinel)
+      # Drives the real parse_review_sentinel() over an implementer RESULT on
+      # stdin (QA-TEST-PLAN.md TC-2.4: STUCK_REVIEW bails the review cycle).
+      # No Claude/Codex/gh involved.
+      parse_review_sentinel "$(cat)"
+      ;;
+    review-merge)
+      # Drives the real merge_reviewed_pr() against a stubbed gh/git on PATH.
+      # Covers the case where a fully-reviewed PR (zero blocking findings) is
+      # still marked draft when the merge is attempted — `gh pr ready` must
+      # be called before `gh pr merge`, and a `gh pr ready` failure must not
+      # prevent the merge attempt. TEST_HEAD_SHA stands in for the caller's
+      # verified reviewed head (merge_reviewed_pr now requires one — see PR
+      # #107 review, BLOCKING); defaults to the gh stub's own default head so
+      # existing fixtures need no change.
+      merge_reviewed_pr "${TEST_PR_NUM:-7}" "${TEST_CYCLE:-1}" "${TEST_HEAD_SHA:-deadbeef}"
+      ;;
+    review-head-unchanged)
+      # Each stdin line is "pre_sha post_sha". Prints "pre=<p> post=<q>
+      # unchanged=0|1" per line using the real review_head_unchanged()
+      # (QA-TEST-PLAN.md TC-2.5: the defensive check that bails the review
+      # cycle when DONE_REVIEW arrives with no commits). No Claude/Codex/gh
+      # involved.
+      while IFS=' ' read -r _pre _post; do
+        if review_head_unchanged "$_pre" "$_post"; then
+          echo "pre=$_pre post=$_post unchanged=1"
+        else
+          echo "pre=$_pre post=$_post unchanged=0"
+        fi
+      done
+      ;;
+    outer-retry-sweep)
+      # Each stdin line is four space-separated PR numbers (or empty fields,
+      # written as "-"), one per label in RESUMABLE_STALL_LABELS order,
+      # standing in for what four `gh pr list --label ... -q .[0].number`
+      # calls would return. Prints "label=<l> pr=<n>" for the first stalled
+      # label found, or "none" — using the real pick_stalled_retry(). No
+      # Claude/Codex/gh involved.
+      while IFS=' ' read -r _mcp _outdated _credits _merge_failed; do
+        [ "$_mcp" = "-" ] && _mcp=""
+        [ "$_outdated" = "-" ] && _outdated=""
+        [ "$_credits" = "-" ] && _credits=""
+        [ "$_merge_failed" = "-" ] && _merge_failed=""
+        if _pick=$(pick_stalled_retry \
+            "review-mcp-outage $_mcp" \
+            "review-codex-outdated $_outdated" \
+            "review-codex-no-credits $_credits" \
+            "review-merge-failed $_merge_failed"); then
+          echo "label=${_pick%% *} pr=${_pick#* }"
+        else
+          echo "none"
+        fi
+      done
       ;;
     *)
       echo "Unknown BABYSIT_TEST_MODE: $BABYSIT_TEST_MODE" >&2
@@ -1739,6 +2147,13 @@ unset _pf_default _pf_current _pf_untracked _pf_n _pf_more _pf_ahead _pf_behind
 # Prune stale worktree metadata from previous crashed runs.
 git worktree prune >>"$LOG" 2>&1 || true
 
+# outer-preflight test mode stops here: pre-flight checks have run for real
+# against the caller's git state, but no implementer/reviewer is invoked.
+if [ "${BABYSIT_TEST_MODE:-}" = "outer-preflight" ]; then
+  echo "PREFLIGHT_OK branch=$DEFAULT_BRANCH"
+  exit 0
+fi
+
 # ---------- outer loop ----------
 
 declare -a HASHES=()
@@ -1749,33 +2164,139 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
   HEADER="=== iter $iter @ $(date -u +%FT%TZ) ==="
   echo "$HEADER" | tee -a "$LOG" >&2
   echo "  [stop file: $STOP_FILE]" >&2
-  if [ ! -f "$STOP_FILE" ]; then
+  if stop_file_removed "$STOP_FILE"; then
     echo "Stop file removed; exiting before iter $iter." | tee -a "$LOG"
     break
   fi
 
-  # Retry any PR stalled by a previous codex MCP transport failure.
-  # The PR is un-drafted and re-reviewed before invoking the implementer.
-  _mcp_pr=$(gh pr list --state open --label review-mcp-outage --limit 1 --json number -q '.[0].number' 2>/dev/null || echo "")
-  if [ -n "$_mcp_pr" ]; then
-    echo "[outer] retrying review cycle for PR #$_mcp_pr (review-mcp-outage)" | tee -a "$LOG" >&2
-    gh pr edit "$_mcp_pr" --remove-label review-mcp-outage >>"$LOG" 2>&1 || true
-    gh pr ready "$_mcp_pr" >>"$LOG" 2>&1 || true
-    _rc=0
-    run_review_cycle "$_mcp_pr" || _rc=$?
-    if [ "$_rc" -ne 0 ]; then
-      case "$_rc" in
-        2) echo "Halting: codex MCP outage persists for PR #$_mcp_pr; retries exhausted. See $LOG" | tee -a "$LOG" >&2 ;;
-        3) echo "Halting: Codex version incompatibility for PR #$_mcp_pr; upgrade CLI before restarting. See $LOG" | tee -a "$LOG" >&2 ;;
-        4) echo "Halting: Codex workspace out of credits for PR #$_mcp_pr; add credits then remove label and restart. See $LOG" | tee -a "$LOG" >&2 ;;
-        *) echo "Halting: review cycle returned unexpected rc=$_rc for PR #$_mcp_pr. See $LOG" | tee -a "$LOG" >&2 ;;
-      esac
+  # Retry any PR stalled behind a resumable label (review-mcp-outage,
+  # review-codex-outdated, review-codex-no-credits, review-merge-failed)
+  # from a previous run.
+  # The label search here is the ONLY way a stalled PR is found again, so
+  # the label must still be on the PR when this runs — operators must NOT
+  # remove it manually; the documented recovery is "fix the underlying
+  # cause, then restart" for all three labels (the wrapper halts on all of
+  # them — see rc=2/3/4 handling below and at the HANDOFF_REVIEW call site —
+  # so none of them resolve on their own without a restart).
+  # Removing the label yourself makes this search silently find nothing, leaving the
+  # PR in draft forever (see #82/#104). The PR stays in draft through the
+  # review itself; only merge_reviewed_pr() un-drafts it, and only after a
+  # clean review, so an in-progress retry is never briefly mergeable.
+  _retry_pairs=()
+  _retry_lookup_failed=0
+  for _label in "${RESUMABLE_STALL_LABELS[@]}"; do
+    if ! _pr_num=$(gh pr list --state open --label "$_label" --limit 1 --json number -q '.[0].number' 2>>"$LOG"); then
+      # A GitHub API failure here must NOT be treated as "no stalled PR" —
+      # that would let new implementation work start while a real stalled
+      # PR sits unlabelled-for-discovery, silently defeating the retry gate.
+      echo "[outer] WARNING: gh pr list failed while checking for PRs labelled $_label; skipping new work this iteration" | tee -a "$LOG" >&2
+      _retry_lookup_failed=1
       break
     fi
-    unset _mcp_pr _rc
+    _retry_pairs+=("$_label $_pr_num")
+  done
+  if [ "$_retry_lookup_failed" -eq 1 ]; then
+    unset _retry_pairs _label _pr_num _retry_lookup_failed
+    sleep "$SLEEP_SEC"
     continue
   fi
-  unset _mcp_pr
+  unset _retry_lookup_failed
+  _retry_pick=$(pick_stalled_retry "${_retry_pairs[@]}") || _retry_pick=""
+  unset _retry_pairs _label
+  if [ -n "$_retry_pick" ]; then
+    _retry_label="${_retry_pick%% *}"
+    _retry_pr="${_retry_pick#* }"
+    if [ "$_retry_label" = "review-merge-failed" ]; then
+      # The review already passed (codex-review=success is already set on the
+      # head SHA) — only `gh pr merge` itself failed. Routing this through
+      # run_review_cycle like the other three labels would re-run
+      # reviewer_preflight; a transient preflight failure there calls
+      # fail_review_cycle, which drafts the PR and labels it
+      # review-incomplete, discarding the already-passed review instead of
+      # just retrying the merge (see PR #107 review).
+      #
+      # codex-review=success was posted for a specific head SHA, not for
+      # "whatever the PR's head is now" — this label carries no halt/restart
+      # requirement, so the gap between the failed merge and this retry can
+      # span many iterations (or restarts), during which new commits could
+      # land on the branch. Reusing the green status in that case would merge
+      # unreviewed commits. Compare the recorded reviewed head
+      # (review_merge_failed_recorded_head) against the PR's current head
+      # before taking the merge-only shortcut; on any mismatch — or if either
+      # SHA is unknown — fall through to the full review-cycle retry path
+      # below instead of merging (see PR #107 review, BLOCKING).
+      _recorded_head=$(review_merge_failed_recorded_head "$_retry_pr")
+      _current_head=$(gh pr view "$_retry_pr" --json headRefOid -q .headRefOid 2>>"$LOG" || echo "")
+      if [ -n "$_recorded_head" ] && [ -n "$_current_head" ] && [ "$_recorded_head" = "$_current_head" ]; then
+        echo "[outer] retrying merge for PR #$_retry_pr (review-merge-failed)" | tee -a "$LOG" >&2
+        # Leave the label ON through the merge attempt itself — merge_reviewed_pr
+        # already re-adds it (flag_review_cycle_merge_failed) on every failure
+        # path, so removing it first only opens a window with no upside: if the
+        # wrapper is interrupted between removal and merge completing, the PR
+        # is left open and unlabelled, invisible to the only sweep that finds
+        # stalled PRs (see PR #107 review cycle 3, BLOCKING). Remove it after,
+        # and only once the PR is actually confirmed merged.
+        merge_reviewed_pr "$_retry_pr" "retry" "$_current_head"
+        if [ "$(gh pr view "$_retry_pr" --json state -q .state 2>>"$LOG")" = "MERGED" ]; then
+          # Best-effort cleanup: the sweep only ever searches open PRs, so a
+          # merged PR simply won't match next time even if this edit fails.
+          gh pr edit "$_retry_pr" --remove-label "$_retry_label" >>"$LOG" 2>&1 \
+            || echo "[outer] WARNING: failed to remove $_retry_label from merged PR #$_retry_pr; harmless, sweep only searches open PRs" | tee -a "$LOG" >&2
+        fi
+        unset _retry_pick _retry_label _retry_pr _recorded_head _current_head
+        # A failed merge re-labels the PR review-merge-failed and this sweep
+        # retries it again next iteration; without a delay here, a merge that
+        # keeps failing (e.g. CI still running) would retry every iteration
+        # back-to-back and could burn through the entire MAX_ITER budget
+        # before CI ever passes (see PR #107 review, BLOCKING).
+        sleep "$SLEEP_SEC"
+        continue
+      fi
+      echo "[outer] PR #$_retry_pr head changed since its review passed (recorded=${_recorded_head:-unknown} current=${_current_head:-unknown}); routing to a fresh review cycle instead of reusing the stale codex-review status" | tee -a "$LOG" >&2
+      unset _recorded_head _current_head
+    fi
+    if ! reviewer_binary_available; then
+      # Don't remove the label yet: run_review_cycle's own CLI-missing check
+      # (reviewer_binary_available, above run_review_cycle's checkout step)
+      # returns success without reviewing anything, and this is the only
+      # place the stalled label gets re-attached. Removing it first would
+      # leave the PR unlabelled and undiscoverable by the next retry sweep.
+      echo "[outer] $REVIEWER CLI still unavailable; leaving PR #$_retry_pr labelled $_retry_label for a later retry" | tee -a "$LOG" >&2
+      unset _retry_pick _retry_label _retry_pr
+      # Don't fall through to new work: a PR is stuck awaiting review, and
+      # starting an implementer pass would let new unreviewed work pile up
+      # behind it instead of resolving the stall first (see PR #104 review).
+      sleep "$SLEEP_SEC"
+      continue
+    else
+      echo "[outer] retrying review cycle for PR #$_retry_pr ($_retry_label)" | tee -a "$LOG" >&2
+      if ! gh pr edit "$_retry_pr" --remove-label "$_retry_label" >>"$LOG" 2>&1; then
+        # Don't run the review cycle with a stale resumable label still on
+        # the PR: if the review then bails to review-incomplete (a bail the
+        # sweep must NOT retry), the leftover resumable label would make the
+        # next sweep retry it anyway. Skip to next iteration and try the
+        # removal again rather than risk that state.
+        echo "[outer] WARNING: failed to remove $_retry_label from PR #$_retry_pr; retrying removal next iteration" | tee -a "$LOG" >&2
+        unset _retry_pick _retry_label _retry_pr
+        sleep "$SLEEP_SEC"
+        continue
+      fi
+      _rc=0
+      run_review_cycle "$_retry_pr" || _rc=$?
+      if [ "$_rc" -ne 0 ]; then
+        case "$_rc" in
+          2) echo "Halting: codex MCP outage persists for PR #$_retry_pr; retries exhausted. See $LOG" | tee -a "$LOG" >&2 ;;
+          3) echo "Halting: Codex version incompatibility for PR #$_retry_pr; upgrade CLI before restarting. See $LOG" | tee -a "$LOG" >&2 ;;
+          4) echo "Halting: Codex workspace out of credits for PR #$_retry_pr; add credits then restart. See $LOG" | tee -a "$LOG" >&2 ;;
+          *) echo "Halting: review cycle returned unexpected rc=$_rc for PR #$_retry_pr. See $LOG" | tee -a "$LOG" >&2 ;;
+        esac
+        break
+      fi
+      unset _retry_pick _retry_label _retry_pr _rc
+      continue
+    fi
+  fi
+  unset _retry_pick
 
   STATE=$(collect_state)
   PROMPT="${STATE}
@@ -1863,30 +2384,28 @@ ${BASE_PROMPT}"
   fi
 
   RESULT=$(cat "$TMP_RESULT")
-  TRIMMED=$(printf '%s' "$RESULT" | sed -e 's/[[:space:]]*$//')
-  LAST_LINE=$(printf '%s' "$TRIMMED" | tail -n 1)
 
   # Sentinel detection. HANDOFF_REVIEW triggers a review cycle and falls
   # through to the next outer iteration; STOP terminates the loop.
-  case "$LAST_LINE" in
+  SENTINEL=$(parse_sentinel "$RESULT")
+  case "$SENTINEL" in
     "HANDOFF_REVIEW "*)
-      pr_num="${LAST_LINE#HANDOFF_REVIEW }"
-      pr_num="${pr_num%% *}"
-      if [[ "$pr_num" =~ ^[0-9]+$ ]]; then
-        _rc=0
-        run_review_cycle "$pr_num" || _rc=$?
-        if [ "$_rc" -ne 0 ]; then
-          case "$_rc" in
-            2) echo "Halting: codex MCP transport outage on PR #$pr_num; retries exhausted. See $LOG" | tee -a "$LOG" >&2 ;;
-            3) echo "Halting: Codex version incompatibility on PR #$pr_num; upgrade CLI before restarting. See $LOG" | tee -a "$LOG" >&2 ;;
-            4) echo "Halting: Codex workspace out of credits on PR #$pr_num; add credits then remove label and restart. See $LOG" | tee -a "$LOG" >&2 ;;
-            *) echo "Halting: review cycle returned unexpected rc=$_rc for PR #$pr_num. See $LOG" | tee -a "$LOG" >&2 ;;
-          esac
-          break
-        fi
-      else
-        echo "  [outer] HANDOFF_REVIEW with non-numeric PR '$pr_num'; ignoring" | tee -a "$LOG" >&2
+      pr_num="${SENTINEL#HANDOFF_REVIEW }"
+      _rc=0
+      run_review_cycle "$pr_num" || _rc=$?
+      if [ "$_rc" -ne 0 ]; then
+        case "$_rc" in
+          2) echo "Halting: codex MCP transport outage on PR #$pr_num; retries exhausted. See $LOG" | tee -a "$LOG" >&2 ;;
+          3) echo "Halting: Codex version incompatibility on PR #$pr_num; upgrade CLI before restarting. See $LOG" | tee -a "$LOG" >&2 ;;
+          4) echo "Halting: Codex workspace out of credits on PR #$pr_num; add credits then restart. See $LOG" | tee -a "$LOG" >&2 ;;
+          *) echo "Halting: review cycle returned unexpected rc=$_rc for PR #$pr_num. See $LOG" | tee -a "$LOG" >&2 ;;
+        esac
+        break
       fi
+      ;;
+    "HANDOFF_REVIEW_INVALID "*)
+      invalid_pr="${SENTINEL#HANDOFF_REVIEW_INVALID }"
+      echo "  [outer] HANDOFF_REVIEW with non-numeric PR '$invalid_pr'; ignoring" | tee -a "$LOG" >&2
       ;;
     "STOP")
       echo "STOP signal received on iter $iter."
@@ -1914,7 +2433,7 @@ ${BASE_PROMPT}"
   sleep "$SLEEP_SEC"
 done
 
-if [ "$iter" -ge "$MAX_ITER" ]; then
+if maxiter_exhausted "$iter" "$MAX_ITER"; then
   echo "Hit MAX_ITER=$MAX_ITER. Bailing." | tee -a "$LOG"
 fi
 
