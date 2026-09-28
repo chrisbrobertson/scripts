@@ -2183,6 +2183,12 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
         fi
         merge_reviewed_pr "$_retry_pr" "retry" "$_current_head"
         unset _retry_pick _retry_label _retry_pr _recorded_head _current_head
+        # A failed merge re-labels the PR review-merge-failed and this sweep
+        # retries it again next iteration; without a delay here, a merge that
+        # keeps failing (e.g. CI still running) would retry every iteration
+        # back-to-back and could burn through the entire MAX_ITER budget
+        # before CI ever passes (see PR #107 review, BLOCKING).
+        sleep "$SLEEP_SEC"
         continue
       fi
       echo "[outer] PR #$_retry_pr head changed since its review passed (recorded=${_recorded_head:-unknown} current=${_current_head:-unknown}); routing to a fresh review cycle instead of reusing the stale codex-review status" | tee -a "$LOG" >&2
