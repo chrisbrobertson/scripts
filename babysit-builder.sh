@@ -1743,7 +1743,7 @@ resume_stalled_prs() {
       HALT_RC=5
       return 0
     fi
-    python3 - "$raw_file" "$label" >> "$records" <<'PY'
+    if ! python3 - "$raw_file" "$label" >> "$records" <<'PY'
 import json, re, sys
 marker = re.compile(r"<!-- babysit-builder\s+source=(\S+)\s+ticket=(\S+)\s+-->", re.I)
 label = sys.argv[2]
@@ -1754,6 +1754,11 @@ for pr in prs:
     source, ticket = (match.group(1), match.group(2)) if match else ("", "")
     print("\x1f".join([str(pr.get("number") or ""), pr.get("headRefName") or "", source, ticket, label]))
 PY
+    then
+      echo "[build] ERROR: could not parse $label PR records into the stalled-PR list; aborting run before reading the ticket queue to avoid rebuilding a stalled ticket into a duplicate PR" >&2
+      HALT_RC=5
+      return 0
+    fi
   done
 
   # A PR can be caught under more than one resumable label (e.g. a race
