@@ -235,17 +235,19 @@ assert_count "stalled retry (dedup): exactly two remove-label calls are made for
 # still-build-ready ticket stayed readable for a duplicate PR ----------
 r="$TMP/no-marker.record"
 run_builder "$r" STUB_PR_MCP="$(pr_json_no_marker 101 stalled-pr-branch)" STUB_QUEUE="$(queue_json 505)"
-assert_grep "stalled retry (no builder marker): label is still removed" "CALL=gh pr edit 101 --repo owner/repo --remove-label build-mcp-outage" "$r"
-assert_grep "stalled retry (no builder marker): run_build_cycle still runs" "=== build cycle: PR #101 @" "$TMP/err"
-
-# ---------- scenario 11 (regression, see #106 codex review cycle 2): with no
-# builder marker there is no source/ticket to pass to mark_ticket_done, so its
-# ticket's build-ready label is never cleared. Continuing past this (as a bare
-# WARNING previously did) fell through to read the ticket queue and rebuilt
-# that still-build-ready ticket into a duplicate PR — the sweep must halt
-# instead, the same as its other "cannot prove the ticket is safe" cases ----------
-assert_grep "stalled retry (no builder marker): run halts rather than falling through" "Halting: stalled-PR sweep resumed a PR with no builder marker" "$TMP/err"
+assert_grep "stalled retry (no builder marker): run halts rather than falling through" "Halting: stalled-PR sweep found a PR with no builder marker" "$TMP/err"
 assert_not_grep "stalled retry (no builder marker): ticket queue is never read" "CALL=gh issue list" "$r"
+
+# ---------- scenario 11 (regression, see #106 codex review cycle 3): the
+# marker check above must run BEFORE the resumable label is removed, so an
+# operator who adds the marker and reruns as instructed finds the PR
+# rediscovered by this same sweep. Removing the label first (as an earlier fix
+# did) stranded the PR: nothing scans for an unlabelled PR, so the ticket
+# queue read still fell through to a duplicate PR one run later. Assert the
+# label survives and the build cycle never starts, since neither should
+# happen before the marker is confirmed present ----------
+assert_not_grep "stalled retry (no builder marker): resumable label is left in place" "--remove-label" "$r"
+assert_not_grep "stalled retry (no builder marker): run_build_cycle never starts" "=== build cycle: PR #101" "$TMP/err"
 
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]
