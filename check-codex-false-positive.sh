@@ -234,6 +234,7 @@ REQUIRED_SECTIONS = ('BLOCKING', 'RECOMMENDED', 'INFORMATION')
 sections = {}
 header_counts = {}
 unexpected_headers = []
+headers_in_order = []
 current = None
 for l in block:
     stripped = l.strip()
@@ -242,6 +243,8 @@ for l in block:
         header_counts[current] = header_counts.get(current, 0) + 1
         if current not in REQUIRED_SECTIONS:
             unexpected_headers.append(current)
+        else:
+            headers_in_order.append(current)
         sections[current] = []
     elif current is not None and stripped:
         sections[current].append(stripped)
@@ -256,7 +259,15 @@ for l in block:
 duplicate_headers = sorted({name for name, count in header_counts.items()
                              if name in REQUIRED_SECTIONS and count > 1})
 missing_headers = [name for name in REQUIRED_SECTIONS if name not in sections]
-malformed = bool(duplicate_headers) or bool(unexpected_headers) or bool(missing_headers)
+# babysit-with-review.sh's valid_review_structure() rejects the required
+# headers appearing out of order, not just missing/duplicated/extra ones —
+# a verdict block with three exact "- (none)" bullets under reordered
+# section headers is still malformed to the wrapper. duplicate/missing
+# headers already make headers_in_order differ in length from
+# REQUIRED_SECTIONS, but check order explicitly so a same-length reordering
+# (e.g. RECOMMENDED, BLOCKING, INFORMATION) is also caught.
+out_of_order = headers_in_order != list(REQUIRED_SECTIONS)
+malformed = bool(duplicate_headers) or bool(unexpected_headers) or bool(missing_headers) or out_of_order
 
 clean = (not malformed) and all(sections.get(name) == ['- (none)'] for name in REQUIRED_SECTIONS)
 
@@ -274,6 +285,9 @@ if malformed:
         reasons.append(f'unexpected section header(s): {", ".join(sorted(set(unexpected_headers)))}')
     if missing_headers:
         reasons.append(f'missing section header(s): {", ".join(missing_headers)}')
+    if out_of_order and not duplicate_headers and not missing_headers:
+        reasons.append(f'section headers out of order: found {", ".join(headers_in_order)} '
+                        f'(expected {", ".join(REQUIRED_SECTIONS)})')
     print('VERDICT: malformed verdict block (' + '; '.join(reasons) + ') — cannot '
           'automatically determine clean/not-clean from this. Do NOT treat this as a '
           'confirmed false positive; read the block above and the log directly.')
