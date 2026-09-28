@@ -39,16 +39,22 @@ deduplication before this is wired into a live ticket queue.
 babysit-work-prep.sh [--repo OWNER/REPO] [--source github|jira|both]
                       [--implementer claude|codex]
                       [--implementer-model MODEL] [--implementer-effort LEVEL]
+                      [--reviewer claude|codex]
+                      [--reviewer-model MODEL] [--reviewer-effort LEVEL]
                       [--max-tickets N] [--dry-run]
 
 # Env (required when --source jira|both)
-JIRA_BASE_URL   Jira instance base URL
-JIRA_TOKEN      Bearer token for Jira REST API
-JIRA_PROJECT    Jira project key to query
+JIRA_BASE_URL           Jira instance base URL
+JIRA_TOKEN              Bearer token for Jira REST API
+JIRA_PROJECT            Jira project key to query
+
+# Env (optional)
+MAX_SPEC_REVIEW_CYCLES  Spec review cycles before a draft is quarantined (default 4)
 
 # Flags
 --repo OWNER/REPO   GitHub repo the spec PRs and sub-tickets are created in
 --source SOURCE     Ticket origin: github (default), jira, or both
+--reviewer ROLE     Spec review harness for the adversarial review cycle (default codex)
 --max-tickets N     Cap on tickets drafted per invocation (default 20; see scale envelope)
 --dry-run           List tickets that would be drafted / PRs that would be approval-swept;
                      no worktree, no implementer call, no gh/Jira writes
@@ -78,10 +84,19 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
   new tickets, the script scans PRs opened by prior work-prep runs for an approval
   comment; on match it merges the spec PR, labels the *source* ticket
   `status:ready-to-build`, and files a new sub-ticket for the builder queue.
-- **No adversarial review cycle for spec drafts.** Unlike `babysit-with-review.sh`, spec
-  PRs are not run through a Claude/Codex review cycle — the human approval comment *is*
-  the review gate. Only an implementer role is invoked (`--implementer claude|codex`);
-  there is no `--reviewer` flag for this script.
+- **Adversarial spec review cycle, not a structural check.** Every drafted spec PR opens
+  as a **draft PR** and is driven through a convergent reviewer/implementer cycle
+  (`run_spec_review_cycle`) — the same pattern `babysit-with-review.sh` and
+  `babysit-builder.sh` use — via a selectable `--reviewer claude|codex` role (default
+  `codex`). The reviewer judges the draft against every other spec in the corpus, the
+  schema in `spec-guide.md`, and the code it describes, not just structural well-formedness.
+  `MAX_SPEC_REVIEW_CYCLES` (default 4) caps the cycle count, with prescriptive mode
+  (requiring a concrete suggested fix under each BLOCKING finding) from cycle 3. The PR
+  leaves draft only once the review reaches zero BLOCKING findings; a draft that doesn't
+  converge is labelled with one of the `spec-*` quarantine labels (`spec-review-max-cycles`,
+  `spec-review-incomplete`, `spec-review-mcp-outage`, `spec-review-codex-outdated`,
+  `spec-review-codex-no-credits`) and stays draft. The human approval comment is a second,
+  independent gate on top of this — it is never asked to bless an unreviewed spec.
 - **Approval detection:** `gh pr list --json comments` on each open spec PR, matched
   against a case-insensitive `\bapproved\b` regex on comment bodies.
 - **Sub-ticket creation:** always a GitHub issue via `gh issue create`, labelled
@@ -175,6 +190,9 @@ babysit-work-prep.sh [--repo OWNER/REPO] [--source github|jira|both]
    per invocation, regardless of queue size.
 7. **Dry-run is read-only:** `--dry-run` performs `gh`/Jira reads only — no worktree, no
    implementer invocation, no PR/issue/label writes.
+8. **No approval on an unreviewed spec:** the approval sweep skips any PR still marked
+   draft by `gh`, regardless of comment content — a spec must converge in the adversarial
+   review cycle before a human approval comment can act on it.
 
 ### Idempotency
 Idempotent per ticket and per PR: re-running the script with an unchanged queue and no
@@ -187,7 +205,8 @@ manual migration of any open spec PRs and unlabelled tickets.
 
 ## Performance budget
 - **Per-ticket draft latency:** comparable to a single `babysit-with-review.sh` outer
-  iteration (p50 ~2min, p95 ~10min) — one implementer pass, no review cycle.
+  iteration (p50 ~2min, p95 ~10min) for the drafting pass, plus one or more spec review
+  cycles (reviewer + implementer fix pass each) before the PR can leave draft.
 - **Approval sweep latency:** dominated by `gh pr list --json comments` calls; expected
   sub-second per open PR.
 - **Run of 20 tickets:** on the order of an hour, dominated by implementer inference
@@ -246,8 +265,9 @@ Events emitted to stderr:
   ASF-PROD-BABYSIT-WITH-REVIEW out-of-scope list).
 - **Code changes:** this script only drafts spec documents; it never touches
   implementation code. `babysit-builder.sh` owns that step.
-- **Review cycles:** no Claude/Codex adversarial review of spec drafts; human approval
-  comment is the only gate.
+- **Adjudication/escalation mode:** the disagree-and-escalate protocol used by
+  `babysit-with-review.sh`'s later cycles is deliberately not ported here — a recurring
+  spec finding should become a flagged `[ASSUMPTION]`, not an argument with the reviewer.
 
 ## Assumptions-that-could-flip
 - **Single-approver-any-commenter assumption.** If flipped (need restricted approval
@@ -256,9 +276,6 @@ Events emitted to stderr:
 - **GitHub-bridge-for-Jira assumption.** If flipped (builder should read Jira directly):
   `babysit-builder.sh`'s build-queue query would need its own Jira integration instead
   of a GitHub sub-ticket bridge.
-- **No-review-cycle-for-specs assumption.** If flipped (specs need automated review
-  too): would require wiring the same `review_with_retry` infrastructure used by
-  `babysit-with-review.sh`, turning this into a three-role pipeline.
 
 ## Composes with / replaces
 - **Composes with:**
@@ -279,9 +296,10 @@ Events emitted to stderr:
 2. **Given** a ticket that already has an open spec PR, **when** the script runs,
    **then** it is skipped in the drafting phase with a `already has open spec PR`
    message and no duplicate PR is opened.
-3. **Given** an open spec PR with a comment containing "Approved, let's build this",
-   **when** the approval sweep runs, **then** the PR is merged, the source ticket is
-   labelled `status:ready-to-build`, and a new sub-ticket issue is created.
+3. **Given** a converged (non-draft) spec PR with a comment containing "Approved, let's
+   build this" from an authorized approver, **when** the approval sweep runs, **then**
+   the PR is merged, the source ticket is labelled `status:ready-to-build`, and a new
+   sub-ticket issue is created.
 4. **Given** an open spec PR with no approval comment, **when** the approval sweep
    runs, **then** the PR is left open and untouched.
 5. **Given** `--source jira` and `JIRA_BASE_URL`/`JIRA_TOKEN` pointing at an
@@ -299,6 +317,9 @@ Events emitted to stderr:
 9. **Given** `--dry-run`, **when** the script runs, **then** it prints the tickets that
    would be drafted and the PRs that would be approval-swept, with no worktree, gh, or
    Jira write calls made.
+10. **Given** a spec PR still marked draft (the spec review cycle has not yet converged
+    to zero BLOCKING findings), **when** the approval sweep runs, **then** the PR is
+    skipped regardless of any approval comment present.
 
 ## Telemetry events tied to L1 KPIs
 - **Tickets drafted per run** → throughput of the intake pipeline
