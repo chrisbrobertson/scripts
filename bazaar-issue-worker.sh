@@ -84,8 +84,8 @@ SPEC_DIR=$(bzr_spec_dir_at "$ROOT" "origin/$DEFAULT_BRANCH") || {
 SPEC_GUIDE="$SCRIPTS_DIR/spec-guide.md"
 
 # ---------- worktree (resume if the branch exists on origin) ----------
-git -C "$ROOT" worktree prune >>"$LOG" 2>&1 || true
 rm -rf "$WT"
+git -C "$ROOT" worktree prune >>"$LOG" 2>&1 || true
 RESUMED=0
 if git -C "$ROOT" fetch --quiet origin "$BRANCH" >>"$LOG" 2>&1; then
   git -C "$ROOT" worktree add --quiet --detach "$WT" FETCH_HEAD >>"$LOG" 2>&1 || { sentinel STUCK "worktree add (resume) failed"; exit 1; }

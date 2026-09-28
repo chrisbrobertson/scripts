@@ -129,7 +129,7 @@ PY
 )"
 if [ -n "$BRANCH_EXISTING" ]; then BRANCH="$BRANCH_EXISTING"; else BRANCH="bzr/$ISSUE-$SLUG"; [ "$ROUND" -gt 1 ] && BRANCH="$BRANCH-r$ROUND"; fi
 WT="$BZR_REPO_DIR/wt/$ISSUE"
-git -C "$ROOT" worktree prune >>"$LOG" 2>&1 || true; rm -rf "$WT"
+rm -rf "$WT"; git -C "$ROOT" worktree prune >>"$LOG" 2>&1 || true
 if git -C "$ROOT" fetch --quiet origin "$BRANCH" >>"$LOG" 2>&1; then
   git -C "$ROOT" worktree add --quiet --detach "$WT" FETCH_HEAD >>"$LOG" 2>&1 || { sentinel STUCK "worktree add (resume) failed"; exit 1; }
   bzr_log "#$ISSUE round=$ROUND resuming branch $BRANCH (PR ${PR:-none})"
