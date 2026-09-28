@@ -1191,12 +1191,22 @@ flag_review_cycle_merge_conflict() {
     exit 1
   fi
 
+  # A caller reaching a real conflict via the review-merge-failed retry
+  # shortcut still has that label on the PR (merge_reviewed_pr's callers
+  # deliberately leave it on through the merge attempt — see the sweep's
+  # merge-only-retry comment). Left in place, pick_stalled_retry's priority
+  # order would keep finding review-merge-failed first forever and retrying
+  # the identical doomed merge instead of ever surfacing review-merge-conflict.
+  # Best-effort: if this PR reached a real conflict via a fresh review
+  # instead, the label was never present and removal is a harmless no-op.
+  gh pr edit "$pr_num" --remove-label review-merge-failed >>"$LOG" 2>&1 || true
+
   local body="**babysit-with-review: review passed but the PR has a real merge conflict**
 
 The review cycle completed with zero BLOCKING findings and \`codex-review\` was already set to success, but \`gh pr merge\` failed because GitHub reports this PR CONFLICTING against the base branch — not a transient CI or branch-protection race. Retrying the same merge cannot succeed on its own.
 
-Label \`review-merge-conflict\` has been added. Unlike \`review-merge-failed\`, this is **not** auto-retried by the stalled-PR sweep. To resolve:
-- Rebase the branch onto the base branch and resolve the conflicts (\`gh pr checkout ${pr_num} && git fetch origin main && git merge origin/main\`, resolve, push) — the next review cycle will re-review the merged-up diff, or
+Label \`review-merge-conflict\` has been added. Retrying the identical merge can never succeed on its own, so the stalled-PR sweep will NOT retry it until the conflict is actually gone. To resolve:
+- Merge the base branch into this branch and resolve the conflicts (\`gh pr checkout ${pr_num} && git fetch origin ${DEFAULT_BRANCH} && git merge origin/${DEFAULT_BRANCH}\`, resolve, push) — the wrapper's sweep detects the conflict is gone and automatically runs a fresh review cycle against the merged-up diff on a later iteration, no restart needed, or
 - Close this PR if its change already landed another way."
   if [ -n "$head_sha" ]; then
     body="${body}
