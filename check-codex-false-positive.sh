@@ -167,6 +167,34 @@ for k in range(start, idx):
         end = k
         break
 
+# `start` is only the *nearest* preceding "## BLOCKING" — if the same
+# uninterrupted span of raw output (i.e. not separated by a wrapper bracket
+# line) contains another "## BLOCKING" before `start` or between `start`
+# and `end`, naively parsing from `start` would silently ignore or mask it
+# (e.g. Codex quoting the review-format template earlier in its own
+# output, or printing a verdict twice). Bound the span by the nearest
+# bracket lines on both sides of `start` and refuse to guess which
+# occurrence is the real verdict if more than one appears in it.
+span_start = 0
+for j in range(start - 1, -1, -1):
+    if lines[j].startswith('  ['):
+        span_start = j + 1
+        break
+
+span = lines[span_start:end]
+blocking_count = sum(1 for l in span if l.strip() == '## BLOCKING')
+
+if blocking_count > 1:
+    print(f'PR #{pr} — {halting_line}')
+    print(f'Driver log:      {log_path}')
+    print(f'Raw transcript:  {transcript_path}')
+    print()
+    print(f'VERDICT: malformed — found {blocking_count} "## BLOCKING" headers in the same '
+          'uninterrupted review output preceding the halt, so which one is the real final '
+          'verdict is ambiguous. Cannot automatically determine clean/not-clean; read the '
+          'log directly.')
+    sys.exit(0)
+
 block = lines[start:end]
 block_text = ''.join(block).rstrip('\n')
 
@@ -194,11 +222,12 @@ for l in block:
         sections[current].append(stripped)
 
 # A well-formed verdict block has each required header exactly once and no
-# other "## " headers. Anything else — a second "## BLOCKING" (which would
-# otherwise silently overwrite the first occurrence's findings in `sections`
-# above), a missing header, or an unrelated "## " heading swept in by the
-# start/end scan — means this isn't a single clean verdict block, so don't
-# let it be reported as a likely false positive.
+# other "## " headers. Duplicate "## BLOCKING" was already ruled out by the
+# span check above; this also catches a duplicate RECOMMENDED/INFORMATION
+# header (which would otherwise silently overwrite the first occurrence's
+# findings in `sections`), a missing header, or an unrelated "## " heading
+# swept in by the start/end scan — none of which should be reported as a
+# likely false positive.
 duplicate_headers = sorted({name for name, count in header_counts.items()
                              if name in REQUIRED_SECTIONS and count > 1})
 missing_headers = [name for name in REQUIRED_SECTIONS if name not in sections]
