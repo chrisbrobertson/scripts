@@ -172,6 +172,18 @@ if handoff_idx is None:
     print(f'Log referenced by halt line: {transcript_path}', file=sys.stderr)
     sys.exit(1)
 
+# Codex prints a "tokens used: N" status line between its streamed mid-run
+# output and the final agent message it renders afterward, and it commonly
+# renders the verdict once mid-run and again as that final message. The two
+# renderings are therefore separated by this marker (like a wrapper bracket
+# line). Treat both as span boundaries so the duplicate-verdict guard below
+# scopes to the single final rendering rather than tripping over the earlier
+# copy.
+tokens_used_re = re.compile(r'^(?:\[[^\]]*\]\s*)?tokens used\b', re.IGNORECASE)
+
+def is_span_boundary(line):
+    return line.startswith('  [') or bool(tokens_used_re.match(line.strip()))
+
 # Walk backward from the halt to the nearest preceding "## BLOCKING" header —
 # the start of the verdict block the review actually printed just before the
 # telltale scan fired. Never cross the handoff boundary found above.
@@ -197,16 +209,18 @@ for k in range(start, idx):
 
 # `start` is only the *nearest* preceding "## BLOCKING" — if the same
 # uninterrupted span of raw output (i.e. not separated by a wrapper bracket
-# line) contains another "## BLOCKING" before `start` or between `start`
-# and `end`, naively parsing from `start` would silently ignore or mask it
-# (e.g. Codex quoting the review-format template earlier in its own
-# output, or printing a verdict twice). Bound the span by the nearest
-# bracket lines on both sides of `start` (never crossing this PR's handoff
-# boundary) and refuse to guess which occurrence is the real verdict if
-# more than one appears in it.
+# line or a "tokens used" marker) contains another "## BLOCKING" before
+# `start` or between `start` and `end`, naively parsing from `start` would
+# silently ignore or mask it (e.g. Codex quoting the review-format template
+# earlier in its own output, or printing a genuinely distinct second verdict).
+# Bound the span by the nearest boundary lines on both sides of `start` (never
+# crossing this PR's handoff boundary) and refuse to guess which occurrence is
+# the real verdict if more than one appears in it. Codex's own mid-run copy of
+# the verdict is separated from the final message by a "tokens used" marker, so
+# that boundary keeps this ordinary double-render from reading as ambiguous.
 span_start = handoff_idx + 1
 for j in range(start - 1, handoff_idx, -1):
-    if lines[j].startswith('  ['):
+    if is_span_boundary(lines[j]):
         span_start = j + 1
         break
 
