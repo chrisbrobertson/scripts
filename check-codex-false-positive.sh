@@ -187,17 +187,36 @@ def is_span_boundary(line):
 # Walk backward from the halt to the nearest preceding "## BLOCKING" header —
 # the start of the verdict block the review actually printed just before the
 # telltale scan fired. Never cross the handoff boundary found above.
-start = None
+blocking_idx = None
 for j in range(idx - 1, handoff_idx, -1):
     if lines[j].strip() == '## BLOCKING':
-        start = j
+        blocking_idx = j
         break
 
-if start is None:
+if blocking_idx is None:
     print(f'Found halt line in {log_path} and a review handoff for PR #{pr} before it, '
           'but no "## BLOCKING" verdict block between them.', file=sys.stderr)
     print(f'Log referenced by halt line: {transcript_path}', file=sys.stderr)
     sys.exit(1)
+
+# From cycle 5 onward the wrapper's review format opens with an optional
+# "## ADJUDICATION" section *before* BLOCKING (babysit-with-review.sh
+# valid_review_structure() lines 1069-1074; format rule "ADJUDICATION section
+# comes first"). When such a header sits in the same uninterrupted output span
+# as this rendering's BLOCKING, extend the anchor back to it so the block the
+# parser sees matches the wrapper's real section layout.
+start = blocking_idx
+for j in range(blocking_idx - 1, handoff_idx, -1):
+    if is_span_boundary(lines[j]):
+        break
+    stripped = lines[j].strip()
+    if stripped == '## ADJUDICATION':
+        start = j
+        break
+    if stripped == '## BLOCKING':
+        # A second BLOCKING with no boundary between it and the anchor — leave
+        # it for the duplicate-verdict guard below to flag as ambiguous.
+        break
 
 # The verdict block ends at the first bracketed wrapper log line
 # ("  [codex] ..." / "  [review] ...") that follows it.
@@ -249,6 +268,10 @@ block_text = ''.join(block).rstrip('\n')
 # whose text happens to mention "(none)", or a truncated block missing
 # a section, must not be reported as a clean verdict.
 REQUIRED_SECTIONS = ('BLOCKING', 'RECOMMENDED', 'INFORMATION')
+# valid_review_structure() also accepts an optional "## ADJUDICATION" section,
+# but only as the first section (cycles 5-6) and only with at least one bullet.
+ADJUDICATION = 'ADJUDICATION'
+KNOWN_SECTIONS = (ADJUDICATION,) + REQUIRED_SECTIONS
 sections = {}
 header_counts = {}
 unexpected_headers = []
@@ -259,33 +282,37 @@ for l in block:
     if stripped.startswith('## '):
         current = stripped[3:].strip()
         header_counts[current] = header_counts.get(current, 0) + 1
-        if current not in REQUIRED_SECTIONS:
+        headers_in_order.append(current)
+        if current not in KNOWN_SECTIONS:
             unexpected_headers.append(current)
-        else:
-            headers_in_order.append(current)
         sections[current] = []
     elif current is not None and stripped:
         sections[current].append(stripped)
 
-# A well-formed verdict block has each required header exactly once and no
-# other "## " headers. Duplicate "## BLOCKING" was already ruled out by the
-# span check above; this also catches a duplicate RECOMMENDED/INFORMATION
-# header (which would otherwise silently overwrite the first occurrence's
-# findings in `sections`), a missing header, or an unrelated "## " heading
-# swept in by the start/end scan — none of which should be reported as a
-# likely false positive.
+# A well-formed verdict block has each required header exactly once, an
+# optional leading ADJUDICATION, and no other "## " headers. Duplicate
+# "## BLOCKING" was already ruled out by the span check above; this also
+# catches a duplicate RECOMMENDED/INFORMATION/ADJUDICATION header (which would
+# otherwise silently overwrite the first occurrence's findings in `sections`),
+# a missing header, or an unrelated "## " heading swept in by the start/end
+# scan — none of which should be reported as a likely false positive.
+has_adjudication = ADJUDICATION in sections
+expected_order = ([ADJUDICATION] if has_adjudication else []) + list(REQUIRED_SECTIONS)
 duplicate_headers = sorted({name for name, count in header_counts.items()
-                             if name in REQUIRED_SECTIONS and count > 1})
+                             if name in KNOWN_SECTIONS and count > 1})
 missing_headers = [name for name in REQUIRED_SECTIONS if name not in sections]
-# babysit-with-review.sh's valid_review_structure() rejects the required
-# headers appearing out of order, not just missing/duplicated/extra ones —
-# a verdict block with three exact "- (none)" bullets under reordered
-# section headers is still malformed to the wrapper. duplicate/missing
-# headers already make headers_in_order differ in length from
-# REQUIRED_SECTIONS, but check order explicitly so a same-length reordering
-# (e.g. RECOMMENDED, BLOCKING, INFORMATION) is also caught.
-out_of_order = headers_in_order != list(REQUIRED_SECTIONS)
-malformed = bool(duplicate_headers) or bool(unexpected_headers) or bool(missing_headers) or out_of_order
+# valid_review_structure() rejects the headers appearing out of order, not just
+# missing/duplicated/extra ones — including an ADJUDICATION that is present but
+# not first. A verdict block with exact "- (none)" bullets under reordered
+# section headers is still malformed to the wrapper, so check order explicitly
+# against the expected sequence (ADJUDICATION first when present) so a
+# same-length reordering (e.g. RECOMMENDED, BLOCKING, INFORMATION) is caught.
+out_of_order = headers_in_order != expected_order
+# When ADJUDICATION is present the wrapper requires it to carry >=1 bullet
+# (valid_review_structure() END check: adjudication_headings == 1 && bullets < 1).
+adjudication_empty = has_adjudication and not sections.get(ADJUDICATION)
+malformed = (bool(duplicate_headers) or bool(unexpected_headers)
+             or bool(missing_headers) or out_of_order or adjudication_empty)
 
 clean = (not malformed) and all(sections.get(name) == ['- (none)'] for name in REQUIRED_SECTIONS)
 
@@ -303,9 +330,11 @@ if malformed:
         reasons.append(f'unexpected section header(s): {", ".join(sorted(set(unexpected_headers)))}')
     if missing_headers:
         reasons.append(f'missing section header(s): {", ".join(missing_headers)}')
-    if out_of_order and not duplicate_headers and not missing_headers:
+    if adjudication_empty:
+        reasons.append('ADJUDICATION section present but carries no bullets')
+    if out_of_order and not duplicate_headers and not missing_headers and not unexpected_headers:
         reasons.append(f'section headers out of order: found {", ".join(headers_in_order)} '
-                        f'(expected {", ".join(REQUIRED_SECTIONS)})')
+                        f'(expected {", ".join(expected_order)})')
     print('VERDICT: malformed verdict block (' + '; '.join(reasons) + ') — cannot '
           'automatically determine clean/not-clean from this. Do NOT treat this as a '
           'confirmed false positive; read the block above and the log directly.')
