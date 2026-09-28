@@ -53,7 +53,7 @@ Review cycle feature (ASF-FEAT-REVIEW-CYCLE) invoking codex_review_with_retry() 
 # Substance
 
 ## What we know
-From implementation (babysit-with-review.sh):
+From implementation (`babysit-with-review.sh`):
 - Fixed retry policy: 3 attempts with delays [0, 60, 300] seconds
 - Telltale detection: three separate constants (`compat_re`, `credits_re`, `mcp_re`); checked in that order on every attempt
 - Success criteria: exit code 0 AND non-empty TMP_REVIEW file AND `valid_review_structure` passes (see Contract below for the full awk contract)
