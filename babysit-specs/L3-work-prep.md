@@ -154,11 +154,11 @@ built against this spec:
   initial approval).
   Owner should confirm whether re-approval after a spec amendment is a supported flow
   and, if so, what triggers a second sub-ticket.
-- [ASSUMPTION] Rejection path: no rejection sentinel is defined yet. Proposed: a
-  comment matching `\bchanges requested\b` (or similar) leaves the ticket undrafted and
-  logs a note; the ticket is picked up for re-drafting on the next run.
-  Owner should confirm the exact rejection sentinel and re-draft trigger, or whether
-  rejection is closed-PR-only (human closes the spec PR, ticket returns to the queue).
+- [ASSUMPTION] Rejection path: a changes-requested comment does not trigger re-drafting.
+  The existing open PR remains linked to the ticket; a human must close that PR before
+  the ticket can be drafted again on a later run. No rejection-comment sentinel is
+  implemented. Owner should confirm whether closing the PR is the intended re-draft
+  trigger.
 - [ASSUMPTION] Sub-ticket body/metadata: proposed to carry the merged spec's file path,
   its `id:` frontmatter value, and the originating ticket link, so the builder can
   locate the approved spec without re-parsing PR history.
