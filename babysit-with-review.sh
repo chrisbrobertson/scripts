@@ -1137,9 +1137,19 @@ Label \`review-merge-failed\` has been added. The stalled-PR retry sweep will fi
 # Read back the head SHA recorded by the most recent flag_review_cycle_merge_failed
 # comment, if any. Empty output means "no recorded head" — callers must treat
 # that as unknown/stale, never as "head unchanged" (see PR #107 review).
+#
+# Only trusts comments authored by the wrapper's own authenticated gh user:
+# any PR commenter can otherwise post a forged `babysit:merge-failed-head=`
+# marker after pushing an unreviewed commit, making that commit look
+# already-reviewed to the merge-only retry shortcut (see PR #107 review,
+# BLOCKING).
 review_merge_failed_recorded_head() {
   local pr_num="$1"
-  gh pr view "$pr_num" --json comments -q '.comments[].body' 2>/dev/null \
+  local _bot_login
+  _bot_login=$(gh api user -q .login 2>/dev/null) || return 0
+  [ -n "$_bot_login" ] || return 0
+  gh pr view "$pr_num" --json comments \
+    -q ".comments[] | select(.author.login == \"${_bot_login}\") | .body" 2>/dev/null \
     | grep -o 'babysit:merge-failed-head=[0-9a-f]\{7,40\}' \
     | tail -n1 \
     | sed 's/.*=//'

@@ -56,6 +56,7 @@ cat > "$TMP/bin/gh" <<'STUB'
 printf 'CALL=gh %s\n' "$*" >> "$RECORD"
 case "$*" in
   "repo view"*) echo main; exit 0 ;;
+  "api user"*) printf 'babysit-bot'; exit 0 ;;
   "pr list --state open --label review-codex-outdated"*) printf '%s' "${STUB_PR_OUTDATED:-}"; exit 0 ;;
   "pr list --state open --label review-mcp-outage"*) printf '%s' "${STUB_PR_MCP:-}"; exit 0 ;;
   "pr list --state open --label review-codex-no-credits"*) printf '%s' "${STUB_PR_CREDITS:-}"; exit 0 ;;
