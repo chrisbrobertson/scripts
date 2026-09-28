@@ -215,9 +215,10 @@ Idempotent per ticket and per PR: re-running the script with an unchanged queue 
 new approval comments produces no new PRs, merges, or sub-tickets.
 
 ### Versioning policy
-Companion script to `babysit-with-review.sh`; no independent version number proposed
-yet. Breaking changes to the approval-comment regex or sub-ticket label schema require
-manual migration of any open spec PRs and unlabelled tickets.
+Companion script to `babysit-with-review.sh`, with its own independent version number
+— shipped as `babysit-work-prep.sh` v0.2.1. Breaking changes to the approval-comment
+regex or sub-ticket label schema require manual migration of any open spec PRs and
+unlabelled tickets.
 
 ## Performance budget
 - **Per-ticket draft latency:** comparable to a single `babysit-with-review.sh` outer
