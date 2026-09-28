@@ -60,6 +60,12 @@ case "$*" in
   "pr list --state open --label review-mcp-outage"*) printf '%s' "${STUB_PR_MCP:-}"; exit 0 ;;
   "pr list --state open --label review-codex-no-credits"*) printf '%s' "${STUB_PR_CREDITS:-}"; exit 0 ;;
   "pr list --state open --label review-merge-failed"*) printf '%s' "${STUB_PR_MERGE_FAILED:-}"; exit 0 ;;
+  "pr view "*"--json headRefOid"*) printf '%s' "${STUB_CURRENT_HEAD:-}"; exit 0 ;;
+  "pr view "*"--json comments"*)
+    if [ -n "${STUB_RECORDED_HEAD:-}" ]; then
+      printf '<!-- babysit:merge-failed-head=%s -->\n' "$STUB_RECORDED_HEAD"
+    fi
+    exit 0 ;;
   "pr edit "*"--remove-label"*) exit "${STUB_REMOVE_LABEL_RC:-0}" ;;
   "pr ready "*) exit 0 ;;
   *) exit 0 ;;
@@ -142,19 +148,37 @@ rm -f "$TMP/bin/codex"
 # the other three labels, this must NOT go through a full review cycle: a
 # transient reviewer_preflight failure there would draft the PR and label it
 # review-incomplete, discarding the already-passed review (PR #107 review,
-# BLOCKING). It must retry the merge directly instead. No codex stub is
-# installed for this scenario — if the sweep ever called run_review_cycle
-# again, `codex` would be missing from PATH and the test would still pass
-# incorrectly, so this is paired with the explicit assertions below that
-# run_review_cycle/codex never ran at all. ----------
+# BLOCKING). It must retry the merge directly instead. The recorded reviewed
+# head and the PR's current head match here (head unchanged since the review
+# passed), which is the precondition for taking the merge-only shortcut at
+# all (PR #107 review, BLOCKING). No codex stub is installed for this
+# scenario — if the sweep ever called run_review_cycle again, `codex` would
+# be missing from PATH and the test would still pass incorrectly, so this is
+# paired with the explicit assertions below that run_review_cycle/codex never
+# ran at all. ----------
 r="$TMP/merge-failed.record"
-run_outer_iteration "$r" STUB_PR_MERGE_FAILED=60
+run_outer_iteration "$r" STUB_PR_MERGE_FAILED=60 STUB_CURRENT_HEAD=abc1234 STUB_RECORDED_HEAD=abc1234
 assert_grep "stalled retry (merge-failed): sweep removes the label itself" "CALL=gh pr edit 60 --remove-label review-merge-failed" "$r"
-assert_not_line "stalled retry (merge-failed): sweep does not un-draft before merging" "CALL=gh pr ready 60" "$r"
 assert_not_grep "stalled retry (merge-failed): does NOT run a full review cycle" "=== review handoff: PR #60 @" "$TMP/err"
 assert_not_grep "stalled retry (merge-failed): never invokes the reviewer CLI" "CALL=codex" "$r"
 assert_grep "stalled retry (merge-failed): outer loop logs a merge retry, not a review retry" "[outer] retrying merge for PR #60 (review-merge-failed)" "$TMP/err"
-assert_grep "stalled retry (merge-failed): merge_reviewed_pr actually ran for the stalled PR" "CALL=gh repo view --json nameWithOwner -q .nameWithOwner" "$r"
+assert_grep "stalled retry (merge-failed): merge_reviewed_pr actually attempted a merge" "CALL=gh pr merge 60 --squash --delete-branch --auto" "$r"
+
+# ---------- scenario 1d: review-merge-failed, but the PR's head has moved
+# since the review passed (e.g. new commits pushed during the arbitrarily
+# long gap this label allows — it carries no halt/restart requirement).
+# Reusing the stale codex-review=success status would merge unreviewed
+# commits, so the sweep must fall through to a full review cycle instead of
+# retrying the merge directly (PR #107 review, BLOCKING). codex stub is
+# installed so the fallthrough path can actually start a review. ----------
+ln -s "$TMP/bin/codex.stub" "$TMP/bin/codex"
+r="$TMP/merge-failed-stale-head.record"
+run_outer_iteration "$r" STUB_PR_MERGE_FAILED=61 STUB_CURRENT_HEAD=1111111 STUB_RECORDED_HEAD=2222222
+assert_grep "stalled retry (merge-failed, stale head): sweep logs the head mismatch" "[outer] PR #61 head changed since its review passed (recorded=2222222 current=1111111)" "$TMP/err"
+assert_grep "stalled retry (merge-failed, stale head): falls through to a full review cycle" "=== review handoff: PR #61 @" "$TMP/err"
+assert_grep "stalled retry (merge-failed, stale head): sweep removes the label before the fallback review" "CALL=gh pr edit 61 --remove-label review-merge-failed" "$r"
+assert_not_grep "stalled retry (merge-failed, stale head): never merges the unreviewed head" "CALL=gh pr merge" "$r"
+rm -f "$TMP/bin/codex"
 
 # ---------- scenario 2: reviewer CLI still unavailable — label stays, no
 # review is run, and no new work starts ahead of it ----------

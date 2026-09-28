@@ -1097,9 +1097,14 @@ The babysitter has halted — this is not recoverable while it's running. To res
 # ever searches by label, so a labelling failure here would leave the PR
 # undiscoverable while the outer loop moves on to new work (the exact #60
 # orphan class this function exists to close) — halt instead.
-# Args: <pr_num>
+# Args: <pr_num> [head_sha]
+# head_sha, when known, is the commit that codex-review=success was actually
+# posted for; it is recorded on the PR (see review_merge_failed_recorded_head)
+# so a later merge-only retry can confirm the PR head hasn't moved since the
+# review passed before reusing that green status (see PR #107 review).
 flag_review_cycle_merge_failed() {
   local pr_num="$1"
+  local head_sha="${2:-}"
 
   gh label create review-merge-failed \
     --color b60205 \
@@ -1120,9 +1125,24 @@ flag_review_cycle_merge_failed() {
 The review cycle completed with zero BLOCKING findings and \`codex-review\` was already set to success, but \`gh pr merge\` itself failed — see the wrapper log for the exact error (often a transient CI or branch-protection race). No code changes are needed.
 
 Label \`review-merge-failed\` has been added. The stalled-PR retry sweep will find this PR by that label and retry automatically on a later iteration — do NOT remove it yourself (see #82/#104 for why removing a resumable label by hand strands the PR instead of helping). Remove it only if you merge this PR by hand."
+  if [ -n "$head_sha" ]; then
+    body="${body}
+<!-- babysit:merge-failed-head=${head_sha} -->"
+  fi
   printf '%s\n' "$body" \
     | gh pr comment "$pr_num" --body-file - >>"$LOG" 2>&1 \
     || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
+}
+
+# Read back the head SHA recorded by the most recent flag_review_cycle_merge_failed
+# comment, if any. Empty output means "no recorded head" — callers must treat
+# that as unknown/stale, never as "head unchanged" (see PR #107 review).
+review_merge_failed_recorded_head() {
+  local pr_num="$1"
+  gh pr view "$pr_num" --json comments -q '.comments[].body' 2>/dev/null \
+    | grep -o 'babysit:merge-failed-head=[0-9a-f]\{7,40\}' \
+    | tail -n1 \
+    | sed 's/.*=//'
 }
 
 # Validate the strict review parser contract shared by all reviewer harnesses.
@@ -1360,12 +1380,12 @@ merge_reviewed_pr() {
       # removed that label before calling in; without re-flagging here, this
       # failure would leave the PR invisible to every future sweep (see PR
       # #107 review, BLOCKING).
-      flag_review_cycle_merge_failed "$pr_num"
+      flag_review_cycle_merge_failed "$pr_num" "$_head_sha"
       return 0
     fi
   else
     echo "  [review] WARNING: could not resolve repo or head SHA for PR #$pr_num; leaving PR open rather than merging without the status check" | tee -a "$LOG" >&2
-    flag_review_cycle_merge_failed "$pr_num"
+    flag_review_cycle_merge_failed "$pr_num" "$_head_sha"
     return 0
   fi
 
@@ -1385,7 +1405,7 @@ merge_reviewed_pr() {
     echo "  [review] PR #$pr_num merged." | tee -a "$LOG" >&2
   else
     echo "  [review] WARNING: merge failed for PR #$pr_num; left open for next iteration. See $LOG." | tee -a "$LOG" >&2
-    flag_review_cycle_merge_failed "$pr_num"
+    flag_review_cycle_merge_failed "$pr_num" "$_head_sha"
     return 0
   fi
 
@@ -2115,16 +2135,33 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
       # fail_review_cycle, which drafts the PR and labels it
       # review-incomplete, discarding the already-passed review instead of
       # just retrying the merge (see PR #107 review).
-      echo "[outer] retrying merge for PR #$_retry_pr (review-merge-failed)" | tee -a "$LOG" >&2
-      if ! gh pr edit "$_retry_pr" --remove-label "$_retry_label" >>"$LOG" 2>&1; then
-        echo "[outer] WARNING: failed to remove $_retry_label from PR #$_retry_pr; retrying removal next iteration" | tee -a "$LOG" >&2
-        unset _retry_pick _retry_label _retry_pr
-        sleep "$SLEEP_SEC"
+      #
+      # codex-review=success was posted for a specific head SHA, not for
+      # "whatever the PR's head is now" — this label carries no halt/restart
+      # requirement, so the gap between the failed merge and this retry can
+      # span many iterations (or restarts), during which new commits could
+      # land on the branch. Reusing the green status in that case would merge
+      # unreviewed commits. Compare the recorded reviewed head
+      # (review_merge_failed_recorded_head) against the PR's current head
+      # before taking the merge-only shortcut; on any mismatch — or if either
+      # SHA is unknown — fall through to the full review-cycle retry path
+      # below instead of merging (see PR #107 review, BLOCKING).
+      _recorded_head=$(review_merge_failed_recorded_head "$_retry_pr")
+      _current_head=$(gh pr view "$_retry_pr" --json headRefOid -q .headRefOid 2>>"$LOG" || echo "")
+      if [ -n "$_recorded_head" ] && [ -n "$_current_head" ] && [ "$_recorded_head" = "$_current_head" ]; then
+        echo "[outer] retrying merge for PR #$_retry_pr (review-merge-failed)" | tee -a "$LOG" >&2
+        if ! gh pr edit "$_retry_pr" --remove-label "$_retry_label" >>"$LOG" 2>&1; then
+          echo "[outer] WARNING: failed to remove $_retry_label from PR #$_retry_pr; retrying removal next iteration" | tee -a "$LOG" >&2
+          unset _retry_pick _retry_label _retry_pr _recorded_head _current_head
+          sleep "$SLEEP_SEC"
+          continue
+        fi
+        merge_reviewed_pr "$_retry_pr" "retry"
+        unset _retry_pick _retry_label _retry_pr _recorded_head _current_head
         continue
       fi
-      merge_reviewed_pr "$_retry_pr" "retry"
-      unset _retry_pick _retry_label _retry_pr
-      continue
+      echo "[outer] PR #$_retry_pr head changed since its review passed (recorded=${_recorded_head:-unknown} current=${_current_head:-unknown}); routing to a fresh review cycle instead of reusing the stale codex-review status" | tee -a "$LOG" >&2
+      unset _recorded_head _current_head
     fi
     if ! reviewer_binary_available; then
       # Don't remove the label yet: run_review_cycle's own CLI-missing check
