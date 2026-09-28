@@ -261,11 +261,12 @@ Events emitted to stderr:
 ## Failure modes & blast radius
 - **Jira API unavailable:** Jira-sourced tickets skipped for the run; GitHub-sourced
   tickets still processed. Blast: partial coverage, no run failure.
-- **Approval regex false positive** (e.g., a comment saying "this is not approved yet"
-  matches `\bapproved\b`): spec merges prematurely. Blast: a spec that wasn't actually
-  ready for build enters the sub-ticket queue; caught at PR-review time by the builder's
-  own review cycle, but wastes a build cycle. Mitigated by tightening the regex or
-  requiring an exact-phrase marker — open question, see assumptions above.
+- **Approval regex false positive** (e.g., a comment whose first line reads "Approved
+  in principle, still needs another pass" matches the line-start-anchored rule even
+  though it isn't an unambiguous sign-off): spec merges prematurely. Blast: a spec that
+  wasn't actually ready for build enters the sub-ticket queue; caught at PR-review time
+  by the builder's own review cycle, but wastes a build cycle. Mitigated by tightening
+  the regex or requiring an exact-phrase marker — open question, see assumptions above.
 - **Duplicate sub-ticket creation** (idempotency check fails): builder queue gets two
   entries for the same spec. Blast: builder does duplicate work on two PRs; low, since
   the builder's own review cycle would still gate merge.
