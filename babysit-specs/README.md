@@ -80,11 +80,11 @@ scripts" sections) rather than kept in a separate amendments file — no
 ## Key Decisions Documented
 
 1. **Scale:** <10 users at 6mo/18mo (personal/internal tool, not OSS distribution)
-2. **Architecture:** Bash orchestrator with subprocess components (selectable implementer + selectable reviewer + gh + git); v1.1.2, 2,116 lines
+2. **Architecture:** Bash orchestrator with subprocess components (selectable implementer + selectable reviewer + gh + git); v1.3.0, 2,437 lines
 3. **Review convergence:** Prescriptive mode kicks in at cycle 3 (requires "Suggested fix:"); inline planning (not plan mode) at cycle 2+
 4. **MCP resilience:** 3 retries with 0/60s/300s backoff on transport failures
 5. **Merge gate:** PRs merge only after `codex-review=success` status POSTed by `run_review_cycle` (enforced by `setup-branch-protection.sh`); BLOCKING=0 alone does not merge
-6. **Four quarantine labels:** `review-incomplete` (human action, no retry), `review-mcp-outage` (auto-retry), `review-codex-outdated` (upgrade CLI), `review-codex-no-credits` (add credits)
+6. **Five quarantine labels:** `review-incomplete` (human action, no retry), `review-mcp-outage` (auto-retry), `review-codex-outdated` (upgrade CLI), `review-codex-no-credits` (add credits), `review-merge-failed` (review passed, merge itself failed — sweep retries the merge only, not the review)
 7. **Work-prep approval gate:** Human posts unambiguous approval comment (case-insensitive `\bapproved\b`) on spec PR → work-prep merges spec, labels the *source* ticket `status:ready-to-build` (meaning "spec approved, sub-ticket exists"), and creates a `sub-ticket` + `build-ready` sub-ticket that the builder picks up
 8. **Builder halt (no auto-merge):** Builder halts when reviewer returns BLOCKING=0 OR max cycles exhausted; posts reviewer summary PR comment; human does final merge
 9. **Parallel label namespaces:** Builder uses `build-*` labels; babysit-with-review.sh uses `review-*` labels; no overlap
