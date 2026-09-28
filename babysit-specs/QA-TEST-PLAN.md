@@ -253,10 +253,10 @@ calls. This is the regression coverage for #82/#104/#107.
 
 Covered scenarios:
 - **Reviewer available, one of the first three labels:** the sweep removes the
-  label only after `run_review_cycle` actually runs (never before — un-drafting
-  or removing the label ahead of the retry would let the PR merge unreviewed if
-  the retry itself then failed), never merges an unreviewed PR, and logs which
-  PR/label it is retrying.
+  label itself before calling `run_review_cycle` (so a review that then bails
+  to `review-incomplete` — a label the sweep must not retry — doesn't leave a
+  stale resumable label behind for the next sweep to pick up), never merges an
+  unreviewed PR, and logs which PR/label it is retrying.
 - **Label removal fails:** the sweep does not invoke `run_review_cycle` over a
   now-stale label state and logs the removal failure.
 - **`review-merge-failed`, head unchanged:** the sweep takes the merge-only
@@ -286,8 +286,9 @@ queue for new work, per the scenario table above
 2. Run: `MAX_ITER=1 ~/repo/scripts/babysit-with-review.sh`
 3. Verify: Log shows the sweep found and retried/merge-retried the labelled PR
    before considering any new ticket
-4. Verify: the label is removed only after the retry reaches the outcome
-   described above for that label
+4. Verify: the label removal timing matches the scenario table above (removed
+   before `run_review_cycle` for the first three labels; removed only after
+   the merge is confirmed for `review-merge-failed`)
 
 ---
 
@@ -335,14 +336,17 @@ branch) against a stubbed `gh`/`git` on PATH, covering the actual merge
 mechanics that the blocking-count harness doesn't reach: the
 `codex-review=success` status POST, that `gh pr ready` is called before
 `gh pr merge` (a PR can still be draft at this point — see below), that a
-`gh pr ready` failure doesn't abort the merge attempt, that a status-POST
-failure skips both `gh pr ready` and `gh pr merge` entirely, and the
-`--auto` → plain-merge fallback. It also covers the case where both merge
-attempts fail: `flag_review_cycle_merge_failed` labels the PR
-`review-merge-failed`, posts an explanatory comment, and does **not** re-draft
-it (the review already passed — see TC-1.9 for how the outer loop's stalled-PR
-sweep picks this label back up), and a `gh pr edit --add-label` failure itself
-halts the wrapper rather than continuing silently unlabelled. The full
+`gh pr ready` failure doesn't abort the merge attempt, and that a status-POST
+failure skips both `gh pr ready` and `gh pr merge` entirely. The single merge
+attempt is pinned to the reviewed head via `--match-head-commit`; `--auto` is
+deliberately never used, since GitHub only validates `--match-head-commit` at
+merge time, not when queuing an auto-merge (see the script's own comment
+above the call). It also covers the case where that merge attempt fails:
+`flag_review_cycle_merge_failed` labels the PR `review-merge-failed`, posts an
+explanatory comment, and does **not** re-draft it (the review already
+passed — see TC-1.9 for how the outer loop's stalled-PR sweep picks this
+label back up), and a `gh pr edit --add-label` failure itself halts the
+wrapper rather than continuing silently unlabelled. The full
 `gh pr view N --json state` end-to-end assertion remains the manual acceptance
 reference below.
 
@@ -356,7 +360,7 @@ best-effort `gh pr ready` call before the merge attempt in
 
 **Given:** Codex returns 0 BLOCKING findings  
 **When:** Cycle completes  
-**Then:** PR is merged via `gh pr merge --squash [--auto]`
+**Then:** PR is merged via `gh pr merge --squash --delete-branch --match-head-commit <reviewed-head-sha>`
 
 **Test steps:**
 1. Create test PR with clean code (no issues)
