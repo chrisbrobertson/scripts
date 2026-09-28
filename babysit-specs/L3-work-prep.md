@@ -188,12 +188,12 @@ babysit-work-prep.sh [--repo OWNER/REPO] [--source github|jira|both]
 
 ### Response shape
 ```
-# stdout: per-phase summary
-[draft] ticket #42 (github) → PR #101 opened
-[draft] ticket PROJ-7 (jira) → PR #102 opened
-[draft] ticket #43 (github) → already has open spec PR #98, skipped
-[approve] PR #98 → approved comment found → merged, ticket #40 labelled status:ready-to-build, sub-ticket #103 created (labelled sub-ticket+build-ready)
-[approve] PR #99 → no approval comment yet, skipped
+# stdout: example events (verbatim forms the script echoes — see Telemetry contract)
+[draft] ticket 42 (github) → draft PR #101 opened (babysit-specs/example.md), entering spec review
+[draft] ticket PROJ-7 (jira) → draft PR #102 opened (babysit-specs/example-jira.md), entering spec review
+[draft] ticket 43 (github) → already has open/merged spec PR #98, skipped
+[approve] PR #98 → approved by chris, merged/reconciled, sub-ticket #103 created
+[approve] PR #99 → no authorized approval comment yet, skipped
 
 # exit 0 even when zero tickets are drafted or approved this run
 ```
