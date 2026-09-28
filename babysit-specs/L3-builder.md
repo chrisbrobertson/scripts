@@ -169,9 +169,13 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
   - **Stalled-PR sweep runs before the queue is read.** A PR quarantined behind any of
     the three resumable labels (`build-mcp-outage`, `build-codex-outdated`,
     `build-codex-no-credits`) by a previous run is resumed first — its head branch is
-    fetched into a reconstructed worktree, its label is removed, the PR is un-drafted,
-    and the build cycle restarts. All three are swept the same way: the sweep runs
-    after `reviewer_preflight` has already passed for the current run, so a still-live
+    fetched into a reconstructed worktree, the PR is un-drafted, and the build cycle
+    restarts. Only once the build cycle reaches a terminal state is the ticket marked
+    done and the resumable label(s) removed — never before: removing the label first
+    would leave the PR undiscoverable by this same sweep (and its ticket still
+    `build-ready`) if the run were interrupted mid-cycle, or if marking the ticket done
+    failed outright. All three are swept the same way: the sweep runs after
+    `reviewer_preflight` has already passed for the current run, so a still-live
     Codex-CLI/credits problem halts before the sweep is ever reached. Ordering matters:
     each of these PRs' tickets is still `build-ready`, so reading the queue first would
     rebuild any of them into the duplicate PR the sweep exists to avoid.
