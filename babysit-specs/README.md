@@ -12,7 +12,7 @@ TIF (Trustable, Intuitive, Flexible) specifications documenting the autonomous d
 | **L3** | [L3-review-cycle.md](L3-review-cycle.md) | review | Review cycle: reviewer → implementer fixes → convergence + codex-review status gate |
 | **L3** | [L3-mcp-resilience.md](L3-mcp-resilience.md) | review | MCP resilience: retry-with-backoff + valid_review_structure for Codex transport failures |
 | **L3** | [L3-retrospective-review.md](L3-retrospective-review.md) | review | Retrospective review: one-shot Codex review for merged PRs that bypassed forward-path |
-| **L3** | L3-work-prep.md | review | Work-prep loop: ticket → TIF spec pipeline with human approval gate and sub-ticket creation — drafted on open PR #8 (`docs/l3-work-prep-spec`), not yet merged to main |
+| **L3** | [L3-work-prep.md](L3-work-prep.md) | review | Work-prep loop: ticket → TIF spec pipeline with human approval gate and sub-ticket creation |
 | **L3** | [L3-builder.md](L3-builder.md) | review | Builder loop: spec → PR pipeline with convergent adversarial review cycle and human merge gate |
 | **L4** | [L4-selectable-implementer.md](L4-selectable-implementer.md) | **ready** | Select Claude or Codex implementation harness with role-specific model/effort |
 | **L4** | [L4-selectable-reviewer.md](L4-selectable-reviewer.md) | **ready** | Select Claude or Codex review harness with role-specific model/effort |
@@ -35,9 +35,13 @@ scripts" sections) rather than kept in a separate amendments file — no
   (see SECURITY-REVIEW-PLAN.md); QA smoke tests deferred pending a mock harness for
   Claude/Codex output (see QA-TEST-PLAN.md)
 - **L3 work-prep + builder design decisions (7-9 below):** approved by owner 2026-08-27
-- **L3 work-prep spec:** `review` — drafted 2026-08-27 on open PR #8 (`docs/l3-work-prep-spec`,
-  not yet merged to main); several implementation mechanics are flagged `[ASSUMPTION]`
-  pending owner sign-off
+- **L3 work-prep spec:** `review` — drafted 2026-08-27 from the approved decisions;
+  several implementation mechanics are flagged `[ASSUMPTION]` pending owner sign-off
+  (see "What we assume" in [L3-work-prep.md](L3-work-prep.md)). Its sub-ticket
+  dedup and Jira-labelling mechanics were corrected 2026-09-28 to match the shipped
+  `babysit-work-prep.sh` (dedupe by an embedded sub-ticket marker searched across all
+  issues, not by the `status:ready-to-build` label, which the shipped script only
+  ever applies to GitHub-sourced tickets).
 - **L3 builder spec:** `review` — drafted 2026-08-27 from the approved decisions, then
   revised same-day to key off a `build-ready` label across GitHub/Jira tickets (not
   just work-prep sub-tickets) and to kick back gap-having specs for clarification
@@ -66,8 +70,8 @@ scripts" sections) rather than kept in a separate amendments file — no
   Adjudication mode (cycles 5-6 in `babysit-with-review.sh`) is deliberately
   omitted — the disagree-and-escalate protocol is for code, and a recurring
   finding on a spec should become a flagged `[ASSUMPTION]`, not an argument.
-  **Note:** `L3-work-prep.md` still sits on unmerged PR #8 and predates all of
-  this — it documents neither the review gate nor the `build-ready` output.
+  **Note:** `L3-work-prep.md` still predates this gate and does not yet document it
+  or the `build-ready` output naming, even after the 2026-09-28 correction above.
 - **L4 tasks:** `ready` (both selectable-implementer and selectable-reviewer)
 - **Complexity:** 2/30 (trivial band per TIF rubric)
 - **Fit check:** Passed (specs are appropriate artifact)
@@ -80,7 +84,7 @@ scripts" sections) rather than kept in a separate amendments file — no
 ## Key Decisions Documented
 
 1. **Scale:** <10 users at 6mo/18mo (personal/internal tool, not OSS distribution)
-2. **Architecture:** Bash orchestrator with subprocess components (selectable implementer + selectable reviewer + gh + git); v1.3.0, 2,437 lines
+2. **Architecture:** Bash orchestrator with subprocess components (selectable implementer + selectable reviewer + gh + git); v1.3.1, 2,440 lines
 3. **Review convergence:** Prescriptive mode kicks in at cycle 3 (requires "Suggested fix:"); inline planning (not plan mode) at cycle 2+
 4. **MCP resilience:** 3 retries with 0/60s/300s backoff on transport failures
 5. **Merge gate:** PRs merge only after `codex-review=success` status POSTed by `run_review_cycle` (enforced by `setup-branch-protection.sh`); BLOCKING=0 alone does not merge

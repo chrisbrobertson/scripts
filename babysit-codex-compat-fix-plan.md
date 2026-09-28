@@ -1,6 +1,10 @@
 # Plan — Codex version/model compatibility: silent-merge bug fix + retrospective review
 
-> **Status:** drafted, not yet implemented. Execute when ready.
+> **Status:** implemented. `compat_re`/`review-codex-outdated` shipped in
+> `babysit-with-review.sh` (see `compat_re` at the retry and pre-flight functions,
+> `fail_review_cycle_codex_outdated` for the labelling/halt path), and
+> `babysit-specs/L3-mcp-resilience.md` + `babysit-specs/L3-review-cycle.md` were
+> updated accordingly. This plan doc is kept for historical context only.
 
 ---
 
