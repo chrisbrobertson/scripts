@@ -215,9 +215,13 @@ p=$( source "$LIB"; remediation_prompt spec 2 ); case "$p" in *"index.md"*"log.m
 case "$p" in *"Edit ONLY the spec file"*) fail "spec remediation prompt no longer restricts to one file" ;; *) pass "spec remediation prompt no longer restricts to one file" ;; esac
 for pair in "BZR_CODE_REVIEW_C1:REVIEW_PROMPT_CYCLE1:babysit-builder.sh" "BZR_CODE_REM_C5_6:REMEDIATION_PROMPT_CYCLE5_6:babysit-builder.sh" "BZR_SPEC_REVIEW_C3:SPEC_REVIEW_PROMPT_CYCLE3:babysit-work-prep.sh"; do
   IFS=: read -r ours theirs src <<< "$pair"
-  a=$(sed -n "/^IFS= read -r -d .. $ours /,/^PROMPT_EOF$/p" "$LIB" | sed 1d | hash_text)
-  b=$(sed -n "/^IFS= read -r -d .. $theirs /,/^PROMPT_EOF$/p" "$ROOT/$src" | sed 1d | hash_text)
-  assert_eq "prompt $ours verbatim from $src" "$a" "$b"
+  a=$(sed -n "/^IFS= read -r -d .. $ours /,/^PROMPT_EOF$/p" "$LIB" | sed 1d | hash_text); ra=$?
+  b=$(sed -n "/^IFS= read -r -d .. $theirs /,/^PROMPT_EOF$/p" "$ROOT/$src" | sed 1d | hash_text); rb=$?
+  if [ "$ra" -ne 0 ] || [ "$rb" -ne 0 ]; then
+    fail "prompt $ours verbatim from $src (hash_text failed: rc=$ra/$rb)"
+  else
+    assert_eq "prompt $ours verbatim from $src" "$a" "$b"
+  fi
 done
 
 # ---------- the cycle: AT3, AT5 ----------
