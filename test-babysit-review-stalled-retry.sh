@@ -108,15 +108,36 @@ cat > "$TMP/bin/gh" <<STUB
 #!/bin/bash
 printf 'CALL=gh %s\n' "\$*" >> "\$RECORD"
 case "\$*" in
+  "repo view --json nameWithOwner"*) echo owner/repo; exit 0 ;;
   "repo view"*) echo main; exit 0 ;;
   "api user"*) printf 'babysit-bot'; exit 0 ;;
+  # The review-merge-conflict scan pages through repos/<owner>/issues with
+  # gh api --paginate (not gh pr list, whose 30-result default hid PRs past
+  # the first page -- #111 review cycle 4). The production jq filter already
+  # reduces to bare PR numbers, so this stub emits them directly, one per
+  # line, exactly as the real paginated call would.
+  "api --paginate repos/"*"labels=review-merge-conflict"*) printf '%s\n' \${STUB_PR_MERGE_CONFLICT:-}; exit 0 ;;
   "pr list --state open --label review-codex-outdated"*) printf '%s' "\${STUB_PR_OUTDATED:-}"; exit 0 ;;
   "pr list --state open --label review-mcp-outage"*) printf '%s' "\${STUB_PR_MCP:-}"; exit 0 ;;
   "pr list --state open --label review-codex-no-credits"*) printf '%s' "\${STUB_PR_CREDITS:-}"; exit 0 ;;
   "pr list --state open --label review-merge-failed"*) printf '%s' "\${STUB_PR_MERGE_FAILED:-}"; exit 0 ;;
   "pr view "*"--json headRefOid"*) printf '%s' "\${STUB_CURRENT_HEAD:-}"; exit 0 ;;
-  "pr view "*"--json state"*) printf '%s' "\${STUB_PR_STATE:-MERGED}"; exit 0 ;;
   "pr merge "*) exit "\${STUB_MERGE_RC:-0}" ;;
+esac
+if [ "\$1" = "pr" ] && [ "\$2" = "view" ] && [ "\${4:-}" = "--json" ] && [ "\${5:-}" = "mergeable" ]; then
+  # Per-PR override (STUB_MERGEABLE_<N>) lets a single iteration report
+  # different mergeable states for different PRs — needed to prove the
+  # review-merge-conflict lookup scans every labelled PR instead of always
+  # re-checking whichever one --limit 1 happened to return (#111 review
+  # cycle 3, BLOCKING). Falls back to the single generic STUB_MERGEABLE for
+  # every scenario that only ever has one PR in play.
+  pr_num="\$3"
+  var="STUB_MERGEABLE_\$pr_num"
+  printf '%s' "\${!var:-\${STUB_MERGEABLE:-}}"
+  exit 0
+fi
+case "\$*" in
+  "pr view "*"--json state"*) printf '%s' "\${STUB_PR_STATE:-MERGED}"; exit 0 ;;
 esac
 if [ "\$1" = "pr" ] && [ "\$2" = "view" ] && [ "\${4:-}" = "--json" ] && [ "\${5:-}" = "comments" ]; then
   if [ -z "\${STUB_RECORDED_HEAD:-}" ]; then
@@ -275,8 +296,29 @@ assert_grep "stalled retry (merge-failed, stale head): sweep removes the label b
 assert_not_grep "stalled retry (merge-failed, stale head): never merges the unreviewed head" "CALL=gh pr merge" "$r"
 rm -f "$TMP/bin/codex"
 
+# ---------- scenario 1c-3: review-merge-failed is stale — the PR is actually
+# CONFLICTING right now (simulating a prior flag_review_cycle_merge_conflict
+# call whose best-effort `--remove-label review-merge-failed` failed, leaving
+# both labels on). Head is unchanged (recorded == current), so this would
+# otherwise take the merge-only shortcut and retry a merge that is guaranteed
+# to fail the exact same way forever (#111 review cycle 2, BLOCKING). The
+# sweep must detect this via `gh pr view --json mergeable` BEFORE attempting
+# any merge, re-route to review-merge-conflict directly, and defer (fall
+# through to new work) rather than looping. No codex stub is installed — if
+# the sweep ever ran a full review cycle here, `codex` would be missing from
+# PATH. ----------
+r="$TMP/merge-failed-actually-conflicting.record"
+run_outer_iteration "$r" STUB_PR_MERGE_FAILED=63 STUB_CURRENT_HEAD=ddd4567 STUB_RECORDED_HEAD=ddd4567 STUB_MERGEABLE=CONFLICTING
+assert_not_grep "stalled retry (merge-failed, actually conflicting): never attempts the doomed merge" "CALL=gh pr merge 63" "$r"
+assert_not_grep "stalled retry (merge-failed, actually conflicting): never runs a full review cycle" "=== review handoff: PR #63 @" "$TMP/err"
+assert_not_grep "stalled retry (merge-failed, actually conflicting): never invokes the reviewer CLI" "CALL=codex" "$r"
+assert_grep "stalled retry (merge-failed, actually conflicting): sweep logs the re-route" "[outer] PR #63 is CONFLICTING despite the review-merge-failed label (stale label from a prior failed removal); re-routing to review-merge-conflict instead of retrying a doomed merge" "$TMP/err"
+assert_grep "stalled retry (merge-failed, actually conflicting): review-merge-conflict label is added" "CALL=gh pr edit 63 --add-label review-merge-conflict" "$r"
+assert_grep "stalled retry (merge-failed, actually conflicting): stale review-merge-failed label removal is (re-)attempted" "CALL=gh pr edit 63 --remove-label review-merge-failed" "$r"
+assert_grep "stalled retry (merge-failed, actually conflicting): falls through to new implementer work instead of looping (#111 review cycle 2, BLOCKING)" "[outer] worktree:" "$TMP/err"
+
 else
-  echo "SKIP: jq not on PATH; scenarios 1c/1c-2/1d need it to exercise the real gh -q filter used by review_merge_failed_recorded_head" >&2
+  echo "SKIP: jq not on PATH; scenarios 1c/1c-2/1c-3/1d need it to exercise the real gh -q filter used by review_merge_failed_recorded_head" >&2
 fi
 
 # ---------- scenario 2: reviewer CLI still unavailable — label stays, no
@@ -287,6 +329,69 @@ assert_not_grep "stalled retry (reviewer unavailable): label is left in place fo
 assert_not_grep "stalled retry (reviewer unavailable): run_review_cycle is never invoked" "=== review handoff: PR #96 @" "$TMP/err"
 assert_grep "stalled retry (reviewer unavailable): sweep logs that it's deferring" "[outer] codex CLI still unavailable; leaving PR #96 labelled review-codex-outdated for a later retry" "$TMP/err"
 assert_not_grep "stalled retry (reviewer unavailable): does not fall through to new implementer work" "[outer] worktree:" "$TMP/err"
+
+# ---------- scenario 1e: a PR is stalled behind review-merge-conflict but
+# GitHub still reports it CONFLICTING — the fix for the #111 (review cycle 1)
+# finding that a real conflict must never be blindly retried. The sweep must
+# defer: leave the label in place and never call run_review_cycle. But unlike
+# the reviewer-unavailable case (scenario 2 below), it must now (fix for the
+# #111 review cycle 2 BLOCKING finding) fall through to new implementer work
+# in the SAME iteration rather than `continue`-looping back to re-select the
+# identical unresolved PR — a conflict has no bound on how long it sits, and
+# the old behavior burned the entire MAX_ITER budget re-picking the same PR
+# every iteration, starving both new work and any other stalled PR until the
+# run just ended. ----------
+r="$TMP/merge-conflict-still-conflicting.record"
+run_outer_iteration "$r" STUB_PR_MERGE_CONFLICT=83 STUB_MERGEABLE=CONFLICTING
+assert_not_grep "stalled retry (merge-conflict, still conflicting): label is left in place" "--remove-label" "$r"
+assert_not_grep "stalled retry (merge-conflict, still conflicting): run_review_cycle is never invoked" "=== review handoff: PR #83 @" "$TMP/err"
+assert_grep "stalled retry (merge-conflict, still conflicting): sweep logs that it's deferring" "[outer] PR #83 still CONFLICTING (or not yet known); leaving it labelled review-merge-conflict for a later retry" "$TMP/err"
+assert_grep "stalled retry (merge-conflict, still conflicting): falls through to new implementer work instead of starving it (#111 review cycle 2, BLOCKING)" "[outer] worktree:" "$TMP/err"
+
+# ---------- scenario 1f: a PR is stalled behind review-merge-conflict and a
+# human has since merged the base branch in and pushed — GitHub's mergeable
+# computation now reports MERGEABLE. The sweep must detect this (the #111
+# fix: this label was previously a dead end, promising a fresh review that
+# never actually ran) and route to a real review cycle over the merged-up
+# diff, removing the label first like the other resumable labels. ----------
+ln -s "$TMP/bin/codex.stub" "$TMP/bin/codex"
+r="$TMP/merge-conflict-resolved.record"
+run_outer_iteration "$r" STUB_PR_MERGE_CONFLICT=83 STUB_MERGEABLE=MERGEABLE
+assert_grep "stalled retry (merge-conflict, resolved): sweep removes the label" "CALL=gh pr edit 83 --remove-label review-merge-conflict" "$r"
+assert_grep "stalled retry (merge-conflict, resolved): run_review_cycle actually ran for the stalled PR" "=== review handoff: PR #83 @" "$TMP/err"
+assert_grep "stalled retry (merge-conflict, resolved): sweep logs the transition" "[outer] PR #83 no longer CONFLICTING (mergeable=MERGEABLE); routing to a fresh review cycle to re-review the merged-up diff" "$TMP/err"
+rm -f "$TMP/bin/codex"
+
+# ---------- scenario 1g: TWO PRs are stalled behind review-merge-conflict —
+# an older one (90) still genuinely CONFLICTING, and a newer one (91) whose
+# conflict has since been resolved. The old `--limit 1` lookup always
+# returned whichever PR GitHub's default ordering surfaced first (90 here)
+# and, finding it still conflicting, could never discover that 91 was ready
+# for its promised fresh review — starving it indefinitely regardless of how
+# many later iterations ran (#111 review cycle 3, BLOCKING). The sweep must
+# scan every open PR carrying the label and act on the first one that is
+# actually MERGEABLE, leaving the genuinely-conflicting one untouched. ----------
+ln -s "$TMP/bin/codex.stub" "$TMP/bin/codex"
+r="$TMP/merge-conflict-multi-one-resolved.record"
+run_outer_iteration "$r" STUB_PR_MERGE_CONFLICT="90 91" STUB_MERGEABLE_90=CONFLICTING STUB_MERGEABLE_91=MERGEABLE
+assert_grep "stalled retry (merge-conflict, multi/one resolved): sweep acts on the resolved PR (91), not the still-conflicting one (90)" "CALL=gh pr edit 91 --remove-label review-merge-conflict" "$r"
+assert_grep "stalled retry (merge-conflict, multi/one resolved): run_review_cycle runs for the resolved PR" "=== review handoff: PR #91 @" "$TMP/err"
+assert_not_grep "stalled retry (merge-conflict, multi/one resolved): the still-conflicting PR is left untouched" "CALL=gh pr edit 90 --remove-label" "$r"
+assert_not_grep "stalled retry (merge-conflict, multi/one resolved): never runs a review cycle for the still-conflicting PR" "=== review handoff: PR #90 @" "$TMP/err"
+rm -f "$TMP/bin/codex"
+
+# ---------- scenario 1h: TWO PRs stalled behind review-merge-conflict and
+# BOTH are still genuinely CONFLICTING — the sweep falls back to the first PR
+# in the list (90) for its defer-and-log check (same behavior/logging as the
+# single-PR case), leaves both labels in place, and falls through to new
+# work rather than misinterpreting "scanned the whole list" as "found one to
+# act on". ----------
+r="$TMP/merge-conflict-multi-none-resolved.record"
+run_outer_iteration "$r" STUB_PR_MERGE_CONFLICT="90 91" STUB_MERGEABLE_90=CONFLICTING STUB_MERGEABLE_91=CONFLICTING
+assert_not_grep "stalled retry (merge-conflict, multi/none resolved): neither PR's label is removed" "--remove-label" "$r"
+assert_not_grep "stalled retry (merge-conflict, multi/none resolved): run_review_cycle is never invoked" "=== review handoff: PR #9" "$TMP/err"
+assert_grep "stalled retry (merge-conflict, multi/none resolved): sweep logs that it's deferring the fallback PR" "[outer] PR #90 still CONFLICTING (or not yet known); leaving it labelled review-merge-conflict for a later retry" "$TMP/err"
+assert_grep "stalled retry (merge-conflict, multi/none resolved): falls through to new implementer work" "[outer] worktree:" "$TMP/err"
 
 # ---------- no resumable label on any open PR: sweep is a no-op ----------
 r="$TMP/none.record"

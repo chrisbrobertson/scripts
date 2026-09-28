@@ -40,10 +40,20 @@
 # same pre-iter sweep, lowest priority, on the next outer iteration of the same run,
 # no restart needed. It DOES halt, fail-closed, if the label itself can't be applied,
 # since the sweep can only find this PR again by that label.
+# `review-merge-conflict` = same starting point as review-merge-failed (review already
+# passed, codex-review=success already set) but `gh pr merge` failed because GitHub's
+# own mergeable computation reports the PR CONFLICTING against the base branch — a
+# permanent condition, not a transient CI/branch-protection race. Retrying the same
+# merge can never succeed on its own, so it needs a human to merge the base branch in
+# (or close the PR) — the wrapper never pushes a conflict-resolution commit itself.
+# Unlike the other four labels, it IS in RESUMABLE_STALL_LABELS but is gated: the
+# pre-iter sweep checks `gh pr view --json mergeable` first and only acts once that
+# reports the conflict is gone, then runs a full fresh review cycle (not a merge-only
+# shortcut) against the merged-up diff. Does not halt the wrapper.
 
 set -uo pipefail
 
-VERSION="1.3.1"
+VERSION="1.4.0"
 
 usage() {
   cat <<'EOF'
@@ -100,6 +110,12 @@ PR labels used by the review cycle:
                          set) but \`gh pr merge\` itself failed; does NOT
                          halt the wrapper, retried by the same sweep on the
                          next outer iteration.
+  review-merge-conflict  Same starting point as review-merge-failed, but
+                         GitHub reports the PR CONFLICTING against the base
+                         branch — a permanent condition. Needs a human to
+                         merge the base branch in (or close the PR); the
+                         sweep then detects the conflict is gone and runs a
+                         fresh review cycle automatically — no restart needed.
 
 Logs land in ~/sisyphus-logs/<project>-<timestamp>-<pid>.log.
 
@@ -293,7 +309,7 @@ Pick the next unit of work in this priority order — stop at the first level th
 
    SKIP any PR whose STATE is `draft` or `BLOCKED` in the prs table (or `isDraft: true` / labels include `review-incomplete` in the JSON). These PRs were marked by a previous review cycle as needing human intervention — re-attempting them wastes iterations. Move on to item 2.
 
-   Also SKIP PRs labelled `review-mcp-outage`, `review-codex-no-credits`, or `review-merge-failed` — these are managed by the wrapper itself and require operator action (or just its own automatic retry) before the review cycle can proceed. `review-merge-failed` in particular may already be un-drafted and passing CI — do not merge it yourself; the wrapper's sweep retries it. Do not touch any of these.
+   Also SKIP PRs labelled `review-mcp-outage`, `review-codex-no-credits`, `review-merge-failed`, or `review-merge-conflict` — these are managed by the wrapper itself and require operator action (or just its own automatic retry) before the review cycle can proceed. `review-merge-failed` in particular may already be un-drafted and passing CI — do not merge it yourself; the wrapper's sweep retries it. `review-merge-conflict` means the review already passed but the PR has a real merge conflict against the base branch — it needs a human to merge the base branch in or close it; do not push a conflict-resolution commit to it yourself. Once a human resolves it, the wrapper's own sweep detects the conflict is gone and runs a fresh review automatically — you don't need to (and shouldn't) do anything else with it. Do not touch any of these.
 2. Open issues you can complete in one iteration. See open issues in the project state above. Pick the highest-priority one that fits the scope discipline below.
 3. Approved specs with no implementation. See specs in the project state above — look for rows where IMPL is `no` or `?`. Scaffold the next missing piece — project skeleton, an interface stub, the first integration test, etc.
 4. Proto definitions without consumers. Files under ./proto/ that no service implements. Generate stubs or wire a service skeleton that consumes them.
@@ -1151,6 +1167,93 @@ Label \`review-merge-failed\` has been added. The stalled-PR retry sweep will fi
     || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
 }
 
+# Like flag_review_cycle_merge_failed, but for the permanent case: GitHub's own
+# mergeable computation reports the PR CONFLICTING against the base branch, not
+# a transient CI/branch-protection race. Retrying the identical `gh pr merge`
+# call can never succeed on its own, so this label IS in RESUMABLE_STALL_LABELS
+# but gated: the outer sweep checks `gh pr view --json mergeable` first and
+# only acts once that reports the conflict is actually gone (see the
+# review-merge-conflict branch of the outer sweep below). Until then the sweep
+# must defer without burning the MAX_ITER budget re-selecting the same
+# unresolved PR forever (the exact shape of the #82 backlog: #83, #91, and #9
+# all sat behind stale, now-conflicting branches through repeated merge-only
+# retries; see #111 review cycle 2 for the fix that made deferring actually
+# fall through to new work instead of looping). Does not halt the wrapper —
+# same rationale as flag_review_cycle_merge_failed: the review already passed
+# and the reviewer backend is fine, only the git-hosting-side merge is
+# blocked.
+# Args: <pr_num> [head_sha]
+flag_review_cycle_merge_conflict() {
+  local pr_num="$1"
+  local head_sha="${2:-}"
+
+  gh label create review-merge-conflict \
+    --color b60205 \
+    --description "Babysit review passed but the PR has a real merge conflict against the base branch; needs manual rebase or closure, not auto-retried" \
+    --force >>"$LOG" 2>&1 || true
+
+  # Fail-closed for the same reason as flag_review_cycle_merge_failed: without
+  # the label, this PR is invisible to any future triage and the loop would
+  # just keep starting new work around it.
+  if ! gh pr edit "$pr_num" --add-label review-merge-conflict >>"$LOG" 2>&1; then
+    echo "ERROR: gh pr edit --add-label failed for PR #$pr_num — merge conflict detected and PR is unlabelled; manually add 'review-merge-conflict', rebase, or close it before restarting" | tee -a "$LOG" >&2
+    exit 1
+  fi
+
+  # A caller reaching a real conflict via the review-merge-failed retry
+  # shortcut still has that label on the PR (merge_reviewed_pr's callers
+  # deliberately leave it on through the merge attempt — see the sweep's
+  # merge-only-retry comment). Left in place, pick_stalled_retry's priority
+  # order would keep finding review-merge-failed first forever and retrying
+  # the identical doomed merge instead of ever surfacing review-merge-conflict.
+  # If this PR reached a real conflict via a fresh review instead, the label
+  # was never present and removal is a harmless no-op every attempt.
+  #
+  # A single best-effort attempt left a gap: if the one `gh pr edit` call hit
+  # a transient API blip, review-merge-failed stuck around and its higher
+  # sweep priority routed the PR through the merge-only-retry shortcut forever
+  # — a real conflict re-attempting the identical doomed merge every outer
+  # iteration (see #111 review cycle 2, BLOCKING). Retry a few times before
+  # giving up; the outer sweep's review-merge-failed branch also re-checks
+  # `mergeable` directly and self-heals this exact case if all retries here
+  # still fail (defense in depth, not a substitute for this retry).
+  _mc_removed=0
+  for _mc_attempt in 1 2 3; do
+    if gh pr edit "$pr_num" --remove-label review-merge-failed >>"$LOG" 2>&1; then
+      _mc_removed=1
+      break
+    fi
+  done
+  if [ "$_mc_removed" -ne 1 ]; then
+    echo "  [review] WARNING: failed to remove review-merge-failed from PR #$pr_num after 3 attempts; the outer sweep's review-merge-failed branch will self-heal this on its next pass" | tee -a "$LOG" >&2
+  fi
+  unset _mc_removed _mc_attempt
+
+  # Resolve against the PR's own base branch, not the wrapper's DEFAULT_BRANCH:
+  # a PR can target a release/feature base that differs from the repo default,
+  # and handing the operator a `git merge origin/<default>` command for the
+  # wrong base sends them through an incorrect resolution (see #111 review
+  # cycle 4, RECOMMENDED). Fall back to DEFAULT_BRANCH only if the lookup fails.
+  local _base_branch
+  _base_branch=$(gh pr view "$pr_num" --json baseRefName -q .baseRefName 2>>"$LOG") || _base_branch=""
+  [ -n "$_base_branch" ] || _base_branch="$DEFAULT_BRANCH"
+
+  local body="**babysit-with-review: review passed but the PR has a real merge conflict**
+
+The review cycle completed with zero BLOCKING findings and \`codex-review\` was already set to success, but \`gh pr merge\` failed because GitHub reports this PR CONFLICTING against the base branch — not a transient CI or branch-protection race. Retrying the same merge cannot succeed on its own.
+
+Label \`review-merge-conflict\` has been added. Retrying the identical merge can never succeed on its own, so the stalled-PR sweep will NOT retry it until the conflict is actually gone. To resolve:
+- Merge the base branch into this branch and resolve the conflicts (\`gh pr checkout ${pr_num} && git fetch origin ${_base_branch} && git merge origin/${_base_branch}\`, resolve, push) — the wrapper's sweep detects the conflict is gone and automatically runs a fresh review cycle against the merged-up diff on a later iteration, no restart needed, or
+- Close this PR if its change already landed another way."
+  if [ -n "$head_sha" ]; then
+    body="${body}
+<!-- babysit:merge-conflict-head=${head_sha} -->"
+  fi
+  printf '%s\n' "$body" \
+    | gh pr comment "$pr_num" --body-file - >>"$LOG" 2>&1 \
+    || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
+}
+
 # Read back the head SHA recorded by the most recent flag_review_cycle_merge_failed
 # comment, if any. Empty output means "no recorded head" — callers must treat
 # that as unknown/stale, never as "head unchanged" (see PR #107 review).
@@ -1471,7 +1574,19 @@ merge_reviewed_pr() {
     echo "  [review] PR #$pr_num merged." | tee -a "$LOG" >&2
   else
     echo "  [review] WARNING: merge failed for PR #$pr_num; left open for next iteration. See $LOG." | tee -a "$LOG" >&2
-    flag_review_cycle_merge_failed "$pr_num" "$_head_sha"
+    # Distinguish a real, permanent conflict from a transient failure using
+    # GitHub's own mergeable computation — not a text grep of `gh pr merge`'s
+    # output, which is exactly the class of bug #82/#83 already fixed once
+    # for the reviewer-backend telltales. A CONFLICTING PR can never merge by
+    # retrying the same command, so it must not go through the resumable
+    # review-merge-failed retry loop (see flag_review_cycle_merge_conflict).
+    local _mergeable
+    _mergeable=$(gh pr view "$pr_num" --json mergeable -q .mergeable 2>>"$LOG" || echo "")
+    if [ "$_mergeable" = "CONFLICTING" ]; then
+      flag_review_cycle_merge_conflict "$pr_num" "$_head_sha"
+    else
+      flag_review_cycle_merge_failed "$pr_num" "$_head_sha"
+    fi
     return 0
   fi
 
@@ -1833,7 +1948,12 @@ review_head_unchanged() {
 # Priority-ordered labels that mark a review cycle stalled in a way an
 # operator can resolve without abandoning the PR (as opposed to
 # review-incomplete, which always requires a human to pick the work back up).
-RESUMABLE_STALL_LABELS=(review-mcp-outage review-codex-outdated review-codex-no-credits review-merge-failed)
+# review-merge-conflict is last: unlike the other four, finding it here is
+# not enough to act — the sweep must also confirm via `gh pr view --json
+# mergeable` that the conflict is actually gone before doing anything,
+# since blindly retrying an unresolved conflict can never succeed (see the
+# review-merge-conflict handling in the outer sweep below).
+RESUMABLE_STALL_LABELS=(review-mcp-outage review-codex-outdated review-codex-no-credits review-merge-failed review-merge-conflict)
 
 # Given one "<label> <pr_num_or_empty>" pair per entry in
 # RESUMABLE_STALL_LABELS (in the same order, as gh would return them), pick
@@ -1972,22 +2092,24 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight
       done
       ;;
     outer-retry-sweep)
-      # Each stdin line is four space-separated PR numbers (or empty fields,
+      # Each stdin line is five space-separated PR numbers (or empty fields,
       # written as "-"), one per label in RESUMABLE_STALL_LABELS order,
-      # standing in for what four `gh pr list --label ... -q .[0].number`
+      # standing in for what five `gh pr list --label ... -q .[0].number`
       # calls would return. Prints "label=<l> pr=<n>" for the first stalled
       # label found, or "none" — using the real pick_stalled_retry(). No
       # Claude/Codex/gh involved.
-      while IFS=' ' read -r _mcp _outdated _credits _merge_failed; do
+      while IFS=' ' read -r _mcp _outdated _credits _merge_failed _merge_conflict; do
         [ "$_mcp" = "-" ] && _mcp=""
         [ "$_outdated" = "-" ] && _outdated=""
         [ "$_credits" = "-" ] && _credits=""
         [ "$_merge_failed" = "-" ] && _merge_failed=""
+        [ "$_merge_conflict" = "-" ] && _merge_conflict=""
         if _pick=$(pick_stalled_retry \
             "review-mcp-outage $_mcp" \
             "review-codex-outdated $_outdated" \
             "review-codex-no-credits $_credits" \
-            "review-merge-failed $_merge_failed"); then
+            "review-merge-failed $_merge_failed" \
+            "review-merge-conflict $_merge_conflict"); then
           echo "label=${_pick%% *} pr=${_pick#* }"
         else
           echo "none"
@@ -2170,14 +2292,17 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
   fi
 
   # Retry any PR stalled behind a resumable label (review-mcp-outage,
-  # review-codex-outdated, review-codex-no-credits, review-merge-failed)
-  # from a previous run.
+  # review-codex-outdated, review-codex-no-credits, review-merge-failed,
+  # review-merge-conflict) from a previous run.
   # The label search here is the ONLY way a stalled PR is found again, so
   # the label must still be on the PR when this runs — operators must NOT
   # remove it manually; the documented recovery is "fix the underlying
-  # cause, then restart" for all three labels (the wrapper halts on all of
-  # them — see rc=2/3/4 handling below and at the HANDOFF_REVIEW call site —
-  # so none of them resolve on their own without a restart).
+  # cause, then restart" for the first three labels (the wrapper halts on
+  # all of them — see rc=2/3/4 handling below and at the HANDOFF_REVIEW call
+  # site — so none of them resolve on their own without a restart).
+  # review-merge-failed and review-merge-conflict don't halt the wrapper —
+  # they're picked up automatically within the same run once the underlying
+  # condition (a transient merge failure, or a real conflict) clears.
   # Removing the label yourself makes this search silently find nothing, leaving the
   # PR in draft forever (see #82/#104). The PR stays in draft through the
   # review itself; only merge_reviewed_pr() un-drafts it, and only after a
@@ -2185,7 +2310,47 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
   _retry_pairs=()
   _retry_lookup_failed=0
   for _label in "${RESUMABLE_STALL_LABELS[@]}"; do
-    if ! _pr_num=$(gh pr list --state open --label "$_label" --limit 1 --json number -q '.[0].number' 2>>"$LOG"); then
+    if [ "$_label" = "review-merge-conflict" ]; then
+      # Unlike the other four labels, more than one open PR can legitimately
+      # carry this one at once (each conflicts independently against the base
+      # branch), and `--limit 1` always returns the same PR from GitHub's
+      # default ordering — so a second, since-resolved conflict PR could sit
+      # behind an older, still-unresolved one forever, never rediscovered (see
+      # #111 review cycle 3, BLOCKING). List every open PR with the label and
+      # probe each one's real mergeable state, picking the first that is
+      # actually MERGEABLE; if none are, leave the pair empty exactly as
+      # before — the sweep falls through to new work and re-checks all of
+      # them again next iteration.
+      #
+      # `gh pr list` caps at 30 results by default (and the cycle-3 fix that
+      # dropped `--limit 1` never re-imposed a higher bound), so a resolved
+      # conflict PR sitting past that first page would never be rediscovered
+      # (#111 review cycle 4, BLOCKING). Page through the entire labelled set
+      # with `gh api --paginate`, reusing the same repos/<owner>/issues access
+      # pattern the inline-comment fetch and commit-status POST already use
+      # above, and keep only entries that are actually PRs.
+      _owner_repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>>"$LOG") || _owner_repo=""
+      if [ -z "$_owner_repo" ] || ! _conflict_prs=$(gh api --paginate "repos/${_owner_repo}/issues?state=open&labels=${_label}&per_page=100" --jq '.[] | select(.pull_request != null) | .number' 2>>"$LOG"); then
+        echo "[outer] WARNING: gh api paginated lookup failed while checking for PRs labelled $_label; skipping new work this iteration" | tee -a "$LOG" >&2
+        _retry_lookup_failed=1
+        break
+      fi
+      # Fall back to the first PR in the list if none turn out MERGEABLE, so
+      # the existing per-PR mergeable recheck and defer-with-log below still
+      # runs against a concrete PR (same observable logging as the old
+      # single-PR lookup) instead of going silent when every PR is still
+      # genuinely conflicting.
+      _pr_num=""
+      for _cpr in $_conflict_prs; do
+        [ -z "$_pr_num" ] && _pr_num="$_cpr"
+        _cmergeable=$(gh pr view "$_cpr" --json mergeable -q .mergeable 2>>"$LOG" || echo "")
+        if [ "$_cmergeable" = "MERGEABLE" ]; then
+          _pr_num="$_cpr"
+          break
+        fi
+      done
+      unset _conflict_prs _cpr _cmergeable _owner_repo
+    elif ! _pr_num=$(gh pr list --state open --label "$_label" --limit 1 --json number -q '.[0].number' 2>>"$LOG"); then
       # A GitHub API failure here must NOT be treated as "no stalled PR" —
       # that would let new implementation work start while a real stalled
       # PR sits unlabelled-for-discovery, silently defeating the retry gate.
@@ -2206,6 +2371,16 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
   if [ -n "$_retry_pick" ]; then
     _retry_label="${_retry_pick%% *}"
     _retry_pr="${_retry_pick#* }"
+    # Set to 1 by either branch below when this PR needs a human and nothing
+    # else can be done to it this iteration. Unlike the reviewer-unavailable
+    # case further down (a transient, self-resolving backend outage worth
+    # blocking new work for), a real merge conflict has no bound on how long
+    # it sits — leaving the label in place and looping back to re-select the
+    # same PR (via `continue`) burns the entire MAX_ITER budget on a PR that
+    # cannot make progress, starving both new work and any other stalled PR
+    # (see #111 review cycle 2, BLOCKING). Falling through to new work instead
+    # costs nothing: the next iteration's sweep re-checks this PR again.
+    _retry_defer=0
     if [ "$_retry_label" = "review-merge-failed" ]; then
       # The review already passed (codex-review=success is already set on the
       # head SHA) — only `gh pr merge` itself failed. Routing this through
@@ -2228,41 +2403,81 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
       _recorded_head=$(review_merge_failed_recorded_head "$_retry_pr")
       _current_head=$(gh pr view "$_retry_pr" --json headRefOid -q .headRefOid 2>>"$LOG" || echo "")
       if [ -n "$_recorded_head" ] && [ -n "$_current_head" ] && [ "$_recorded_head" = "$_current_head" ]; then
-        echo "[outer] retrying merge for PR #$_retry_pr (review-merge-failed)" | tee -a "$LOG" >&2
-        # Leave the label ON through the merge attempt itself — merge_reviewed_pr
-        # already re-adds it (flag_review_cycle_merge_failed) on every failure
-        # path, so removing it first only opens a window with no upside: if the
-        # wrapper is interrupted between removal and merge completing, the PR
-        # is left open and unlabelled, invisible to the only sweep that finds
-        # stalled PRs (see PR #107 review cycle 3, BLOCKING). Remove it after,
-        # and only once the PR is actually confirmed merged.
-        merge_reviewed_pr "$_retry_pr" "retry" "$_current_head"
-        if [ "$(gh pr view "$_retry_pr" --json state -q .state 2>>"$LOG")" = "MERGED" ]; then
-          # Best-effort cleanup: the sweep only ever searches open PRs, so a
-          # merged PR simply won't match next time even if this edit fails.
-          gh pr edit "$_retry_pr" --remove-label "$_retry_label" >>"$LOG" 2>&1 \
-            || echo "[outer] WARNING: failed to remove $_retry_label from merged PR #$_retry_pr; harmless, sweep only searches open PRs" | tee -a "$LOG" >&2
+        # Guard against a stale review-merge-failed label surviving a failed
+        # best-effort removal in flag_review_cycle_merge_conflict: if this PR
+        # is actually CONFLICTING right now, retrying the merge below can only
+        # fail the exact same doomed way again, over and over, since a real
+        # conflict never resolves by repeating the identical `gh pr merge`
+        # call (see #111 review cycle 2, BLOCKING). Re-route it to
+        # review-merge-conflict directly — which retries the label removal —
+        # instead of wasting a merge attempt on it.
+        _mergeable=$(gh pr view "$_retry_pr" --json mergeable -q .mergeable 2>>"$LOG" || echo "")
+        if [ "$_mergeable" = "CONFLICTING" ]; then
+          echo "[outer] PR #$_retry_pr is CONFLICTING despite the review-merge-failed label (stale label from a prior failed removal); re-routing to review-merge-conflict instead of retrying a doomed merge" | tee -a "$LOG" >&2
+          flag_review_cycle_merge_conflict "$_retry_pr" "$_current_head"
+          _retry_defer=1
+        else
+          echo "[outer] retrying merge for PR #$_retry_pr (review-merge-failed)" | tee -a "$LOG" >&2
+          # Leave the label ON through the merge attempt itself — merge_reviewed_pr
+          # already re-adds it (flag_review_cycle_merge_failed) on every failure
+          # path, so removing it first only opens a window with no upside: if the
+          # wrapper is interrupted between removal and merge completing, the PR
+          # is left open and unlabelled, invisible to the only sweep that finds
+          # stalled PRs (see PR #107 review cycle 3, BLOCKING). Remove it after,
+          # and only once the PR is actually confirmed merged.
+          merge_reviewed_pr "$_retry_pr" "retry" "$_current_head"
+          if [ "$(gh pr view "$_retry_pr" --json state -q .state 2>>"$LOG")" = "MERGED" ]; then
+            # Best-effort cleanup: the sweep only ever searches open PRs, so a
+            # merged PR simply won't match next time even if this edit fails.
+            gh pr edit "$_retry_pr" --remove-label "$_retry_label" >>"$LOG" 2>&1 \
+              || echo "[outer] WARNING: failed to remove $_retry_label from merged PR #$_retry_pr; harmless, sweep only searches open PRs" | tee -a "$LOG" >&2
+          fi
+          # A failed merge re-labels the PR review-merge-failed and this sweep
+          # retries it again next iteration; without a delay here, a merge that
+          # keeps failing (e.g. CI still running) would retry every iteration
+          # back-to-back and could burn through the entire MAX_ITER budget
+          # before CI ever passes (see PR #107 review, BLOCKING).
+          unset _retry_pick _retry_label _retry_pr _recorded_head _current_head _mergeable
+          sleep "$SLEEP_SEC"
+          continue
         fi
-        unset _retry_pick _retry_label _retry_pr _recorded_head _current_head
-        # A failed merge re-labels the PR review-merge-failed and this sweep
-        # retries it again next iteration; without a delay here, a merge that
-        # keeps failing (e.g. CI still running) would retry every iteration
-        # back-to-back and could burn through the entire MAX_ITER budget
-        # before CI ever passes (see PR #107 review, BLOCKING).
-        sleep "$SLEEP_SEC"
-        continue
+        unset _mergeable
+      else
+        echo "[outer] PR #$_retry_pr head changed since its review passed (recorded=${_recorded_head:-unknown} current=${_current_head:-unknown}); routing to a fresh review cycle instead of reusing the stale codex-review status" | tee -a "$LOG" >&2
       fi
-      echo "[outer] PR #$_retry_pr head changed since its review passed (recorded=${_recorded_head:-unknown} current=${_current_head:-unknown}); routing to a fresh review cycle instead of reusing the stale codex-review status" | tee -a "$LOG" >&2
       unset _recorded_head _current_head
+    elif [ "$_retry_label" = "review-merge-conflict" ]; then
+      # Unlike the other four resumable labels, finding this one is not
+      # enough to act on: the whole reason it exists (see
+      # flag_review_cycle_merge_conflict) is that retrying an unresolved
+      # conflict can never succeed. Only proceed once GitHub's own mergeable
+      # computation confirms a human has rebased/merged the base branch in
+      # and pushed — i.e. mergeable is no longer CONFLICTING (and known).
+      _mergeable=$(gh pr view "$_retry_pr" --json mergeable -q .mergeable 2>>"$LOG" || echo "")
+      if [ "$_mergeable" = "CONFLICTING" ] || [ -z "$_mergeable" ] || [ "$_mergeable" = "UNKNOWN" ]; then
+        echo "[outer] PR #$_retry_pr still CONFLICTING (or not yet known); leaving it labelled review-merge-conflict for a later retry" | tee -a "$LOG" >&2
+        _retry_defer=1
+      else
+        echo "[outer] PR #$_retry_pr no longer CONFLICTING (mergeable=$_mergeable); routing to a fresh review cycle to re-review the merged-up diff" | tee -a "$LOG" >&2
+      fi
+      unset _mergeable
     fi
-    if ! reviewer_binary_available; then
+    if [ "$_retry_defer" -eq 1 ]; then
+      # Leave the label in place for a later retry, but do NOT `continue` —
+      # this PR needs a human and re-selecting it every iteration (the old
+      # behavior) starves both new work and any other stalled PR until
+      # MAX_ITER runs out (see #111 review cycle 2, BLOCKING). Just unset the
+      # pick and fall through to the new-work section below; the next
+      # iteration's sweep re-checks this PR again on its own.
+      unset _retry_pick _retry_label _retry_pr _retry_defer
+    elif ! reviewer_binary_available; then
       # Don't remove the label yet: run_review_cycle's own CLI-missing check
       # (reviewer_binary_available, above run_review_cycle's checkout step)
       # returns success without reviewing anything, and this is the only
       # place the stalled label gets re-attached. Removing it first would
       # leave the PR unlabelled and undiscoverable by the next retry sweep.
       echo "[outer] $REVIEWER CLI still unavailable; leaving PR #$_retry_pr labelled $_retry_label for a later retry" | tee -a "$LOG" >&2
-      unset _retry_pick _retry_label _retry_pr
+      unset _retry_pick _retry_label _retry_pr _retry_defer
       # Don't fall through to new work: a PR is stuck awaiting review, and
       # starting an implementer pass would let new unreviewed work pile up
       # behind it instead of resolving the stall first (see PR #104 review).
@@ -2277,7 +2492,7 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
         # next sweep retry it anyway. Skip to next iteration and try the
         # removal again rather than risk that state.
         echo "[outer] WARNING: failed to remove $_retry_label from PR #$_retry_pr; retrying removal next iteration" | tee -a "$LOG" >&2
-        unset _retry_pick _retry_label _retry_pr
+        unset _retry_pick _retry_label _retry_pr _retry_defer
         sleep "$SLEEP_SEC"
         continue
       fi
@@ -2292,7 +2507,7 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
         esac
         break
       fi
-      unset _retry_pick _retry_label _retry_pr _rc
+      unset _retry_pick _retry_label _retry_pr _retry_defer _rc
       continue
     fi
   fi

@@ -10,6 +10,13 @@
 # this fix nothing un-drafted the PR first, so the codex-review=success
 # status landed but the PR sat open and draft forever.
 #
+# Also covers the review-merge-conflict split (#82 backlog: #83/#91/#9):
+# when `gh pr merge` fails because the PR is genuinely CONFLICTING against
+# the base branch, that must route to the non-resumable review-merge-conflict
+# label instead of review-merge-failed, since retrying the identical merge
+# can never succeed and would otherwise loop forever in the resumable
+# stalled-PR sweep.
+#
 # No network: gh and git are stubs on PATH.
 set -uo pipefail
 
@@ -46,10 +53,25 @@ printf 'CALL=gh %s\n' "$*" >> "$RECORD"
 case "$*" in
   "repo view"*) printf '%s' "${STUB_OWNER_REPO:-o/r}"; exit 0 ;;
   "pr view"*"headRefOid"*) printf '%s' "${STUB_HEAD_SHA:-deadbeef}"; exit 0 ;;
+  "pr view"*"mergeable"*) printf '%s' "${STUB_MERGEABLE:-MERGEABLE}"; exit 0 ;;
   "api -X POST repos/"*"/statuses/"*) exit "${STUB_STATUS_RC:-0}" ;;
   "pr ready "*) exit "${STUB_READY_RC:-0}" ;;
   "pr merge "*) exit "${STUB_MERGE_RC:-0}" ;;
   "pr edit "*"--add-label review-merge-failed"*) exit "${STUB_EDIT_RC:-0}" ;;
+  "pr edit "*"--add-label review-merge-conflict"*) exit "${STUB_EDIT_RC:-0}" ;;
+  "pr edit "*"--remove-label review-merge-failed"*)
+    # STUB_REMOVE_LABEL_FAIL_COUNT lets a scenario fail the first N attempts
+    # at removing the stale review-merge-failed label (flag_review_cycle_merge_conflict's
+    # retry loop) before succeeding, using a call-count file since this stub
+    # is otherwise stateless per invocation.
+    _rl_count_file="${RECORD}.remove-label-count"
+    _rl_n=$(( $(cat "$_rl_count_file" 2>/dev/null || echo 0) + 1 ))
+    printf '%s' "$_rl_n" > "$_rl_count_file"
+    if [ "$_rl_n" -le "${STUB_REMOVE_LABEL_FAIL_COUNT:-0}" ]; then
+      exit 1
+    fi
+    exit 0
+    ;;
   *) exit 0 ;;
 esac
 STUB
@@ -125,6 +147,32 @@ assert_grep "merge fails: review-merge-failed label is created" "CALL=gh label c
 assert_grep "merge fails: review-merge-failed label is added to the PR" "CALL=gh pr edit 60 --add-label review-merge-failed" "$r"
 assert_grep "merge fails: an explanatory comment is posted" "CALL=gh pr comment 60 --body-file -" "$r"
 assert_not_grep "merge fails: the PR is NOT re-drafted (review already passed, status already green)" "CALL=gh pr ready 60 --undo" "$r"
+assert_not_grep "merge fails, not a conflict: review-merge-conflict is NOT applied" "CALL=gh pr edit 60 --add-label review-merge-conflict" "$r"
+
+# ---------- the merge attempt fails because the PR has a real, permanent
+# conflict against the base branch (GitHub reports mergeable=CONFLICTING):
+# regression for the #82 backlog (#83/#91/#9), where stale branches kept
+# cycling through the review-merge-failed retry loop forever because a real
+# conflict can never resolve by retrying the identical `gh pr merge` call.
+# Must be routed to the distinct, non-resumable review-merge-conflict label
+# instead of review-merge-failed ----------
+r="$TMP/merge-conflict.record"
+run_merge "$r" STUB_MERGE_RC=1 STUB_MERGEABLE=CONFLICTING
+assert_grep "merge conflict: review-merge-conflict label is created" "CALL=gh label create review-merge-conflict" "$r"
+assert_grep "merge conflict: review-merge-conflict label is added to the PR" "CALL=gh pr edit 60 --add-label review-merge-conflict" "$r"
+assert_grep "merge conflict: an explanatory comment is posted" "CALL=gh pr comment 60 --body-file -" "$r"
+assert_not_grep "merge conflict: review-merge-failed is NOT applied instead" "CALL=gh label create review-merge-failed" "$r"
+assert_not_grep "merge conflict: the PR is NOT re-drafted (review already passed, status already green)" "CALL=gh pr ready 60 --undo" "$r"
+
+# ---------- merge fails AND the conflict-label itself can't be applied:
+# fail-closed, same rationale as the review-merge-failed label-failure case
+# below — an unlabelled conflicting PR would be invisible to any future
+# triage while the outer loop moves on to new work ----------
+r="$TMP/merge-conflict-label-fails.record"
+run_merge "$r" STUB_MERGE_RC=1 STUB_MERGEABLE=CONFLICTING STUB_EDIT_RC=1
+rc=$(cat "$TMP/rc")
+if [ "$rc" -ne 0 ]; then pass "conflict label failure: wrapper halts (non-zero exit) rather than continuing"; else fail "conflict label failure: wrapper halts (non-zero exit) rather than continuing"; fi
+assert_grep "conflict label failure: an ERROR is logged" "ERROR: gh pr edit --add-label failed for PR #60" "$TMP/err"
 
 # ---------- merge fails AND the merge-failure label itself can't be
 # applied: fail-closed (#107) — the stalled-PR retry sweep only ever
@@ -136,6 +184,34 @@ run_merge "$r" STUB_MERGE_RC=1 STUB_EDIT_RC=1
 rc=$(cat "$TMP/rc")
 if [ "$rc" -ne 0 ]; then pass "label failure: wrapper halts (non-zero exit) rather than continuing"; else fail "label failure: wrapper halts (non-zero exit) rather than continuing"; fi
 assert_grep "label failure: an ERROR is logged" "ERROR: gh pr edit --add-label failed for PR #60" "$TMP/err"
+
+# ---------- merge conflict, and the best-effort removal of the stale
+# review-merge-failed label transiently fails twice before succeeding: a
+# single best-effort attempt (the pre-#111-cycle-2 behavior) would leave both
+# labels on the PR, and review-merge-failed's higher sweep priority would then
+# route it through the merge-only-retry shortcut forever, repeatedly
+# attempting a merge that a real conflict can never let succeed (#111 review
+# cycle 2, BLOCKING). The retry loop must keep trying (bounded at 3 attempts)
+# instead of giving up after one. ----------
+r="$TMP/merge-conflict-removal-flaky.record"
+run_merge "$r" STUB_MERGE_RC=1 STUB_MERGEABLE=CONFLICTING STUB_REMOVE_LABEL_FAIL_COUNT=2
+assert_line_count "merge conflict, flaky removal: retries the removal up to 3 times, succeeding on the 3rd" "CALL=gh pr edit 60 --remove-label review-merge-failed" 3 "$r"
+assert_not_grep "merge conflict, flaky removal: no exhaustion warning once it eventually succeeds" "WARNING: failed to remove review-merge-failed from PR #60 after 3 attempts" "$TMP/err"
+assert_grep "merge conflict, flaky removal: review-merge-conflict label is still added" "CALL=gh pr edit 60 --add-label review-merge-conflict" "$r"
+
+# ---------- merge conflict, and the removal fails on all 3 attempts: this is
+# not fail-closed like a failed --add-label (the PR is NOT invisible — it's
+# still labelled review-merge-conflict, just also stuck with a stale
+# review-merge-failed) — but it must log a clear WARNING so an operator can
+# tell why, and must not halt the wrapper (the outer sweep's review-merge-failed
+# branch self-heals this case on its own next pass; see #111 review cycle 2). ----------
+r="$TMP/merge-conflict-removal-exhausted.record"
+run_merge "$r" STUB_MERGE_RC=1 STUB_MERGEABLE=CONFLICTING STUB_REMOVE_LABEL_FAIL_COUNT=99
+rc=$(cat "$TMP/rc")
+if [ "$rc" -eq 0 ]; then pass "merge conflict, removal exhausted: wrapper does NOT halt"; else fail "merge conflict, removal exhausted: wrapper does NOT halt"; fi
+assert_line_count "merge conflict, removal exhausted: exactly 3 attempts, no more" "CALL=gh pr edit 60 --remove-label review-merge-failed" 3 "$r"
+assert_grep "merge conflict, removal exhausted: a clear WARNING is logged" "WARNING: failed to remove review-merge-failed from PR #60 after 3 attempts; the outer sweep's review-merge-failed branch will self-heal this on its next pass" "$TMP/err"
+assert_grep "merge conflict, removal exhausted: review-merge-conflict label is still added despite the removal failure" "CALL=gh pr edit 60 --add-label review-merge-conflict" "$r"
 
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]
