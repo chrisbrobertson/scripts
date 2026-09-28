@@ -89,7 +89,7 @@ scripts" sections) rather than kept in a separate amendments file — no
 4. **MCP resilience:** 3 retries with 0/60s/300s backoff on transport failures
 5. **Merge gate:** PRs merge only after `codex-review=success` status POSTed by `run_review_cycle` (enforced by `setup-branch-protection.sh`); BLOCKING=0 alone does not merge
 6. **Five quarantine labels:** `review-incomplete` (human action, no retry), `review-mcp-outage` (auto-retry), `review-codex-outdated` (upgrade CLI), `review-codex-no-credits` (add credits), `review-merge-failed` (review passed, merge itself failed — sweep retries the merge only, not the review)
-7. **Work-prep approval gate:** Human posts unambiguous approval comment (case-insensitive `\bapproved\b`) on spec PR → work-prep merges spec, labels the *source* ticket `status:ready-to-build` (meaning "spec approved, sub-ticket exists"), and creates a `sub-ticket` + `build-ready` sub-ticket that the builder picks up
+7. **Work-prep approval gate:** An authorized commenter posts a comment with a line starting with `approved` (line-anchored `^\s*approved\b`) on a reviewed, non-draft spec PR → work-prep merges the PR and creates a `sub-ticket` + `build-ready` GitHub issue. For a GitHub source only, it also labels the source issue `status:ready-to-build` (meaning "spec approved, sub-ticket exists") — Jira sources are never labelled, since `gh issue edit` cannot label a Jira issue
 8. **Builder halt (no auto-merge):** Builder halts when reviewer returns BLOCKING=0 OR max cycles exhausted; posts reviewer summary PR comment; human does final merge
 9. **Parallel label namespaces:** Builder uses `build-*` labels; babysit-with-review.sh uses `review-*` labels; no overlap
 
