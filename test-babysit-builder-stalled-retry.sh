@@ -234,10 +234,18 @@ assert_count "stalled retry (dedup): exactly two remove-label calls are made for
 # removed, leaving the PR mislabelled and eligible to resurface, while the
 # still-build-ready ticket stayed readable for a duplicate PR ----------
 r="$TMP/no-marker.record"
-run_builder "$r" STUB_PR_MCP="$(pr_json_no_marker 101 stalled-pr-branch)"
+run_builder "$r" STUB_PR_MCP="$(pr_json_no_marker 101 stalled-pr-branch)" STUB_QUEUE="$(queue_json 505)"
 assert_grep "stalled retry (no builder marker): label is still removed" "CALL=gh pr edit 101 --repo owner/repo --remove-label build-mcp-outage" "$r"
 assert_grep "stalled retry (no builder marker): run_build_cycle still runs" "=== build cycle: PR #101 @" "$TMP/err"
-assert_grep "stalled retry (no builder marker): ticket-marker warning is logged" "PR #101 carries no builder marker" "$TMP/err"
+
+# ---------- scenario 11 (regression, see #106 codex review cycle 2): with no
+# builder marker there is no source/ticket to pass to mark_ticket_done, so its
+# ticket's build-ready label is never cleared. Continuing past this (as a bare
+# WARNING previously did) fell through to read the ticket queue and rebuilt
+# that still-build-ready ticket into a duplicate PR — the sweep must halt
+# instead, the same as its other "cannot prove the ticket is safe" cases ----------
+assert_grep "stalled retry (no builder marker): run halts rather than falling through" "Halting: stalled-PR sweep resumed a PR with no builder marker" "$TMP/err"
+assert_not_grep "stalled retry (no builder marker): ticket queue is never read" "CALL=gh issue list" "$r"
 
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]

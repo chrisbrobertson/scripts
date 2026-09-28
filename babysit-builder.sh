@@ -1711,7 +1711,10 @@ BUILD_STALL_SWEEP_LIMIT="${BUILD_STALL_SWEEP_LIMIT:-200}"
 # true if a resumed PR's branch cannot be fetched or checked out into a
 # worktree (HALT_RC=6), or if a resumable label cannot be removed from it
 # (HALT_RC=7): its ticket is still build-ready, so continuing on to the next
-# record — or worse, to the ticket queue — risks the same duplicate.
+# record — or worse, to the ticket queue — risks the same duplicate. Same
+# again if a resumed PR carries no builder marker (HALT_RC=8): with no
+# source/ticket to pass to mark_ticket_done, its ticket's build-ready label
+# is never cleared, so the ticket queue must not be read until that's fixed.
 resume_stalled_prs() {
   local raw_file="$TMP_ROOT/stalled-prs.json" records="$TMP_ROOT/stalled-records" label pr_count
   # Field separator for $records: NOT a tab. Bash (and awk's default field
@@ -1812,7 +1815,13 @@ PY
       if [ -n "$source" ] && [ -n "$ticket" ]; then
         mark_ticket_done "$source" "$ticket" "$pr_num" "PR halted for human merge"
       else
-        echo "[build] WARNING: PR #$pr_num carries no builder marker; its ticket keeps build-ready and may be rebuilt" >&2
+        # No marker means no way to call mark_ticket_done, so the source
+        # ticket's build-ready label is never cleared. Falling through to
+        # read the ticket queue here is exactly how that ticket gets rebuilt
+        # into a duplicate PR (see #106) — halt instead, same as the other
+        # "cannot prove the ticket is safe" conditions in this function.
+        echo "[build] ERROR: PR #$pr_num carries no builder marker; cannot confirm its ticket via mark_ticket_done, so halting before reading the ticket queue to avoid rebuilding its still-build-ready ticket into a duplicate PR. Add a builder marker to the PR body, or manually clear the ticket's build-ready label, then re-run." >&2
+        HALT_RC=8
       fi
     else
       HALT_RC="$cycle_rc"
@@ -1862,6 +1871,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
       5) echo "Halting: stalled-PR sweep could not confirm the resumable labels are clear (lookup failure or possible truncation); fix the reported condition, then re-run. See $LOG" >&2 ;;
       6) echo "Halting: stalled-PR sweep could not fetch or check out a resumed PR's branch; its ticket is still build-ready. Fix the reported condition, then re-run — the sweep will find the same PR again. See $LOG" >&2 ;;
       7) echo "Halting: stalled-PR sweep could not remove a resumable label from a resumed PR; its ticket is still build-ready. Fix the reported condition, then re-run — the sweep will find the same PR again. See $LOG" >&2 ;;
+      8) echo "Halting: stalled-PR sweep resumed a PR with no builder marker; its ticket is still build-ready and cannot be marked done. Add a marker to the PR body, or manually clear the ticket's build-ready label, then re-run. See $LOG" >&2 ;;
     esac
     echo "Builder halted during stalled-PR sweep."
     exit 0
