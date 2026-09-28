@@ -61,7 +61,7 @@ bazaar-build-worker.sh <issue>    # spawned by bazaar-build.sh; env: BZR_ISSUE B
 ## What we know
 - Owner decisions (2026-09-19): one branch and one PR per parent issue; review after each sub-issue; on a failed sub-issue skip it and continue (8, second round); check all required information before starting (brief); unique worktree and branch per unit of work (5); never merge (inherited, and `codex-review` branch protection enforces it); no time limits.
 - The `Specs:` line and sub-issue marker bodies the precheck reads are written by the approval sweep in [BZR-FEAT-CONTROLLER](L3-controller.md).
-- `babysit-builder.sh` v0.1.0 already implements: precheck of the referenced spec on the base ref (`extract_spec_path`, `spec_exists_on_base`, lines 1387-1434), a worktree that lives through the review cycle, the `HANDOFF_REVIEW`/`SPEC_GAP`/`STUCK` sentinel contract (lines 1585-1657), `run_build_cycle` with staged models per cycle (Sonnet cycles 1-3, Opus 4-8 cycles 4-6, lines 1245-1251), and the `codex-review=success` status post at convergence.
+- `babysit-builder.sh` v0.1.0 already implements: precheck of the referenced spec on the base ref (`extract_spec_path`, `spec_exists_on_base`, lines 1387-1428), a worktree that lives through the review cycle, the `HANDOFF_REVIEW`/`SPEC_GAP`/`STUCK` sentinel contract (lines 1585-1657), `run_build_cycle` with staged models per cycle (Sonnet cycles 1-3, Opus 4-8 cycles 4-6, lines 1244-1251), and the `codex-review=success` status post at convergence.
 - Native sub-issue read: `GET /repos/{o}/{r}/issues/{n}/sub_issues` returns full issue objects; GraphQL `subIssuesSummary{total completed}` gives progress (probed 2026-09-19).
 
 ## What we assume
