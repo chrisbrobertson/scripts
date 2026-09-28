@@ -40,10 +40,17 @@
 # same pre-iter sweep, lowest priority, on the next outer iteration of the same run,
 # no restart needed. It DOES halt, fail-closed, if the label itself can't be applied,
 # since the sweep can only find this PR again by that label.
+# `review-merge-conflict` = same starting point as review-merge-failed (review already
+# passed, codex-review=success already set) but `gh pr merge` failed because GitHub's
+# own mergeable computation reports the PR CONFLICTING against the base branch — a
+# permanent condition, not a transient CI/branch-protection race. Retrying the same
+# merge can never succeed on its own, so unlike review-merge-failed this label is NOT
+# in RESUMABLE_STALL_LABELS and is never auto-retried; it needs a human to rebase the
+# branch (or close the PR) before it can merge. Does not halt the wrapper.
 
 set -uo pipefail
 
-VERSION="1.3.1"
+VERSION="1.4.0"
 
 usage() {
   cat <<'EOF'
@@ -100,6 +107,10 @@ PR labels used by the review cycle:
                          set) but \`gh pr merge\` itself failed; does NOT
                          halt the wrapper, retried by the same sweep on the
                          next outer iteration.
+  review-merge-conflict  Same starting point as review-merge-failed, but
+                         GitHub reports the PR CONFLICTING against the base
+                         branch — a permanent condition. NOT auto-retried;
+                         needs a human to rebase the branch or close the PR.
 
 Logs land in ~/sisyphus-logs/<project>-<timestamp>-<pid>.log.
 
@@ -293,7 +304,7 @@ Pick the next unit of work in this priority order — stop at the first level th
 
    SKIP any PR whose STATE is `draft` or `BLOCKED` in the prs table (or `isDraft: true` / labels include `review-incomplete` in the JSON). These PRs were marked by a previous review cycle as needing human intervention — re-attempting them wastes iterations. Move on to item 2.
 
-   Also SKIP PRs labelled `review-mcp-outage`, `review-codex-no-credits`, or `review-merge-failed` — these are managed by the wrapper itself and require operator action (or just its own automatic retry) before the review cycle can proceed. `review-merge-failed` in particular may already be un-drafted and passing CI — do not merge it yourself; the wrapper's sweep retries it. Do not touch any of these.
+   Also SKIP PRs labelled `review-mcp-outage`, `review-codex-no-credits`, `review-merge-failed`, or `review-merge-conflict` — these are managed by the wrapper itself and require operator action (or just its own automatic retry) before the review cycle can proceed. `review-merge-failed` in particular may already be un-drafted and passing CI — do not merge it yourself; the wrapper's sweep retries it. `review-merge-conflict` means the review already passed but the PR has a real, permanent merge conflict against the base branch — the wrapper will NOT auto-retry it (retrying a real conflict can never succeed), so it needs a human to rebase or close it; do not push a conflict-resolution commit to it yourself. Do not touch any of these.
 2. Open issues you can complete in one iteration. See open issues in the project state above. Pick the highest-priority one that fits the scope discipline below.
 3. Approved specs with no implementation. See specs in the project state above — look for rows where IMPL is `no` or `?`. Scaffold the next missing piece — project skeleton, an interface stub, the first integration test, etc.
 4. Proto definitions without consumers. Files under ./proto/ that no service implements. Generate stubs or wire a service skeleton that consumes them.
@@ -1151,6 +1162,51 @@ Label \`review-merge-failed\` has been added. The stalled-PR retry sweep will fi
     || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
 }
 
+# Like flag_review_cycle_merge_failed, but for the permanent case: GitHub's own
+# mergeable computation reports the PR CONFLICTING against the base branch, not
+# a transient CI/branch-protection race. Retrying the identical `gh pr merge`
+# call can never succeed on its own, so this label is deliberately NOT in
+# RESUMABLE_STALL_LABELS — routing a real conflict through that resumable retry
+# loop just re-fails the same way on every outer iteration forever, burning the
+# MAX_ITER budget for no benefit (the exact shape of the #82 backlog: #83, #91,
+# and #9 all sat behind stale, now-conflicting branches through repeated
+# merge-only retries). Does not halt the wrapper — same rationale as
+# flag_review_cycle_merge_failed: the review already passed and the reviewer
+# backend is fine, only the git-hosting-side merge is blocked.
+# Args: <pr_num> [head_sha]
+flag_review_cycle_merge_conflict() {
+  local pr_num="$1"
+  local head_sha="${2:-}"
+
+  gh label create review-merge-conflict \
+    --color b60205 \
+    --description "Babysit review passed but the PR has a real merge conflict against the base branch; needs manual rebase or closure, not auto-retried" \
+    --force >>"$LOG" 2>&1 || true
+
+  # Fail-closed for the same reason as flag_review_cycle_merge_failed: without
+  # the label, this PR is invisible to any future triage and the loop would
+  # just keep starting new work around it.
+  if ! gh pr edit "$pr_num" --add-label review-merge-conflict >>"$LOG" 2>&1; then
+    echo "ERROR: gh pr edit --add-label failed for PR #$pr_num — merge conflict detected and PR is unlabelled; manually add 'review-merge-conflict', rebase, or close it before restarting" | tee -a "$LOG" >&2
+    exit 1
+  fi
+
+  local body="**babysit-with-review: review passed but the PR has a real merge conflict**
+
+The review cycle completed with zero BLOCKING findings and \`codex-review\` was already set to success, but \`gh pr merge\` failed because GitHub reports this PR CONFLICTING against the base branch — not a transient CI or branch-protection race. Retrying the same merge cannot succeed on its own.
+
+Label \`review-merge-conflict\` has been added. Unlike \`review-merge-failed\`, this is **not** auto-retried by the stalled-PR sweep. To resolve:
+- Rebase the branch onto the base branch and resolve the conflicts (\`gh pr checkout ${pr_num} && git fetch origin main && git merge origin/main\`, resolve, push) — the next review cycle will re-review the merged-up diff, or
+- Close this PR if its change already landed another way."
+  if [ -n "$head_sha" ]; then
+    body="${body}
+<!-- babysit:merge-conflict-head=${head_sha} -->"
+  fi
+  printf '%s\n' "$body" \
+    | gh pr comment "$pr_num" --body-file - >>"$LOG" 2>&1 \
+    || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
+}
+
 # Read back the head SHA recorded by the most recent flag_review_cycle_merge_failed
 # comment, if any. Empty output means "no recorded head" — callers must treat
 # that as unknown/stale, never as "head unchanged" (see PR #107 review).
@@ -1471,7 +1527,19 @@ merge_reviewed_pr() {
     echo "  [review] PR #$pr_num merged." | tee -a "$LOG" >&2
   else
     echo "  [review] WARNING: merge failed for PR #$pr_num; left open for next iteration. See $LOG." | tee -a "$LOG" >&2
-    flag_review_cycle_merge_failed "$pr_num" "$_head_sha"
+    # Distinguish a real, permanent conflict from a transient failure using
+    # GitHub's own mergeable computation — not a text grep of `gh pr merge`'s
+    # output, which is exactly the class of bug #82/#83 already fixed once
+    # for the reviewer-backend telltales. A CONFLICTING PR can never merge by
+    # retrying the same command, so it must not go through the resumable
+    # review-merge-failed retry loop (see flag_review_cycle_merge_conflict).
+    local _mergeable
+    _mergeable=$(gh pr view "$pr_num" --json mergeable -q .mergeable 2>>"$LOG" || echo "")
+    if [ "$_mergeable" = "CONFLICTING" ]; then
+      flag_review_cycle_merge_conflict "$pr_num" "$_head_sha"
+    else
+      flag_review_cycle_merge_failed "$pr_num" "$_head_sha"
+    fi
     return 0
   fi
 

@@ -136,7 +136,7 @@ REPO_BASE=<path>        # override helper-script base path (also via --repo-base
 Non-idempotent. Each iteration advances git state (commits, PRs). Re-running after halt resumes from current git state, not from start.
 
 ### Versioning policy
-Script version: `1.3.0` (semver, `--version` flag). Breaking changes (env var renames, sentinel format changes) require manual migration by user.
+Script version: `1.4.0` (semver, `--version` flag). Breaking changes (env var renames, sentinel format changes) require manual migration by user.
 
 ## Performance budget
 - **p50 iteration latency:** ~2 minutes (dominated by Claude inference)

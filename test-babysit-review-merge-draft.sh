@@ -10,6 +10,13 @@
 # this fix nothing un-drafted the PR first, so the codex-review=success
 # status landed but the PR sat open and draft forever.
 #
+# Also covers the review-merge-conflict split (#82 backlog: #83/#91/#9):
+# when `gh pr merge` fails because the PR is genuinely CONFLICTING against
+# the base branch, that must route to the non-resumable review-merge-conflict
+# label instead of review-merge-failed, since retrying the identical merge
+# can never succeed and would otherwise loop forever in the resumable
+# stalled-PR sweep.
+#
 # No network: gh and git are stubs on PATH.
 set -uo pipefail
 
@@ -46,10 +53,12 @@ printf 'CALL=gh %s\n' "$*" >> "$RECORD"
 case "$*" in
   "repo view"*) printf '%s' "${STUB_OWNER_REPO:-o/r}"; exit 0 ;;
   "pr view"*"headRefOid"*) printf '%s' "${STUB_HEAD_SHA:-deadbeef}"; exit 0 ;;
+  "pr view"*"mergeable"*) printf '%s' "${STUB_MERGEABLE:-MERGEABLE}"; exit 0 ;;
   "api -X POST repos/"*"/statuses/"*) exit "${STUB_STATUS_RC:-0}" ;;
   "pr ready "*) exit "${STUB_READY_RC:-0}" ;;
   "pr merge "*) exit "${STUB_MERGE_RC:-0}" ;;
   "pr edit "*"--add-label review-merge-failed"*) exit "${STUB_EDIT_RC:-0}" ;;
+  "pr edit "*"--add-label review-merge-conflict"*) exit "${STUB_EDIT_RC:-0}" ;;
   *) exit 0 ;;
 esac
 STUB
@@ -125,6 +134,32 @@ assert_grep "merge fails: review-merge-failed label is created" "CALL=gh label c
 assert_grep "merge fails: review-merge-failed label is added to the PR" "CALL=gh pr edit 60 --add-label review-merge-failed" "$r"
 assert_grep "merge fails: an explanatory comment is posted" "CALL=gh pr comment 60 --body-file -" "$r"
 assert_not_grep "merge fails: the PR is NOT re-drafted (review already passed, status already green)" "CALL=gh pr ready 60 --undo" "$r"
+assert_not_grep "merge fails, not a conflict: review-merge-conflict is NOT applied" "CALL=gh pr edit 60 --add-label review-merge-conflict" "$r"
+
+# ---------- the merge attempt fails because the PR has a real, permanent
+# conflict against the base branch (GitHub reports mergeable=CONFLICTING):
+# regression for the #82 backlog (#83/#91/#9), where stale branches kept
+# cycling through the review-merge-failed retry loop forever because a real
+# conflict can never resolve by retrying the identical `gh pr merge` call.
+# Must be routed to the distinct, non-resumable review-merge-conflict label
+# instead of review-merge-failed ----------
+r="$TMP/merge-conflict.record"
+run_merge "$r" STUB_MERGE_RC=1 STUB_MERGEABLE=CONFLICTING
+assert_grep "merge conflict: review-merge-conflict label is created" "CALL=gh label create review-merge-conflict" "$r"
+assert_grep "merge conflict: review-merge-conflict label is added to the PR" "CALL=gh pr edit 60 --add-label review-merge-conflict" "$r"
+assert_grep "merge conflict: an explanatory comment is posted" "CALL=gh pr comment 60 --body-file -" "$r"
+assert_not_grep "merge conflict: review-merge-failed is NOT applied instead" "CALL=gh label create review-merge-failed" "$r"
+assert_not_grep "merge conflict: the PR is NOT re-drafted (review already passed, status already green)" "CALL=gh pr ready 60 --undo" "$r"
+
+# ---------- merge fails AND the conflict-label itself can't be applied:
+# fail-closed, same rationale as the review-merge-failed label-failure case
+# below — an unlabelled conflicting PR would be invisible to any future
+# triage while the outer loop moves on to new work ----------
+r="$TMP/merge-conflict-label-fails.record"
+run_merge "$r" STUB_MERGE_RC=1 STUB_MERGEABLE=CONFLICTING STUB_EDIT_RC=1
+rc=$(cat "$TMP/rc")
+if [ "$rc" -ne 0 ]; then pass "conflict label failure: wrapper halts (non-zero exit) rather than continuing"; else fail "conflict label failure: wrapper halts (non-zero exit) rather than continuing"; fi
+assert_grep "conflict label failure: an ERROR is logged" "ERROR: gh pr edit --add-label failed for PR #60" "$TMP/err"
 
 # ---------- merge fails AND the merge-failure label itself can't be
 # applied: fail-closed (#107) — the stalled-PR retry sweep only ever
