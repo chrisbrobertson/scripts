@@ -145,15 +145,16 @@ with open(log_path, errors='replace') as f:
 
 # Walk backward from the halt to the nearest preceding "## BLOCKING" header —
 # the start of the verdict block the review actually printed just before the
-# telltale scan fired.
+# telltale scan fired. A long review can place its verdict arbitrarily far
+# back, so scan the whole file rather than capping the lookback distance.
 start = None
-for j in range(idx - 1, max(idx - 200, -1), -1):
+for j in range(idx - 1, -1, -1):
     if lines[j].strip() == '## BLOCKING':
         start = j
         break
 
 if start is None:
-    print(f'Found halt line in {log_path} but no "## BLOCKING" verdict block within 200 lines before it.',
+    print(f'Found halt line in {log_path} but no "## BLOCKING" verdict block before it.',
           file=sys.stderr)
     print(f'Raw transcript: {transcript_path}', file=sys.stderr)
     sys.exit(1)
