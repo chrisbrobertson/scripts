@@ -1170,14 +1170,18 @@ Label \`review-merge-failed\` has been added. The stalled-PR retry sweep will fi
 # Like flag_review_cycle_merge_failed, but for the permanent case: GitHub's own
 # mergeable computation reports the PR CONFLICTING against the base branch, not
 # a transient CI/branch-protection race. Retrying the identical `gh pr merge`
-# call can never succeed on its own, so this label is deliberately NOT in
-# RESUMABLE_STALL_LABELS — routing a real conflict through that resumable retry
-# loop just re-fails the same way on every outer iteration forever, burning the
-# MAX_ITER budget for no benefit (the exact shape of the #82 backlog: #83, #91,
-# and #9 all sat behind stale, now-conflicting branches through repeated
-# merge-only retries). Does not halt the wrapper — same rationale as
-# flag_review_cycle_merge_failed: the review already passed and the reviewer
-# backend is fine, only the git-hosting-side merge is blocked.
+# call can never succeed on its own, so this label IS in RESUMABLE_STALL_LABELS
+# but gated: the outer sweep checks `gh pr view --json mergeable` first and
+# only acts once that reports the conflict is actually gone (see the
+# review-merge-conflict branch of the outer sweep below). Until then the sweep
+# must defer without burning the MAX_ITER budget re-selecting the same
+# unresolved PR forever (the exact shape of the #82 backlog: #83, #91, and #9
+# all sat behind stale, now-conflicting branches through repeated merge-only
+# retries; see #111 review cycle 2 for the fix that made deferring actually
+# fall through to new work instead of looping). Does not halt the wrapper —
+# same rationale as flag_review_cycle_merge_failed: the review already passed
+# and the reviewer backend is fine, only the git-hosting-side merge is
+# blocked.
 # Args: <pr_num> [head_sha]
 flag_review_cycle_merge_conflict() {
   local pr_num="$1"
@@ -2299,6 +2303,16 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
   if [ -n "$_retry_pick" ]; then
     _retry_label="${_retry_pick%% *}"
     _retry_pr="${_retry_pick#* }"
+    # Set to 1 by either branch below when this PR needs a human and nothing
+    # else can be done to it this iteration. Unlike the reviewer-unavailable
+    # case further down (a transient, self-resolving backend outage worth
+    # blocking new work for), a real merge conflict has no bound on how long
+    # it sits — leaving the label in place and looping back to re-select the
+    # same PR (via `continue`) burns the entire MAX_ITER budget on a PR that
+    # cannot make progress, starving both new work and any other stalled PR
+    # (see #111 review cycle 2, BLOCKING). Falling through to new work instead
+    # costs nothing: the next iteration's sweep re-checks this PR again.
+    _retry_defer=0
     if [ "$_retry_label" = "review-merge-failed" ]; then
       # The review already passed (codex-review=success is already set on the
       # head SHA) — only `gh pr merge` itself failed. Routing this through
@@ -2357,21 +2371,28 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
       _mergeable=$(gh pr view "$_retry_pr" --json mergeable -q .mergeable 2>>"$LOG" || echo "")
       if [ "$_mergeable" = "CONFLICTING" ] || [ -z "$_mergeable" ] || [ "$_mergeable" = "UNKNOWN" ]; then
         echo "[outer] PR #$_retry_pr still CONFLICTING (or not yet known); leaving it labelled review-merge-conflict for a later retry" | tee -a "$LOG" >&2
-        unset _retry_pick _retry_label _retry_pr _mergeable
-        sleep "$SLEEP_SEC"
-        continue
+        _retry_defer=1
+      else
+        echo "[outer] PR #$_retry_pr no longer CONFLICTING (mergeable=$_mergeable); routing to a fresh review cycle to re-review the merged-up diff" | tee -a "$LOG" >&2
       fi
-      echo "[outer] PR #$_retry_pr no longer CONFLICTING (mergeable=$_mergeable); routing to a fresh review cycle to re-review the merged-up diff" | tee -a "$LOG" >&2
       unset _mergeable
     fi
-    if ! reviewer_binary_available; then
+    if [ "$_retry_defer" -eq 1 ]; then
+      # Leave the label in place for a later retry, but do NOT `continue` —
+      # this PR needs a human and re-selecting it every iteration (the old
+      # behavior) starves both new work and any other stalled PR until
+      # MAX_ITER runs out (see #111 review cycle 2, BLOCKING). Just unset the
+      # pick and fall through to the new-work section below; the next
+      # iteration's sweep re-checks this PR again on its own.
+      unset _retry_pick _retry_label _retry_pr _retry_defer
+    elif ! reviewer_binary_available; then
       # Don't remove the label yet: run_review_cycle's own CLI-missing check
       # (reviewer_binary_available, above run_review_cycle's checkout step)
       # returns success without reviewing anything, and this is the only
       # place the stalled label gets re-attached. Removing it first would
       # leave the PR unlabelled and undiscoverable by the next retry sweep.
       echo "[outer] $REVIEWER CLI still unavailable; leaving PR #$_retry_pr labelled $_retry_label for a later retry" | tee -a "$LOG" >&2
-      unset _retry_pick _retry_label _retry_pr
+      unset _retry_pick _retry_label _retry_pr _retry_defer
       # Don't fall through to new work: a PR is stuck awaiting review, and
       # starting an implementer pass would let new unreviewed work pile up
       # behind it instead of resolving the stall first (see PR #104 review).
@@ -2386,7 +2407,7 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
         # next sweep retry it anyway. Skip to next iteration and try the
         # removal again rather than risk that state.
         echo "[outer] WARNING: failed to remove $_retry_label from PR #$_retry_pr; retrying removal next iteration" | tee -a "$LOG" >&2
-        unset _retry_pick _retry_label _retry_pr
+        unset _retry_pick _retry_label _retry_pr _retry_defer
         sleep "$SLEEP_SEC"
         continue
       fi
@@ -2401,7 +2422,7 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
         esac
         break
       fi
-      unset _retry_pick _retry_label _retry_pr _rc
+      unset _retry_pick _retry_label _retry_pr _retry_defer _rc
       continue
     fi
   fi

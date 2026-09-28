@@ -291,17 +291,22 @@ assert_grep "stalled retry (reviewer unavailable): sweep logs that it's deferrin
 assert_not_grep "stalled retry (reviewer unavailable): does not fall through to new implementer work" "[outer] worktree:" "$TMP/err"
 
 # ---------- scenario 1e: a PR is stalled behind review-merge-conflict but
-# GitHub still reports it CONFLICTING — the fix for the #111 finding that a
-# real conflict must never be blindly retried (the whole reason this label
-# was kept out of a naive resumable set to begin with). The sweep must defer:
-# leave the label in place, never call run_review_cycle, and not fall through
-# to new implementer work. ----------
+# GitHub still reports it CONFLICTING — the fix for the #111 (review cycle 1)
+# finding that a real conflict must never be blindly retried. The sweep must
+# defer: leave the label in place and never call run_review_cycle. But unlike
+# the reviewer-unavailable case (scenario 2 below), it must now (fix for the
+# #111 review cycle 2 BLOCKING finding) fall through to new implementer work
+# in the SAME iteration rather than `continue`-looping back to re-select the
+# identical unresolved PR — a conflict has no bound on how long it sits, and
+# the old behavior burned the entire MAX_ITER budget re-picking the same PR
+# every iteration, starving both new work and any other stalled PR until the
+# run just ended. ----------
 r="$TMP/merge-conflict-still-conflicting.record"
 run_outer_iteration "$r" STUB_PR_MERGE_CONFLICT=83 STUB_MERGEABLE=CONFLICTING
 assert_not_grep "stalled retry (merge-conflict, still conflicting): label is left in place" "--remove-label" "$r"
 assert_not_grep "stalled retry (merge-conflict, still conflicting): run_review_cycle is never invoked" "=== review handoff: PR #83 @" "$TMP/err"
 assert_grep "stalled retry (merge-conflict, still conflicting): sweep logs that it's deferring" "[outer] PR #83 still CONFLICTING (or not yet known); leaving it labelled review-merge-conflict for a later retry" "$TMP/err"
-assert_not_grep "stalled retry (merge-conflict, still conflicting): does not fall through to new implementer work" "[outer] worktree:" "$TMP/err"
+assert_grep "stalled retry (merge-conflict, still conflicting): falls through to new implementer work instead of starving it (#111 review cycle 2, BLOCKING)" "[outer] worktree:" "$TMP/err"
 
 # ---------- scenario 1f: a PR is stalled behind review-merge-conflict and a
 # human has since merged the base branch in and pushed — GitHub's mergeable
