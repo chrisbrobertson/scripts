@@ -550,6 +550,10 @@ assert_contains "$TMP/review-cycles-reached.out" 'cycle=6 max=6 exhausted=1' 're
 printf '5 6\n' | run_script review-cycles-exhausted "$TMP/review-cycles-below-cap.record" "$TMP/home" > "$TMP/review-cycles-below-cap.out"
 assert_contains "$TMP/review-cycles-below-cap.out" 'cycle=5 max=6 exhausted=0' 'review-cycles: exhaustion does not fire before MAX_REVIEW_CYCLES'
 
+: > "$TMP/review-cycles-invalid-max.record"
+printf '2 abc\n' | run_script review-cycles-exhausted "$TMP/review-cycles-invalid-max.record" "$TMP/home" > "$TMP/review-cycles-invalid-max.out"
+assert_contains "$TMP/review-cycles-invalid-max.out" 'cycle=2 max=abc exhausted=1' 'review-cycles: a non-numeric MAX_REVIEW_CYCLES fails safe as exhausted, not an infinite loop'
+
 # Lock file removal mid-run: converts QA-TEST-PLAN.md Suite 1 TC-1.4 (removing
 # the stop file mid-run causes the loop to exit gracefully) into deterministic
 # coverage. outer-lockfile-removed feeds stop-file paths through the real

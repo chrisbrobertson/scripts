@@ -1592,9 +1592,16 @@ maxiter_exhausted() {
 # attempt counter has reached the configured cap (the point where
 # run_review_cycle stops looping and calls fail_review_cycle). Extracted
 # from the loop condition so BABYSIT_TEST_MODE=review-cycles-exhausted can
-# drive it deterministically.
+# drive it deterministically. Fails safe: a non-numeric cycle or cap (e.g. a
+# misconfigured MAX_REVIEW_CYCLES) reports exhausted=true, matching the prior
+# inline `[ "$cycle" -lt "$MAX_REVIEW_CYCLES" ]` loop condition, whose `-lt`
+# comparison error made the while-condition false and ended the loop into
+# fail_review_cycle — rather than letting `while !` on a swallowed error spin
+# the loop forever.
 review_cycles_exhausted() {
   local cycle_val="$1" max_val="$2"
+  case "$cycle_val" in ''|*[!0-9]*) return 0 ;; esac
+  case "$max_val" in ''|*[!0-9]*) return 0 ;; esac
   [ "$cycle_val" -ge "$max_val" ]
 }
 
