@@ -1690,6 +1690,12 @@ safety_push_worktree() {
 # is the build-loop counterpart of that sweep).
 RESUMABLE_BUILD_STALL_LABELS=(build-mcp-outage build-codex-outdated build-codex-no-credits)
 
+# Upper bound on stalled PRs fetched per label. If a label's lookup returns
+# this many results, more may exist beyond the page and we cannot tell — see
+# the in-loop check below. Env-overridable for test coverage of the truncation
+# path without needing 200 fixture PRs.
+BUILD_STALL_SWEEP_LIMIT="${BUILD_STALL_SWEEP_LIMIT:-200}"
+
 # Re-run the build cycle for PRs a previous run quarantined behind any label in
 # RESUMABLE_BUILD_STALL_LABELS. Runs BEFORE the queue is read: those tickets are
 # still build-ready, and reading the queue first would rebuild them into
@@ -1698,17 +1704,23 @@ RESUMABLE_BUILD_STALL_LABELS=(build-mcp-outage build-codex-outdated build-codex-
 # call site), so a genuine outdated-CLI/no-credits condition would have halted
 # before we ever reach this sweep.
 #
-# A failed lookup for ANY label means we cannot prove no stalled ticket remains
-# behind that label, so the whole sweep aborts (HALT_RC=5) rather than falling
-# through to read the ticket queue — that fallthrough is exactly how a stalled
-# ticket gets rebuilt into a duplicate PR.
+# A failed or possibly-truncated lookup for ANY label means we cannot prove no
+# stalled ticket remains behind that label, so the whole sweep aborts (HALT_RC=5)
+# rather than falling through to read the ticket queue — that fallthrough is
+# exactly how a stalled ticket gets rebuilt into a duplicate PR.
 resume_stalled_prs() {
-  local raw_file="$TMP_ROOT/stalled-prs.json" records="$TMP_ROOT/stalled-records" label
+  local raw_file="$TMP_ROOT/stalled-prs.json" records="$TMP_ROOT/stalled-records" label pr_count
   : > "$records"
   for label in "${RESUMABLE_BUILD_STALL_LABELS[@]}"; do
-    if ! gh pr list --repo "$REPO" --state open --label "$label" --limit 20 \
+    if ! gh pr list --repo "$REPO" --state open --label "$label" --limit "$BUILD_STALL_SWEEP_LIMIT" \
       --json number,headRefName,body > "$raw_file" 2>> "$LOG"; then
       echo "[build] ERROR: could not list $label PRs; aborting run before reading the ticket queue to avoid rebuilding a stalled ticket into a duplicate PR" >&2
+      HALT_RC=5
+      return 0
+    fi
+    pr_count=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$raw_file")
+    if [ "$pr_count" -ge "$BUILD_STALL_SWEEP_LIMIT" ]; then
+      echo "[build] ERROR: $label PR lookup returned $pr_count results (limit $BUILD_STALL_SWEEP_LIMIT); more may be hidden beyond the page. Aborting run before reading the ticket queue to avoid rebuilding a stalled ticket into a duplicate PR" >&2
       HALT_RC=5
       return 0
     fi
@@ -1799,7 +1811,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
       2) echo "Halting: reviewer MCP outage persists; the PR stays labelled build-mcp-outage and will be retried next run. See $LOG" >&2 ;;
       3) echo "Halting: Codex version incompatibility; upgrade the CLI (codex update), then re-run — the stalled-PR sweep finds the build-codex-outdated PR itself. See $LOG" >&2 ;;
       4) echo "Halting: Codex workspace out of credits; add credits, then re-run — the stalled-PR sweep finds the build-codex-no-credits PR itself. See $LOG" >&2 ;;
-      5) echo "Halting: stalled-PR sweep could not confirm the resumable labels are clear; fix the reported condition, then re-run. See $LOG" >&2 ;;
+      5) echo "Halting: stalled-PR sweep could not confirm the resumable labels are clear (lookup failure or possible truncation); fix the reported condition, then re-run. See $LOG" >&2 ;;
     esac
     echo "Builder halted during stalled-PR sweep."
     exit 0

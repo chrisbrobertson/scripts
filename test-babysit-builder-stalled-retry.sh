@@ -109,6 +109,15 @@ queue_json() {  # <issue-number> — a single build-ready ticket, for asserting 
   printf '[{"number": %s, "title": "t", "body": "", "url": "https://example.com/%s"}]' "$1" "$1"
 }
 
+pr_json_n() {  # <count> — N dummy entries, for exercising the sweep-limit truncation guard
+  local n="$1" i out="["
+  for i in $(seq 1 "$n"); do
+    [ "$i" = 1 ] || out+=","
+    out+="{\"number\": $i, \"headRefName\": \"dummy-$i\", \"body\": \"\"}"
+  done
+  printf '%s]' "$out"
+}
+
 run_builder() {  # <record> [env assignments...]
   local record="$1"; shift
   : > "$record"
@@ -159,6 +168,15 @@ run_builder "$r" STUB_PR_MCP_FAIL=1 STUB_QUEUE="$(queue_json 501)"
 assert_grep "stalled retry (lookup failure): run halts rather than falling through" "Halting: stalled-PR sweep" "$TMP/err"
 assert_not_grep "stalled retry (lookup failure): ticket queue is never read" "CALL=gh issue list" "$r"
 assert_not_grep "stalled retry (lookup failure): no build cycle starts for the queued ticket" "=== build cycle:" "$TMP/err"
+
+# ---------- scenario 6 (duplicate-PR failure path): a label's lookup returns
+# exactly BUILD_STALL_SWEEP_LIMIT results — treated as possible truncation, so
+# the run halts instead of assuming that's the full set ----------
+r="$TMP/limit-hit.record"
+run_builder "$r" BUILD_STALL_SWEEP_LIMIT=3 STUB_PR_MCP="$(pr_json_n 3)" STUB_QUEUE="$(queue_json 502)"
+assert_grep "stalled retry (limit hit): run halts rather than assuming the page is complete" "Halting: stalled-PR sweep" "$TMP/err"
+assert_not_grep "stalled retry (limit hit): ticket queue is never read" "CALL=gh issue list" "$r"
+assert_not_grep "stalled retry (limit hit): no build cycle starts for the queued ticket" "=== build cycle:" "$TMP/err"
 
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]
