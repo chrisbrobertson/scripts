@@ -1709,8 +1709,9 @@ BUILD_STALL_SWEEP_LIMIT="${BUILD_STALL_SWEEP_LIMIT:-200}"
 # rather than falling through to read the ticket queue — that fallthrough is
 # exactly how a stalled ticket gets rebuilt into a duplicate PR. The same is
 # true if a resumed PR's branch cannot be fetched or checked out into a
-# worktree (HALT_RC=6): its ticket is still build-ready, so continuing on to
-# the next record — or worse, to the ticket queue — risks the same duplicate.
+# worktree (HALT_RC=6), or if a resumable label cannot be removed from it
+# (HALT_RC=7): its ticket is still build-ready, so continuing on to the next
+# record — or worse, to the ticket queue — risks the same duplicate.
 resume_stalled_prs() {
   local raw_file="$TMP_ROOT/stalled-prs.json" records="$TMP_ROOT/stalled-records" label pr_count
   : > "$records"
@@ -1767,9 +1768,10 @@ PY
     printf '%s\n' "$BUILD_DIR" >> "$WORKTREE_LIST"
 
     if ! gh pr edit "$pr_num" --repo "$REPO" --remove-label "$label" >> "$LOG" 2>&1; then
-      echo "[build] WARNING: could not remove $label from PR #$pr_num; leaving it labelled and skipping this cycle so it is retried next sweep" >&2
+      echo "[build] ERROR: could not remove $label from PR #$pr_num; halting before reading the ticket queue to avoid rebuilding its still-build-ready ticket into a duplicate PR" >&2
       discard_build_worktree
-      continue
+      HALT_RC=7
+      return 0
     fi
     gh pr ready "$pr_num" --repo "$REPO" >> "$LOG" 2>&1 || true
 
@@ -1828,6 +1830,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
       4) echo "Halting: Codex workspace out of credits; add credits, then re-run — the stalled-PR sweep finds the build-codex-no-credits PR itself. See $LOG" >&2 ;;
       5) echo "Halting: stalled-PR sweep could not confirm the resumable labels are clear (lookup failure or possible truncation); fix the reported condition, then re-run. See $LOG" >&2 ;;
       6) echo "Halting: stalled-PR sweep could not fetch or check out a resumed PR's branch; its ticket is still build-ready. Fix the reported condition, then re-run — the sweep will find the same PR again. See $LOG" >&2 ;;
+      7) echo "Halting: stalled-PR sweep could not remove a resumable label from a resumed PR; its ticket is still build-ready. Fix the reported condition, then re-run — the sweep will find the same PR again. See $LOG" >&2 ;;
     esac
     echo "Builder halted during stalled-PR sweep."
     exit 0
