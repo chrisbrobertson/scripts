@@ -19,7 +19,13 @@
 # Usage:
 #   check-codex-false-positive.sh <PR_NUMBER> [--repo OWNER/REPO] [--log-dir DIR]
 #
-#   --repo OWNER/REPO   Repo to query for the PR's labels (default: current repo)
+#   --repo OWNER/REPO   Repo to query for the PR's labels (default: current repo).
+#                       Also scopes the log search to this repo's project name
+#                       (the REPO part), since babysit-with-review.sh names its
+#                       logs after basename($PWD) at launch. Without --repo, the
+#                       log search is scoped to basename($PWD) instead — run
+#                       this script from the same repo directory the babysitter
+#                       ran from.
 #   --log-dir DIR       Babysit log directory to search (default: ~/sisyphus-logs)
 #
 # Exit code: 0 if a verdict was located and printed (clean or not clean);
@@ -68,12 +74,21 @@ case ",$labels," in
     ;;
 esac
 
-python3 - "$LOG_DIR" "$PR" <<'PYEOF'
+# babysit-with-review.sh names its log after basename($PWD) at launch
+# (PROJECT=$(basename "$PWD")); PR numbers repeat across repos, so scope
+# the log search to the project the requested PR actually belongs to.
+if [ -n "$REPO" ]; then
+  project="${REPO##*/}"
+else
+  project="$(basename "$PWD")"
+fi
+
+python3 - "$LOG_DIR" "$PR" "$project" <<'PYEOF'
 import os
 import re
 import sys
 
-log_dir, pr = sys.argv[1], sys.argv[2]
+log_dir, pr, project = sys.argv[1], sys.argv[2], sys.argv[3]
 
 if not os.path.isdir(log_dir):
     print(f'Log directory {log_dir} does not exist.', file=sys.stderr)
@@ -88,8 +103,10 @@ best = None  # (mtime, log_path, line_idx, halting_line, transcript_path)
 
 # Both driver-launched and directly-run babysitters write
 # <project>-<timestamp>-<pid>.log — match the naming convention itself
-# rather than requiring "driver" to appear in the filename.
-log_name_re = re.compile(r'^.+-\d{8}-\d{6}-\d+\.log$')
+# rather than requiring "driver" to appear in the filename, and scope
+# to the requested repo's project name so a same-numbered PR in another
+# project's logs can't be picked up instead.
+log_name_re = re.compile(r'^' + re.escape(project) + r'-\d{8}-\d{6}-\d+\.log$')
 
 for fn in os.listdir(log_dir):
     if not log_name_re.match(fn):
