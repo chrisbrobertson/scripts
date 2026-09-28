@@ -248,7 +248,7 @@ unlabelled tickets.
 Events emitted to stdout:
 - `[draft] ticket <id> (<source>) → PR #N opened`
 - `[draft] ticket <id> (<source>) → already has open spec PR #N, skipped`
-- `[approve] PR #N → approved comment found → merged, ticket #M labelled status:ready-to-build, sub-ticket #K created (labelled sub-ticket+build-ready)`
+- `[approve] PR #N → approved comment found → merged, sub-ticket #K created (labelled sub-ticket+build-ready); for a GitHub source, ticket #M also labelled status:ready-to-build`
 - `[approve] PR #N → no approval comment yet, skipped`
 
 Events emitted to stderr:
