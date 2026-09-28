@@ -70,8 +70,8 @@ scripts" sections) rather than kept in a separate amendments file — no
   Adjudication mode (cycles 5-6 in `babysit-with-review.sh`) is deliberately
   omitted — the disagree-and-escalate protocol is for code, and a recurring
   finding on a spec should become a flagged `[ASSUMPTION]`, not an argument.
-  **Note:** `L3-work-prep.md` still predates this gate and does not yet document it
-  or the `build-ready` output naming, even after the 2026-09-28 correction above.
+  **Note:** [L3-work-prep.md](L3-work-prep.md) documents the shipped adversarial
+  review gate and the `build-ready` sub-ticket output.
 - **L4 tasks:** `ready` (both selectable-implementer and selectable-reviewer)
 - **Complexity:** 2/30 (trivial band per TIF rubric)
 - **Fit check:** Passed (specs are appropriate artifact)
