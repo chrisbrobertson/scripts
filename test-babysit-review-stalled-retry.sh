@@ -277,8 +277,29 @@ assert_grep "stalled retry (merge-failed, stale head): sweep removes the label b
 assert_not_grep "stalled retry (merge-failed, stale head): never merges the unreviewed head" "CALL=gh pr merge" "$r"
 rm -f "$TMP/bin/codex"
 
+# ---------- scenario 1c-3: review-merge-failed is stale — the PR is actually
+# CONFLICTING right now (simulating a prior flag_review_cycle_merge_conflict
+# call whose best-effort `--remove-label review-merge-failed` failed, leaving
+# both labels on). Head is unchanged (recorded == current), so this would
+# otherwise take the merge-only shortcut and retry a merge that is guaranteed
+# to fail the exact same way forever (#111 review cycle 2, BLOCKING). The
+# sweep must detect this via `gh pr view --json mergeable` BEFORE attempting
+# any merge, re-route to review-merge-conflict directly, and defer (fall
+# through to new work) rather than looping. No codex stub is installed — if
+# the sweep ever ran a full review cycle here, `codex` would be missing from
+# PATH. ----------
+r="$TMP/merge-failed-actually-conflicting.record"
+run_outer_iteration "$r" STUB_PR_MERGE_FAILED=63 STUB_CURRENT_HEAD=ddd4567 STUB_RECORDED_HEAD=ddd4567 STUB_MERGEABLE=CONFLICTING
+assert_not_grep "stalled retry (merge-failed, actually conflicting): never attempts the doomed merge" "CALL=gh pr merge 63" "$r"
+assert_not_grep "stalled retry (merge-failed, actually conflicting): never runs a full review cycle" "=== review handoff: PR #63 @" "$TMP/err"
+assert_not_grep "stalled retry (merge-failed, actually conflicting): never invokes the reviewer CLI" "CALL=codex" "$r"
+assert_grep "stalled retry (merge-failed, actually conflicting): sweep logs the re-route" "[outer] PR #63 is CONFLICTING despite the review-merge-failed label (stale label from a prior failed removal); re-routing to review-merge-conflict instead of retrying a doomed merge" "$TMP/err"
+assert_grep "stalled retry (merge-failed, actually conflicting): review-merge-conflict label is added" "CALL=gh pr edit 63 --add-label review-merge-conflict" "$r"
+assert_grep "stalled retry (merge-failed, actually conflicting): stale review-merge-failed label removal is (re-)attempted" "CALL=gh pr edit 63 --remove-label review-merge-failed" "$r"
+assert_grep "stalled retry (merge-failed, actually conflicting): falls through to new implementer work instead of looping (#111 review cycle 2, BLOCKING)" "[outer] worktree:" "$TMP/err"
+
 else
-  echo "SKIP: jq not on PATH; scenarios 1c/1c-2/1d need it to exercise the real gh -q filter used by review_merge_failed_recorded_head" >&2
+  echo "SKIP: jq not on PATH; scenarios 1c/1c-2/1c-3/1d need it to exercise the real gh -q filter used by review_merge_failed_recorded_head" >&2
 fi
 
 # ---------- scenario 2: reviewer CLI still unavailable — label stays, no
