@@ -172,9 +172,12 @@ built against this spec:
 babysit-work-prep.sh [--repo OWNER/REPO] [--source github|jira|both]
                       [--implementer claude|codex]
                       [--implementer-model MODEL] [--implementer-effort LEVEL]
+                      [--reviewer claude|codex]
+                      [--reviewer-model MODEL] [--reviewer-effort LEVEL]
                       [--max-tickets N] [--dry-run]
 # --repo: optional; auto-detected via `gh repo view` when omitted
 # --source: defaults to github
+# --reviewer: defaults to codex
 # Unknown flags: exit 2 with usage message
 ```
 
