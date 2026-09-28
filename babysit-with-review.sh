@@ -1368,13 +1368,15 @@ reviewer_binary_available() {
 merge_reviewed_pr() {
   local pr_num="$1"
   local cycle="$2"
-  # expected_head, when passed, is a SHA the caller already validated as the
-  # reviewed head (e.g. the review-merge-failed retry sweep, which compares
-  # the recorded reviewed head against the PR's current head before calling
-  # in). Using it directly instead of re-fetching headRefOid here closes the
-  # TOCTOU window where a commit pushed between the caller's check and this
-  # function's own fetch would get a green status posted against it despite
-  # never having been reviewed (see PR #107 review, BLOCKING).
+  # expected_head, when passed, is the SHA the caller knows was actually
+  # reviewed: the fresh-review call site (run_review_cycle) passes the local
+  # HEAD captured right after the review pass succeeded, and the
+  # review-merge-failed retry sweep passes the current head only after
+  # confirming it matches its recorded reviewed head. Using it directly
+  # instead of re-fetching headRefOid here closes the TOCTOU window where a
+  # commit pushed after the review verdict (but before this function runs)
+  # would otherwise get a green status posted against it — and merged —
+  # despite never having been reviewed (see PR #107 review, BLOCKING).
   local expected_head="${3:-}"
 
   echo "  [review] zero blocking findings; PR #$pr_num cleared after $cycle cycle(s)" | tee -a "$LOG" >&2
@@ -1573,6 +1575,16 @@ ${_hb}--- end prior review cycles ---
       return 0
     fi
 
+    # Pin the SHA the reviewer actually examined: nothing mutates the local
+    # worktree between the review pass above and this point, so local HEAD
+    # is exactly the reviewed commit. Using this (instead of re-fetching the
+    # PR's current head later in merge_reviewed_pr) closes the window where a
+    # commit pushed to the branch after the verdict — but before the status
+    # post and merge — would get waved through on an unreviewed SHA (see PR
+    # #107 review, BLOCKING).
+    local reviewed_head_sha
+    reviewed_head_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
+
     local review
     review=$(cat "$TMP_REVIEW")
     REVIEW_HISTORY+=("$review")
@@ -1605,7 +1617,7 @@ ${_hb}--- end prior review cycles ---
     fi
 
     if [ "$n_blocking" -eq 0 ]; then
-      merge_reviewed_pr "$pr_num" "$cycle"
+      merge_reviewed_pr "$pr_num" "$cycle" "$reviewed_head_sha"
       return 0
     fi
 
