@@ -388,7 +388,8 @@ remain the acceptance reference for that.
 ---
 
 ### TC-2.8: Codex MCP Transport Failure (3 Retries)
-**Status: automated, not manual (added 2026-09-27).**
+**Status: terminal path automated (added 2026-09-27); step 8 (auto-retry on
+the next outer iteration) remains manual.**
 `test-babysit-review-cycle-mcp-outage.sh` drives the real `run_review_cycle()`
 (not just `codex_review_with_retry()`, which Suite 3's TC-3.4 already covers)
 through `codex`/`sleep`/`gh` stubs on PATH: a clean `reviewer_preflight()`
@@ -397,8 +398,9 @@ that the rc=2 from the retry-exhausted reviewer call is turned into
 `fail_review_cycle_mcp()` specifically — the `review-mcp-outage` label, the
 `gh pr ready --undo` draft call, and the outage comment — rather than falling
 through to the generic `fail_review_cycle()` (`review-incomplete`) path every
-other non-zero `reviewer_rc` takes. No live MCP outage (firewall/`/etc/hosts`
-edit) required.
+other non-zero `reviewer_rc` takes. It does not exercise the documented
+automatic retry on the next outer loop iteration (step 8 below); that still
+requires a live MCP outage (firewall/`/etc/hosts` edit) and a manual run.
 
 **Given:** Codex MCP transport fails 3 times  
 **When:** Retry exhausted  
