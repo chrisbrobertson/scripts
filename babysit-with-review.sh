@@ -1597,12 +1597,24 @@ maxiter_exhausted() {
 # inline `[ "$cycle" -lt "$MAX_REVIEW_CYCLES" ]` loop condition, whose `-lt`
 # comparison error made the while-condition false and ended the loop into
 # fail_review_cycle — rather than letting `while !` on a swallowed error spin
-# the loop forever.
+# the loop forever. The digit-only guards above don't catch a value that is
+# all digits but too large for bash's integer range (e.g. a fat-fingered
+# extra zero on MAX_REVIEW_CYCLES): `-ge` then exits 2 (not 0/1), and `!` on
+# that would read as "not exhausted", bypassing the cap indefinitely — so the
+# comparison's own exit status is captured and anything other than 0/1 is
+# also treated as exhausted.
 review_cycles_exhausted() {
   local cycle_val="$1" max_val="$2"
   case "$cycle_val" in ''|*[!0-9]*) return 0 ;; esac
   case "$max_val" in ''|*[!0-9]*) return 0 ;; esac
-  [ "$cycle_val" -ge "$max_val" ]
+  local cmp_status
+  [ "$cycle_val" -ge "$max_val" ] 2>/dev/null
+  cmp_status=$?
+  case "$cmp_status" in
+    0) return 0 ;;
+    1) return 1 ;;
+    *) return 0 ;;
+  esac
 }
 
 # Stop-file removal predicate: true once the lock file the outer loop created
