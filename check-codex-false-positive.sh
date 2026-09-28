@@ -262,11 +262,14 @@ block_text = ''.join(block).rstrip('\n')
 
 # babysit-with-review.sh's review format requires all three section
 # headers, each with a single literal "- (none)" bullet when empty
-# (see CLAUDE.md / babysit-with-review.sh's own is_none check). Match
-# that exactly rather than testing for the substring "(none)" anywhere
-# in the block, and require every section to be present — a finding
-# whose text happens to mention "(none)", or a truncated block missing
-# a section, must not be reported as a clean verdict.
+# (see CLAUDE.md / babysit-with-review.sh's valid_review_structure()). Match
+# that exactly rather than testing for the substring "(none)" anywhere in the
+# block, and require every section to be present — a finding whose text
+# happens to mention "(none)", or a truncated block missing a section, must
+# not be reported as a clean verdict. Compare on lines stripped of the
+# trailing newline only, NOT leading whitespace: the wrapper's awk anchors
+# every header and bullet at column 0, so an indented "## BLOCKING" or
+# "  - (none)" is malformed to it and must not read as valid here either.
 REQUIRED_SECTIONS = ('BLOCKING', 'RECOMMENDED', 'INFORMATION')
 # valid_review_structure() also accepts an optional "## ADJUDICATION" section,
 # but only as the first section (cycles 5-6) and only with at least one bullet.
@@ -278,16 +281,18 @@ unexpected_headers = []
 headers_in_order = []
 current = None
 for l in block:
-    stripped = l.strip()
-    if stripped.startswith('## '):
-        current = stripped[3:].strip()
+    line = l.rstrip('\r\n')
+    if line.strip() == '':
+        continue
+    if line.startswith('## '):
+        current = line[3:].strip()
         header_counts[current] = header_counts.get(current, 0) + 1
         headers_in_order.append(current)
         if current not in KNOWN_SECTIONS:
             unexpected_headers.append(current)
         sections[current] = []
-    elif current is not None and stripped:
-        sections[current].append(stripped)
+    elif current is not None:
+        sections[current].append(line)
 
 # A well-formed verdict block has each required header exactly once, an
 # optional leading ADJUDICATION, and no other "## " headers. Duplicate
