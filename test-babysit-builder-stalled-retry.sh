@@ -122,6 +122,11 @@ pr_json_no_marker() {  # <number> <head_ref> — a resumed PR with no builder ma
   printf '[{"number": %s, "headRefName": "%s", "body": ""}]' "$1" "$2"
 }
 
+pr_json_no_head() {  # <number> <source> <ticket> — a resumed PR with no head branch at all
+  printf '[{"number": %s, "headRefName": "", "body": "<!-- babysit-builder source=%s ticket=%s -->"}]' \
+    "$1" "$2" "$3"
+}
+
 pr_json_n() {  # <count> — N dummy entries, for exercising the sweep-limit truncation guard
   local n="$1" i out="["
   for i in $(seq 1 "$n"); do
@@ -248,6 +253,17 @@ assert_not_grep "stalled retry (no builder marker): ticket queue is never read" 
 # happen before the marker is confirmed present ----------
 assert_not_grep "stalled retry (no builder marker): resumable label is left in place" "--remove-label" "$r"
 assert_not_grep "stalled retry (no builder marker): run_build_cycle never starts" "=== build cycle: PR #101" "$TMP/err"
+
+# ---------- scenario 12 (PR #106 review, BLOCKING): a stalled-PR record has no
+# head branch (empty headRefName) — the sweep must halt rather than silently
+# `continue` past it, since skipping it would leave its still-build-ready
+# ticket free to reach the queue and get rebuilt into a duplicate PR ----------
+r="$TMP/no-head.record"
+run_builder "$r" STUB_PR_MCP="$(pr_json_no_head 102 github 48)" STUB_QUEUE="$(queue_json 506)"
+assert_grep "stalled retry (no head branch): run halts rather than skipping the record" "Halting: stalled-PR sweep found a record with no PR number or head branch" "$TMP/err"
+assert_not_grep "stalled retry (no head branch): ticket queue is never read" "CALL=gh issue list" "$r"
+assert_not_grep "stalled retry (no head branch): resumable label is left in place" "--remove-label" "$r"
+assert_not_grep "stalled retry (no head branch): run_build_cycle never starts" "=== build cycle: PR #102" "$TMP/err"
 
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]
