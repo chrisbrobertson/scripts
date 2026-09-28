@@ -110,9 +110,13 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
   `sub-ticket` plus `build-ready` — the label the builder loop actually queues on —
   even when the source ticket was Jira. The issue body embeds a
   `<!-- babysit-work-prep-subticket source=<source> ticket=<ticket> -->` marker; before
-  creating a sub-ticket the approval sweep searches all issues (`gh issue list --state
-  all`) for this marker keyed on `(source, ticket)`, and this search — not any label —
-  is the idempotency check (see Approval-gate idempotency below). Only when the source
+  creating a sub-ticket the approval sweep searches issues (`gh issue list --state
+  all --limit 1000`) for this marker keyed on `(source, ticket)`, and this search — not
+  any label —
+  is the idempotency check (see Approval-gate idempotency below). The `--limit 1000`
+  bound means a matching sub-ticket older than the 1000 most recent issues in the repo
+  would fall outside the search and could be re-created; acceptable at this repo's
+  scale (<10 users, low issue volume) but noted as the failure mode. Only when the source
   is `github` does the approval sweep additionally label the *source* ticket
   `status:ready-to-build`, an informational marker ("spec approved, sub-ticket exists")
   — Jira tickets never get this label, since `gh issue edit` has no way to label a Jira
@@ -245,14 +249,20 @@ unlabelled tickets.
   non-owner collaborators re-opens the gap.
 
 ## Telemetry contract
-Events emitted to stdout:
-- `[draft] ticket <id> (<source>) → PR #N opened`
-- `[draft] ticket <id> (<source>) → already has open spec PR #N, skipped`
-- `[approve] PR #N → approved comment found → merged, sub-ticket #K created (labelled sub-ticket+build-ready); for a GitHub source, ticket #M also labelled status:ready-to-build`
-- `[approve] PR #N → no approval comment yet, skipped`
+Events emitted to stdout (verbatim forms the script `echo`s):
+- `[draft] ticket <id> (<source>) → draft PR #N opened (<spec-path>), entering spec review`
+- `[draft] ticket <id> (<source>) → already has open/merged spec PR #N, skipped`
+- `[approve] PR #N → approved by <login>, merged/reconciled, sub-ticket #K created`
+- `[approve] PR #N → no authorized approval comment yet, skipped`
+
+Source labelling is a **conditional action, not an emitted event**: after a
+successful approval the sweep runs `gh issue edit --add-label status:ready-to-build`
+only when the source is `github`, and it emits no dedicated success line for that
+label (a failure to apply it is logged to stderr — see below).
 
 Events emitted to stderr:
-- `[draft] ticket <id>: worktree/implementer failure → skipped`
+- `[draft] ticket <id>: implementer failed; any committed work remains on local branch <branch>`
+- `[approve] PR #N: could not label source issue #M; will retry next run`
 - `[jira] Jira API unavailable → skipping Jira-sourced tickets this run`
 
 ## Verifiers
