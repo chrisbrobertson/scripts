@@ -280,9 +280,9 @@ Events emitted to stderr:
 # Bounds
 
 ## Out of scope
-- **Automated rejection handling beyond re-queueing:** no automatic spec revision loop;
-  a rejected/changes-requested spec PR requires either a human edit or a fresh work-prep
-  run against the same ticket.
+- **Automated rejection handling:** no rejection-comment sentinel is implemented. A
+  rejected spec PR requires a human edit, or a human must close the PR before a later
+  work-prep run can draft the ticket again.
 - **Non-GitHub, non-Jira ticket sources:** Linear, Shortcut, etc. are out of scope (see
   ASF-PROD-BABYSIT-WITH-REVIEW out-of-scope list).
 - **Code changes:** this script only drafts spec documents; it never touches
