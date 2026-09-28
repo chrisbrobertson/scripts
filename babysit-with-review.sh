@@ -34,10 +34,16 @@
 # `review-mcp-outage` = transport failure, often transient; restart the wrapper to retry.
 # `review-codex-outdated` = Codex CLI too old for model; upgrade CLI then restart.
 # `review-codex-no-credits` = Codex workspace out of credits; add credits then restart.
+# `review-merge-failed` = review already passed (codex-review=success already set) but
+# `gh pr merge` itself failed; unlike the other three this does NOT halt the wrapper
+# on the merge failure itself (the reviewer backend is fine) — it's picked up by the
+# same pre-iter sweep, lowest priority, on the next outer iteration of the same run,
+# no restart needed. It DOES halt, fail-closed, if the label itself can't be applied,
+# since the sweep can only find this PR again by that label.
 
 set -uo pipefail
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 
 usage() {
   cat <<'EOF'
@@ -90,6 +96,10 @@ PR labels used by the review cycle:
   review-codex-no-credits  Codex workspace has no credits; same as above —
                            the wrapper has already halted, so add credits
                            then restart. Do NOT remove the label yourself.
+  review-merge-failed    Review already passed (codex-review=success already
+                         set) but \`gh pr merge\` itself failed; does NOT
+                         halt the wrapper, retried by the same sweep on the
+                         next outer iteration.
 
 Logs land in ~/sisyphus-logs/<project>-<timestamp>-<pid>.log.
 
@@ -283,7 +293,7 @@ Pick the next unit of work in this priority order — stop at the first level th
 
    SKIP any PR whose STATE is `draft` or `BLOCKED` in the prs table (or `isDraft: true` / labels include `review-incomplete` in the JSON). These PRs were marked by a previous review cycle as needing human intervention — re-attempting them wastes iterations. Move on to item 2.
 
-   Also SKIP PRs labelled `review-mcp-outage` or `review-codex-no-credits` — these are managed by the wrapper itself and require operator action before the review cycle can proceed. Do not touch them.
+   Also SKIP PRs labelled `review-mcp-outage`, `review-codex-no-credits`, or `review-merge-failed` — these are managed by the wrapper itself and require operator action (or just its own automatic retry) before the review cycle can proceed. `review-merge-failed` in particular may already be un-drafted and passing CI — do not merge it yourself; the wrapper's sweep retries it. Do not touch any of these.
 2. Open issues you can complete in one iteration. See open issues in the project state above. Pick the highest-priority one that fits the scope discipline below.
 3. Approved specs with no implementation. See specs in the project state above — look for rows where IMPL is `no` or `?`. Scaffold the next missing piece — project skeleton, an interface stub, the first integration test, etc.
 4. Proto definitions without consumers. Files under ./proto/ that no service implements. Generate stubs or wire a service skeleton that consumes them.
@@ -1072,6 +1082,96 @@ The babysitter has halted — this is not recoverable while it's running. To res
     || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
 }
 
+# Mark a PR as stalled by a `gh pr merge` failure after an already-clean
+# review (see #82/#60: a PR reached this point with BLOCKING=0 and
+# codex-review=success already set, but nothing labelled it, so the stalled-PR
+# retry sweep — which only ever searches by label — could never find it again
+# and it sat open forever).
+#
+# Unlike fail_review_cycle_mcp/_codex_outdated/_codex_no_credits, this does not
+# re-draft the PR: the review already passed, the codex-review status is
+# already green, and the only thing that failed is the git-hosting-side merge
+# op (commonly a transient CI/branch-protection race), so leaving it
+# ready-and-mergeable is correct, not a hole to close. The label itself is
+# still fail-closed, same as the other three: the stalled-PR retry sweep only
+# ever searches by label, so a labelling failure here would leave the PR
+# undiscoverable while the outer loop moves on to new work (the exact #60
+# orphan class this function exists to close) — halt instead.
+# Args: <pr_num> [head_sha] [stage]
+# head_sha, when known, is the commit that codex-review=success was actually
+# posted for; it is recorded on the PR (see review_merge_failed_recorded_head)
+# so a later merge-only retry can confirm the PR head hasn't moved since the
+# review passed before reusing that green status (see PR #107 review).
+#
+# stage says which step actually failed — "status" (the codex-review status
+# POST itself, or resolving the repo/head needed to make it, so no status was
+# set and no merge was attempted) or "merge" (default; status was set green
+# but `gh pr merge` failed) — so the posted comment doesn't claim a status
+# was set, or a merge was attempted, when it wasn't (see PR #107 review,
+# RECOMMENDED). Either way the retry sweep calls merge_reviewed_pr() again in
+# full, which redoes the status POST before merging, so one label/retry path
+# correctly covers both failure points.
+flag_review_cycle_merge_failed() {
+  local pr_num="$1"
+  local head_sha="${2:-}"
+  local stage="${3:-merge}"
+
+  gh label create review-merge-failed \
+    --color b60205 \
+    --description "Babysit review passed but the merge could not be completed; wrapper retries automatically" \
+    --force >>"$LOG" 2>&1 || true
+
+  # Fail-closed: if we can't label the PR, halt — it must not sit unlabelled
+  # while the loop starts new work, since only this label lets the retry
+  # sweep find it again.
+  if ! gh pr edit "$pr_num" --add-label review-merge-failed >>"$LOG" 2>&1; then
+    echo "ERROR: gh pr edit --add-label failed for PR #$pr_num — merge failed and PR is unlabelled; manually add 'review-merge-failed' or merge by hand before restarting" | tee -a "$LOG" >&2
+    exit 1
+  fi
+
+  local body
+  if [ "$stage" = "status" ]; then
+    body="**babysit-with-review: review passed but the \`codex-review\` status could not be set**
+
+The review cycle completed with zero BLOCKING findings, but posting the \`codex-review=success\` status failed (or the repo/head SHA needed to post it could not be resolved) — see the wrapper log for the exact error. No \`gh pr merge\` was attempted. No code changes are needed."
+  else
+    body="**babysit-with-review: review passed but merge failed**
+
+The review cycle completed with zero BLOCKING findings and \`codex-review\` was already set to success, but \`gh pr merge\` itself failed — see the wrapper log for the exact error (often a transient CI or branch-protection race). No code changes are needed."
+  fi
+  body="${body}
+
+Label \`review-merge-failed\` has been added. The stalled-PR retry sweep will find this PR by that label and retry automatically on a later iteration — do NOT remove it yourself (see #82/#104 for why removing a resumable label by hand strands the PR instead of helping). Remove it only if you merge this PR by hand."
+  if [ -n "$head_sha" ]; then
+    body="${body}
+<!-- babysit:merge-failed-head=${head_sha} -->"
+  fi
+  printf '%s\n' "$body" \
+    | gh pr comment "$pr_num" --body-file - >>"$LOG" 2>&1 \
+    || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
+}
+
+# Read back the head SHA recorded by the most recent flag_review_cycle_merge_failed
+# comment, if any. Empty output means "no recorded head" — callers must treat
+# that as unknown/stale, never as "head unchanged" (see PR #107 review).
+#
+# Only trusts comments authored by the wrapper's own authenticated gh user:
+# any PR commenter can otherwise post a forged `babysit:merge-failed-head=`
+# marker after pushing an unreviewed commit, making that commit look
+# already-reviewed to the merge-only retry shortcut (see PR #107 review,
+# BLOCKING).
+review_merge_failed_recorded_head() {
+  local pr_num="$1"
+  local _bot_login
+  _bot_login=$(gh api user -q .login 2>/dev/null) || return 0
+  [ -n "$_bot_login" ] || return 0
+  gh pr view "$pr_num" --json comments \
+    -q ".comments[] | select(.author.login == \"${_bot_login}\") | .body" 2>/dev/null \
+    | grep -o 'babysit:merge-failed-head=[0-9a-f]\{7,40\}' \
+    | tail -n1 \
+    | sed 's/.*=//'
+}
+
 # Validate the strict review parser contract shared by all reviewer harnesses.
 valid_review_structure() {
   local review_file="$1"
@@ -1281,10 +1381,32 @@ reviewer_binary_available() {
 # reset the local worktree to the default branch. Extracted from
 # run_review_cycle so BABYSIT_TEST_MODE=review-merge can drive it
 # deterministically.
-# Args: <pr_num> <cycle>
+# Args: <pr_num> <cycle> <expected_head>
 merge_reviewed_pr() {
   local pr_num="$1"
   local cycle="$2"
+  # expected_head is the SHA the caller knows was actually reviewed: the
+  # fresh-review call site (run_review_cycle) passes the local HEAD captured
+  # right after the review pass succeeded, and the review-merge-failed retry
+  # sweep passes the current head only after confirming it matches its
+  # recorded reviewed head. Using it directly instead of re-fetching
+  # headRefOid here closes the TOCTOU window where a commit pushed after the
+  # review verdict (but before this function runs) would otherwise get a
+  # green status posted against it — and merged — despite never having been
+  # reviewed (see PR #107 review, BLOCKING).
+  #
+  # A missing/empty value means the caller couldn't determine what was
+  # actually reviewed (e.g. `git rev-parse HEAD` failed) — fail closed rather
+  # than falling back to the PR's current remote head, which could be a
+  # commit pushed after the review verdict and never examined (see PR #107
+  # review, BLOCKING).
+  local expected_head="${3:-}"
+
+  if [ -z "$expected_head" ]; then
+    echo "  [review] FATAL: no reviewed head SHA available for PR #$pr_num; refusing to post codex-review status or merge against an unverified head" | tee -a "$LOG" >&2
+    fail_review_cycle "$pr_num" "reviewed head SHA unavailable before merge (cycle $cycle)"
+    return 0
+  fi
 
   echo "  [review] zero blocking findings; PR #$pr_num cleared after $cycle cycle(s)" | tee -a "$LOG" >&2
 
@@ -1292,7 +1414,7 @@ merge_reviewed_pr() {
   # This is the ONLY place this status is set green — the implementation agent never sets it.
   local _owner_repo _head_sha
   _owner_repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
-  _head_sha=$(gh pr view "$pr_num" --json headRefOid -q .headRefOid 2>/dev/null || echo "")
+  _head_sha="$expected_head"
   if [ -n "$_owner_repo" ] && [ -n "$_head_sha" ]; then
     if gh api -X POST "repos/${_owner_repo}/statuses/${_head_sha}" \
         -f state=success \
@@ -1303,10 +1425,16 @@ merge_reviewed_pr() {
       echo "  [review] codex-review status set to success for ${_head_sha:0:8}" | tee -a "$LOG" >&2
     else
       echo "  [review] WARNING: failed to set codex-review status for PR #$pr_num; leaving PR open rather than merging without the status check" | tee -a "$LOG" >&2
+      # A caller reached here via the review-merge-failed retry sweep already
+      # removed that label before calling in; without re-flagging here, this
+      # failure would leave the PR invisible to every future sweep (see PR
+      # #107 review, BLOCKING).
+      flag_review_cycle_merge_failed "$pr_num" "$_head_sha" status
       return 0
     fi
   else
     echo "  [review] WARNING: could not resolve repo or head SHA for PR #$pr_num; leaving PR open rather than merging without the status check" | tee -a "$LOG" >&2
+    flag_review_cycle_merge_failed "$pr_num" "$_head_sha" status
     return 0
   fi
 
@@ -1320,12 +1448,27 @@ merge_reviewed_pr() {
   gh pr ready "$pr_num" >>"$LOG" 2>&1 \
     || echo "  [review] WARNING: gh pr ready failed for PR #$pr_num; attempting merge anyway" | tee -a "$LOG" >&2
 
-  if gh pr merge "$pr_num" --squash --delete-branch --auto >>"$LOG" 2>&1; then
-    echo "  [review] PR #$pr_num queued for auto-merge (merges when CI passes)" | tee -a "$LOG" >&2
-  elif gh pr merge "$pr_num" --squash --delete-branch >>"$LOG" 2>&1; then
+  # --match-head-commit pins the merge to the exact SHA the codex-review=success
+  # status above was just posted for, so a commit pushed after that point (and
+  # thus never reviewed) can never be merged out from under this call.
+  #
+  # Deliberately NOT using `gh pr merge --auto`: GitHub only validates
+  # --match-head-commit at the moment auto-merge is *enabled*, not at the
+  # moment it actually merges later once CI passes, and does not disable
+  # auto-merge on a subsequent push by anyone with write access — so a commit
+  # pushed after this review verdict (but before CI finished) could get
+  # auto-merged unreviewed, silently defeating the SHA pin above (see PR #107
+  # review, BLOCKING). Attempting an immediate merge only, every time, means
+  # GitHub re-validates the pinned SHA synchronously on every real attempt.
+  # If CI hasn't finished yet the merge just fails here and falls into the
+  # same review-merge-failed retry sweep used for any other merge failure —
+  # already paced with sleep "$SLEEP_SEC" between outer iterations and
+  # already re-checking the recorded head before reusing the green status.
+  if gh pr merge "$pr_num" --squash --delete-branch --match-head-commit "$_head_sha" >>"$LOG" 2>&1; then
     echo "  [review] PR #$pr_num merged." | tee -a "$LOG" >&2
   else
     echo "  [review] WARNING: merge failed for PR #$pr_num; left open for next iteration. See $LOG." | tee -a "$LOG" >&2
+    flag_review_cycle_merge_failed "$pr_num" "$_head_sha"
     return 0
   fi
 
@@ -1468,6 +1611,16 @@ ${_hb}--- end prior review cycles ---
       return 0
     fi
 
+    # Pin the SHA the reviewer actually examined: nothing mutates the local
+    # worktree between the review pass above and this point, so local HEAD
+    # is exactly the reviewed commit. Using this (instead of re-fetching the
+    # PR's current head later in merge_reviewed_pr) closes the window where a
+    # commit pushed to the branch after the verdict — but before the status
+    # post and merge — would get waved through on an unreviewed SHA (see PR
+    # #107 review, BLOCKING).
+    local reviewed_head_sha
+    reviewed_head_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
+
     local review
     review=$(cat "$TMP_REVIEW")
     REVIEW_HISTORY+=("$review")
@@ -1500,7 +1653,7 @@ ${_hb}--- end prior review cycles ---
     fi
 
     if [ "$n_blocking" -eq 0 ]; then
-      merge_reviewed_pr "$pr_num" "$cycle"
+      merge_reviewed_pr "$pr_num" "$cycle" "$reviewed_head_sha"
       return 0
     fi
 
@@ -1677,7 +1830,7 @@ review_head_unchanged() {
 # Priority-ordered labels that mark a review cycle stalled in a way an
 # operator can resolve without abandoning the PR (as opposed to
 # review-incomplete, which always requires a human to pick the work back up).
-RESUMABLE_STALL_LABELS=(review-mcp-outage review-codex-outdated review-codex-no-credits)
+RESUMABLE_STALL_LABELS=(review-mcp-outage review-codex-outdated review-codex-no-credits review-merge-failed)
 
 # Given one "<label> <pr_num_or_empty>" pair per entry in
 # RESUMABLE_STALL_LABELS (in the same order, as gh would return them), pick
@@ -1795,8 +1948,11 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight
       # Covers the case where a fully-reviewed PR (zero blocking findings) is
       # still marked draft when the merge is attempted — `gh pr ready` must
       # be called before `gh pr merge`, and a `gh pr ready` failure must not
-      # prevent the merge attempt.
-      merge_reviewed_pr "${TEST_PR_NUM:-7}" "${TEST_CYCLE:-1}"
+      # prevent the merge attempt. TEST_HEAD_SHA stands in for the caller's
+      # verified reviewed head (merge_reviewed_pr now requires one — see PR
+      # #107 review, BLOCKING); defaults to the gh stub's own default head so
+      # existing fixtures need no change.
+      merge_reviewed_pr "${TEST_PR_NUM:-7}" "${TEST_CYCLE:-1}" "${TEST_HEAD_SHA:-deadbeef}"
       ;;
     review-head-unchanged)
       # Each stdin line is "pre_sha post_sha". Prints "pre=<p> post=<q>
@@ -1813,20 +1969,22 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight
       done
       ;;
     outer-retry-sweep)
-      # Each stdin line is three space-separated PR numbers (or empty fields,
+      # Each stdin line is four space-separated PR numbers (or empty fields,
       # written as "-"), one per label in RESUMABLE_STALL_LABELS order,
-      # standing in for what three `gh pr list --label ... -q .[0].number`
+      # standing in for what four `gh pr list --label ... -q .[0].number`
       # calls would return. Prints "label=<l> pr=<n>" for the first stalled
       # label found, or "none" — using the real pick_stalled_retry(). No
       # Claude/Codex/gh involved.
-      while IFS=' ' read -r _mcp _outdated _credits; do
+      while IFS=' ' read -r _mcp _outdated _credits _merge_failed; do
         [ "$_mcp" = "-" ] && _mcp=""
         [ "$_outdated" = "-" ] && _outdated=""
         [ "$_credits" = "-" ] && _credits=""
+        [ "$_merge_failed" = "-" ] && _merge_failed=""
         if _pick=$(pick_stalled_retry \
             "review-mcp-outage $_mcp" \
             "review-codex-outdated $_outdated" \
-            "review-codex-no-credits $_credits"); then
+            "review-codex-no-credits $_credits" \
+            "review-merge-failed $_merge_failed"); then
           echo "label=${_pick%% *} pr=${_pick#* }"
         else
           echo "none"
@@ -2009,7 +2167,8 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
   fi
 
   # Retry any PR stalled behind a resumable label (review-mcp-outage,
-  # review-codex-outdated, review-codex-no-credits) from a previous run.
+  # review-codex-outdated, review-codex-no-credits, review-merge-failed)
+  # from a previous run.
   # The label search here is the ONLY way a stalled PR is found again, so
   # the label must still be on the PR when this runs — operators must NOT
   # remove it manually; the documented recovery is "fix the underlying
@@ -2044,6 +2203,55 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
   if [ -n "$_retry_pick" ]; then
     _retry_label="${_retry_pick%% *}"
     _retry_pr="${_retry_pick#* }"
+    if [ "$_retry_label" = "review-merge-failed" ]; then
+      # The review already passed (codex-review=success is already set on the
+      # head SHA) — only `gh pr merge` itself failed. Routing this through
+      # run_review_cycle like the other three labels would re-run
+      # reviewer_preflight; a transient preflight failure there calls
+      # fail_review_cycle, which drafts the PR and labels it
+      # review-incomplete, discarding the already-passed review instead of
+      # just retrying the merge (see PR #107 review).
+      #
+      # codex-review=success was posted for a specific head SHA, not for
+      # "whatever the PR's head is now" — this label carries no halt/restart
+      # requirement, so the gap between the failed merge and this retry can
+      # span many iterations (or restarts), during which new commits could
+      # land on the branch. Reusing the green status in that case would merge
+      # unreviewed commits. Compare the recorded reviewed head
+      # (review_merge_failed_recorded_head) against the PR's current head
+      # before taking the merge-only shortcut; on any mismatch — or if either
+      # SHA is unknown — fall through to the full review-cycle retry path
+      # below instead of merging (see PR #107 review, BLOCKING).
+      _recorded_head=$(review_merge_failed_recorded_head "$_retry_pr")
+      _current_head=$(gh pr view "$_retry_pr" --json headRefOid -q .headRefOid 2>>"$LOG" || echo "")
+      if [ -n "$_recorded_head" ] && [ -n "$_current_head" ] && [ "$_recorded_head" = "$_current_head" ]; then
+        echo "[outer] retrying merge for PR #$_retry_pr (review-merge-failed)" | tee -a "$LOG" >&2
+        # Leave the label ON through the merge attempt itself — merge_reviewed_pr
+        # already re-adds it (flag_review_cycle_merge_failed) on every failure
+        # path, so removing it first only opens a window with no upside: if the
+        # wrapper is interrupted between removal and merge completing, the PR
+        # is left open and unlabelled, invisible to the only sweep that finds
+        # stalled PRs (see PR #107 review cycle 3, BLOCKING). Remove it after,
+        # and only once the PR is actually confirmed merged.
+        merge_reviewed_pr "$_retry_pr" "retry" "$_current_head"
+        if [ "$(gh pr view "$_retry_pr" --json state -q .state 2>>"$LOG")" = "MERGED" ]; then
+          # Best-effort cleanup: the sweep only ever searches open PRs, so a
+          # merged PR simply won't match next time even if this edit fails.
+          gh pr edit "$_retry_pr" --remove-label "$_retry_label" >>"$LOG" 2>&1 \
+            || echo "[outer] WARNING: failed to remove $_retry_label from merged PR #$_retry_pr; harmless, sweep only searches open PRs" | tee -a "$LOG" >&2
+        fi
+        unset _retry_pick _retry_label _retry_pr _recorded_head _current_head
+        # A failed merge re-labels the PR review-merge-failed and this sweep
+        # retries it again next iteration; without a delay here, a merge that
+        # keeps failing (e.g. CI still running) would retry every iteration
+        # back-to-back and could burn through the entire MAX_ITER budget
+        # before CI ever passes (see PR #107 review, BLOCKING).
+        sleep "$SLEEP_SEC"
+        continue
+      fi
+      echo "[outer] PR #$_retry_pr head changed since its review passed (recorded=${_recorded_head:-unknown} current=${_current_head:-unknown}); routing to a fresh review cycle instead of reusing the stale codex-review status" | tee -a "$LOG" >&2
+      unset _recorded_head _current_head
+    fi
     if ! reviewer_binary_available; then
       # Don't remove the label yet: run_review_cycle's own CLI-missing check
       # (reviewer_binary_available, above run_review_cycle's checkout step)
