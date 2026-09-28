@@ -2312,8 +2312,17 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
       # actually MERGEABLE; if none are, leave the pair empty exactly as
       # before — the sweep falls through to new work and re-checks all of
       # them again next iteration.
-      if ! _conflict_prs=$(gh pr list --state open --label "$_label" --json number -q '.[].number' 2>>"$LOG"); then
-        echo "[outer] WARNING: gh pr list failed while checking for PRs labelled $_label; skipping new work this iteration" | tee -a "$LOG" >&2
+      #
+      # `gh pr list` caps at 30 results by default (and the cycle-3 fix that
+      # dropped `--limit 1` never re-imposed a higher bound), so a resolved
+      # conflict PR sitting past that first page would never be rediscovered
+      # (#111 review cycle 4, BLOCKING). Page through the entire labelled set
+      # with `gh api --paginate`, reusing the same repos/<owner>/issues access
+      # pattern the inline-comment fetch and commit-status POST already use
+      # above, and keep only entries that are actually PRs.
+      _owner_repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>>"$LOG") || _owner_repo=""
+      if [ -z "$_owner_repo" ] || ! _conflict_prs=$(gh api --paginate "repos/${_owner_repo}/issues?state=open&labels=${_label}&per_page=100" --jq '.[] | select(.pull_request != null) | .number' 2>>"$LOG"); then
+        echo "[outer] WARNING: gh api paginated lookup failed while checking for PRs labelled $_label; skipping new work this iteration" | tee -a "$LOG" >&2
         _retry_lookup_failed=1
         break
       fi
@@ -2331,7 +2340,7 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
           break
         fi
       done
-      unset _conflict_prs _cpr _cmergeable
+      unset _conflict_prs _cpr _cmergeable _owner_repo
     elif ! _pr_num=$(gh pr list --state open --label "$_label" --limit 1 --json number -q '.[0].number' 2>>"$LOG"); then
       # A GitHub API failure here must NOT be treated as "no stalled PR" —
       # that would let new implementation work start while a real stalled

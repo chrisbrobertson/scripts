@@ -108,13 +108,19 @@ cat > "$TMP/bin/gh" <<STUB
 #!/bin/bash
 printf 'CALL=gh %s\n' "\$*" >> "\$RECORD"
 case "\$*" in
+  "repo view --json nameWithOwner"*) echo owner/repo; exit 0 ;;
   "repo view"*) echo main; exit 0 ;;
   "api user"*) printf 'babysit-bot'; exit 0 ;;
+  # The review-merge-conflict scan pages through repos/<owner>/issues with
+  # gh api --paginate (not gh pr list, whose 30-result default hid PRs past
+  # the first page -- #111 review cycle 4). The production jq filter already
+  # reduces to bare PR numbers, so this stub emits them directly, one per
+  # line, exactly as the real paginated call would.
+  "api --paginate repos/"*"labels=review-merge-conflict"*) printf '%s\n' \${STUB_PR_MERGE_CONFLICT:-}; exit 0 ;;
   "pr list --state open --label review-codex-outdated"*) printf '%s' "\${STUB_PR_OUTDATED:-}"; exit 0 ;;
   "pr list --state open --label review-mcp-outage"*) printf '%s' "\${STUB_PR_MCP:-}"; exit 0 ;;
   "pr list --state open --label review-codex-no-credits"*) printf '%s' "\${STUB_PR_CREDITS:-}"; exit 0 ;;
   "pr list --state open --label review-merge-failed"*) printf '%s' "\${STUB_PR_MERGE_FAILED:-}"; exit 0 ;;
-  "pr list --state open --label review-merge-conflict"*) printf '%s\n' \${STUB_PR_MERGE_CONFLICT:-}; exit 0 ;;
   "pr view "*"--json headRefOid"*) printf '%s' "\${STUB_CURRENT_HEAD:-}"; exit 0 ;;
   "pr merge "*) exit "\${STUB_MERGE_RC:-0}" ;;
 esac
