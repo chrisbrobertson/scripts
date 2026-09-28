@@ -13,7 +13,7 @@ TIF (Trustable, Intuitive, Flexible) specifications documenting the autonomous d
 | **L3** | [L3-mcp-resilience.md](L3-mcp-resilience.md) | review | MCP resilience: retry-with-backoff + valid_review_structure for Codex transport failures |
 | **L3** | [L3-retrospective-review.md](L3-retrospective-review.md) | review | Retrospective review: one-shot Codex review for merged PRs that bypassed forward-path |
 | **L3** | [L3-work-prep.md](L3-work-prep.md) | review | Work-prep loop: ticket → TIF spec pipeline with human approval gate and sub-ticket creation |
-| **L3** | L3-builder.md | **planned** | Builder loop: spec → PR pipeline with convergent adversarial review cycle and human merge gate — decisions approved, spec not yet drafted |
+| **L3** | L3-builder.md | review | Builder loop: spec → PR pipeline with convergent adversarial review cycle and human merge gate — implemented as `babysit-builder.sh`; spec drafted the same day as the design decisions (2026-08-27) |
 | **L4** | [L4-selectable-implementer.md](L4-selectable-implementer.md) | **ready** | Select Claude or Codex implementation harness with role-specific model/effort |
 | **L4** | [L4-selectable-reviewer.md](L4-selectable-reviewer.md) | **ready** | Select Claude or Codex review harness with role-specific model/effort |
 
@@ -35,7 +35,8 @@ scripts" sections) rather than kept in a separate amendments file.
 - **L3 work-prep spec:** `review` — drafted 2026-08-27 from the approved decisions;
   several implementation mechanics are flagged `[ASSUMPTION]` pending owner sign-off
   (see "What we assume" in L3-work-prep.md)
-- **L3 builder spec:** `planned` — decisions approved, TIF spec not yet drafted
+- **L3 builder spec:** `review` — drafted 2026-08-27 from the approved decisions and
+  implemented the same day as `babysit-builder.sh`
 - **L4 tasks:** `ready` (both selectable-implementer and selectable-reviewer)
 - **Complexity:** 2/30 (trivial band per TIF rubric)
 - **Fit check:** Passed (specs are appropriate artifact)
