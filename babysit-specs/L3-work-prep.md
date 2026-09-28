@@ -72,8 +72,9 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
 
 - **Two-phase outer loop, not one.** Phase 1 (drafting): for each undrafted ticket, a
   `git worktree` is created, the implementer researches the ticket against the current
-  codebase and drafts a TIF spec file under `$SCRIPTS_DIR/specs` (or the target repo's
-  spec directory), commits it, and opens a PR. Phase 2 (approval sweep): before drafting
+  codebase and drafts a TIF spec file under the target repo's spec directory — `./specs`
+  by default, or the first `./*-specs` directory found, overridable via
+  `WORK_PREP_SPEC_DIR` — commits it, and opens a PR. Phase 2 (approval sweep): before drafting
   new tickets, the script scans PRs opened by prior work-prep runs for an approval
   comment; on match it merges the spec PR, labels the *source* ticket
   `status:ready-to-build`, and files a new sub-ticket for the builder queue.
@@ -113,9 +114,6 @@ built against this spec:
   work-prep PR is not re-drafted. Mechanism proposed: search for an existing PR whose
   branch name or body references the ticket ID before creating a worktree. Flips if:
   the owner wants re-drafts on demand (e.g., a `--redraft` flag).
-  Owner should also confirm the intended commit destination for spec PRs — some
-  callers may want a target repo's own `specs/` directory rather than
-  `$SCRIPTS_DIR/specs` when work-prep runs against a project other than `scripts`.
 - [ASSUMPTION] Approval-gate idempotency: once a source ticket carries
   `status:ready-to-build`, the approval sweep skips it even if the approval comment
   is still present (prevents duplicate sub-ticket creation on every run). Flips if:
