@@ -211,13 +211,16 @@ assert_not_grep "stalled retry (label removal failure): PR is never un-drafted" 
 assert_not_grep "stalled retry (label removal failure): ticket queue is never read" "CALL=gh issue list" "$r"
 
 # ---------- scenario 9: the same PR shows up under two resumable labels (e.g.
-# a labelling race) — it must run through the build cycle exactly once, not
-# once per label it happens to carry ----------
+# a labelling race) — it must run through the build cycle exactly once, and
+# EVERY label it carries must come off, not just the first one found (see
+# #106: leaving the second label in place made the PR resurface under it on
+# the very next sweep for a second, redundant build cycle) ----------
 r="$TMP/dedup.record"
 run_builder "$r" STUB_PR_MCP="$(pr_json 100 stalled-pr-branch github 47)" STUB_PR_OUTDATED="$(pr_json 100 stalled-pr-branch github 47)"
 assert_count "stalled retry (dedup): build cycle runs exactly once for the duplicated PR" 1 "=== build cycle: PR #100 @" "$TMP/err"
-assert_count "stalled retry (dedup): only the first-seen label's removal is attempted" 1 "CALL=gh pr edit 100 --repo owner/repo --remove-label" "$r"
-assert_not_grep "stalled retry (dedup): the second label is never touched" "--remove-label build-codex-outdated" "$r"
+assert_grep "stalled retry (dedup): the first-seen label is removed" "CALL=gh pr edit 100 --repo owner/repo --remove-label build-mcp-outage" "$r"
+assert_grep "stalled retry (dedup): the second label is also removed, not left stale" "CALL=gh pr edit 100 --repo owner/repo --remove-label build-codex-outdated" "$r"
+assert_count "stalled retry (dedup): exactly two remove-label calls are made for the duplicated PR" 2 "CALL=gh pr edit 100 --repo owner/repo --remove-label" "$r"
 
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]

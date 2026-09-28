@@ -1743,11 +1743,19 @@ PY
 
   # A PR can be caught under more than one resumable label (e.g. a race
   # between labelling and a manual edit); without this, it would appear twice
-  # in records and run through two build cycles in the same sweep. Keep the
-  # first occurrence only — awk preserves record order.
-  awk -F'\t' '!seen[$1]++' "$records" > "$records.dedup" && mv "$records.dedup" "$records"
+  # in records and run through two build cycles in the same sweep. Collapse
+  # to one row per PR, but keep every label it was found under (comma-joined)
+  # so the loop below removes all of them — dropping the non-first labels
+  # here (as a naive dedup-by-PR would) leaves a stale resumable label in
+  # place, and the PR resurfaces under it on the very next sweep for another,
+  # redundant build cycle.
+  awk -F'\t' '
+    !($1 in head) { order[++n] = $1; head[$1] = $2; src[$1] = $3; tick[$1] = $4 }
+    { labels[$1] = (labels[$1] == "" ? $5 : labels[$1] "," $5) }
+    END { for (i = 1; i <= n; i++) { pr = order[i]; print pr "\t" head[pr] "\t" src[pr] "\t" tick[pr] "\t" labels[pr] } }
+  ' "$records" > "$records.dedup" && mv "$records.dedup" "$records"
 
-  local pr_num head_ref source ticket label cycle_rc
+  local pr_num head_ref source ticket label cycle_rc rm_label
   # fd 3: the harnesses inherit stdin, and would otherwise consume this file.
   while IFS=$'\t' read -r -u 3 pr_num head_ref source ticket label; do
     [ -n "$pr_num" ] && [ -n "$head_ref" ] || continue
@@ -1767,12 +1775,23 @@ PY
     fi
     printf '%s\n' "$BUILD_DIR" >> "$WORKTREE_LIST"
 
-    if ! gh pr edit "$pr_num" --repo "$REPO" --remove-label "$label" >> "$LOG" 2>&1; then
-      echo "[build] ERROR: could not remove $label from PR #$pr_num; halting before reading the ticket queue to avoid rebuilding its still-build-ready ticket into a duplicate PR" >&2
-      discard_build_worktree
-      HALT_RC=7
-      return 0
-    fi
+    # $label may be a comma-joined list (dedup above merges every resumable
+    # label a single PR was found under). Every one must come off: leaving
+    # any behind means the PR resurfaces under it on the very next sweep for
+    # a second, redundant build cycle. A failure partway through means we
+    # cannot prove the PR is fully unlabelled, so — same as the fetch/checkout
+    # failures above — halt rather than fall through to the ticket queue,
+    # which would rebuild this still-build-ready ticket into a duplicate PR.
+    local -a resume_labels
+    IFS=',' read -r -a resume_labels <<< "$label"
+    for rm_label in "${resume_labels[@]}"; do
+      if ! gh pr edit "$pr_num" --repo "$REPO" --remove-label "$rm_label" >> "$LOG" 2>&1; then
+        echo "[build] ERROR: could not remove $rm_label from PR #$pr_num; halting before reading the ticket queue to avoid rebuilding its still-build-ready ticket into a duplicate PR" >&2
+        discard_build_worktree
+        HALT_RC=7
+        return 0
+      fi
+    done
     gh pr ready "$pr_num" --repo "$REPO" >> "$LOG" 2>&1 || true
 
     cycle_rc=0
