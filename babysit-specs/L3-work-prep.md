@@ -107,10 +107,17 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
   wrapper can never self-approve.
 - **Sub-ticket creation:** always a GitHub issue via `gh issue create`, labelled
   `sub-ticket` plus `build-ready` — the label the builder loop actually queues on —
-  even when the source ticket was Jira. The *source* ticket separately gets
-  `status:ready-to-build`, meaning "spec approved, sub-ticket exists" — the builder
-  queue (`gh issue list --label build-ready,sub-ticket`) only reads GitHub issues, so
-  Jira-sourced work is bridged into a GitHub issue at approval time, not at draft time.
+  even when the source ticket was Jira. The issue body embeds a
+  `<!-- babysit-work-prep-subticket source=<source> ticket=<ticket> -->` marker; before
+  creating a sub-ticket the approval sweep searches all issues (`gh issue list --state
+  all`) for this marker keyed on `(source, ticket)`, and this search — not any label —
+  is the idempotency check (see Approval-gate idempotency below). Only when the source
+  is `github` does the approval sweep additionally label the *source* ticket
+  `status:ready-to-build`, an informational marker ("spec approved, sub-ticket exists")
+  — Jira tickets never get this label, since `gh issue edit` has no way to label a Jira
+  issue. The builder queue (`gh issue list --label build-ready,sub-ticket`) only reads
+  GitHub issues, so Jira-sourced work is bridged into a GitHub issue at approval time,
+  not at draft time.
 - **Multi-source ticket queue:** `--source both` merges `gh issue list` output with
   Jira's `$JIRA_BASE_URL/rest/api/3/search?jql=project=$JIRA_PROJECT+AND+status=Open`
   (Bearer auth via `JIRA_TOKEN`) into one queue; each ticket retains its origin so the
@@ -136,11 +143,15 @@ built against this spec:
   work-prep PR is not re-drafted. Mechanism proposed: search for an existing PR whose
   branch name or body references the ticket ID before creating a worktree. Flips if:
   the owner wants re-drafts on demand (e.g., a `--redraft` flag).
-- [ASSUMPTION] Approval-gate idempotency: once a source ticket carries
-  `status:ready-to-build`, the approval sweep skips it even if the approval comment
-  is still present (prevents duplicate sub-ticket creation on every run). Flips if:
-  the owner wants re-approval to be able to spawn a second sub-ticket (e.g., spec
-  amended after initial approval).
+- [ASSUMPTION] Approval-gate idempotency: the approval sweep dedupes by searching all
+  issues for the embedded sub-ticket marker keyed on `(source, ticket)` — never by a
+  label on the source ticket, since that label is GitHub-only (see Sub-ticket creation
+  above) and, even for GitHub sources, could be applied on one run while sub-ticket
+  creation itself fails on that same run. Keying on the marker instead means a partial
+  failure (merge and label succeed, `gh issue create` fails) is safely retried on the
+  next run instead of the sub-ticket being permanently suppressed. Flips if: the owner
+  wants re-approval to be able to spawn a second sub-ticket (e.g., spec amended after
+  initial approval).
   Owner should confirm whether re-approval after a spec amendment is a supported flow
   and, if so, what triggers a second sub-ticket.
 - [ASSUMPTION] Rejection path: no rejection sentinel is defined yet. Proposed: a
@@ -184,8 +195,9 @@ babysit-work-prep.sh [--repo OWNER/REPO] [--source github|jira|both]
    a given invocation, so an approval landing between runs is acted on promptly.
 2. **Draft idempotency:** a ticket with an existing open or merged work-prep PR is never
    re-drafted in the same run (see assumption above for exact matching mechanism).
-3. **Approval idempotency:** a source ticket already labelled `status:ready-to-build` is
-   never processed by the approval sweep again.
+3. **Approval idempotency:** a source ticket whose sub-ticket already exists — matched
+   by the embedded `(source, ticket)` marker, never by a label — is never reprocessed by
+   the approval sweep.
 4. **No auto-merge without approval:** a spec PR is merged only after a matching
    approval comment is found; `gh pr merge` is never called speculatively.
 5. **Sub-ticket always GitHub:** regardless of ticket source, the sub-ticket fed to the
@@ -297,30 +309,40 @@ Events emitted to stderr:
 2. **Given** a ticket that already has an open spec PR, **when** the script runs,
    **then** it is skipped in the drafting phase with a `already has open spec PR`
    message and no duplicate PR is opened.
-3. **Given** a converged (non-draft) spec PR with a comment containing "Approved, let's
-   build this" from an authorized approver, **when** the approval sweep runs, **then**
-   the PR is merged, the source ticket is labelled `status:ready-to-build`, and a new
-   sub-ticket issue labelled `sub-ticket` + `build-ready` is created.
-4. **Given** an open spec PR with no approval comment, **when** the approval sweep
+3. **Given** a converged (non-draft) spec PR for a GitHub-sourced ticket with a comment
+   containing "Approved, let's build this" from an authorized approver, **when** the
+   approval sweep runs, **then** the PR is merged, the source ticket is labelled
+   `status:ready-to-build`, and a new sub-ticket issue labelled `sub-ticket` +
+   `build-ready` is created.
+4. **Given** the same scenario for a Jira-sourced ticket, **when** the approval sweep
+   runs, **then** the PR is merged and the sub-ticket is created exactly as above, but
+   the Jira source ticket is never labelled (`gh issue edit` cannot label a Jira issue).
+5. **Given** an open spec PR with no approval comment, **when** the approval sweep
    runs, **then** the PR is left open and untouched.
-5. **Given** `--source jira` and `JIRA_BASE_URL`/`JIRA_TOKEN` pointing at an
+6. **Given** `--source jira` and `JIRA_BASE_URL`/`JIRA_TOKEN` pointing at an
    unreachable host, **when** the script runs, **then** it logs the Jira failure to
    stderr and exits 0 having processed zero tickets (no GitHub fallback needed since
    source is Jira-only in this case).
-6. **Given** `--source both` with one open GitHub issue and one open Jira issue,
+7. **Given** `--source both` with one open GitHub issue and one open Jira issue,
    **when** the script runs, **then** both are drafted in the same invocation and each
    PR references its origin.
-7. **Given** a source ticket already labelled `status:ready-to-build`, **when** the
-   approval sweep runs and finds a (still-present) approval comment on its now-merged
-   PR, **then** no second sub-ticket is created.
-8. **Given** `--max-tickets 1` and 3 undrafted tickets in the queue, **when** the script
+8. **Given** a source ticket whose sub-ticket already exists (an issue carrying the
+   embedded `(source, ticket)` marker), **when** the approval sweep runs and finds a
+   (still-present) approval comment on its now-merged PR, **then** no second sub-ticket
+   is created.
+9. **Given** `--max-tickets 1` and 3 undrafted tickets in the queue, **when** the script
    runs, **then** exactly 1 PR is opened and the other 2 remain queued for next run.
-9. **Given** `--dry-run`, **when** the script runs, **then** it prints the tickets that
-   would be drafted and the PRs that would be approval-swept, with no worktree, gh, or
-   Jira write calls made.
-10. **Given** a spec PR still marked draft (the spec review cycle has not yet converged
+10. **Given** `--dry-run`, **when** the script runs, **then** it prints the tickets that
+    would be drafted and the PRs that would be approval-swept, with no worktree, gh, or
+    Jira write calls made.
+11. **Given** a spec PR still marked draft (the spec review cycle has not yet converged
     to zero BLOCKING findings), **when** the approval sweep runs, **then** the PR is
     skipped regardless of any approval comment present.
+12. **Given** a source ticket whose spec PR was merged and, on a prior run, was labelled
+    `status:ready-to-build` but sub-ticket creation then failed (no issue carries the
+    marker yet), **when** the approval sweep runs again, **then** it retries and creates
+    exactly one sub-ticket — the earlier partial failure does not permanently suppress
+    it.
 
 ## Telemetry events tied to L1 KPIs
 - **Tickets drafted per run** → throughput of the intake pipeline
