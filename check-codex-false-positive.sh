@@ -40,8 +40,12 @@ PR=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --repo)    REPO="$2";    shift 2 ;;
-    --log-dir) LOG_DIR="$2"; shift 2 ;;
+    --repo)
+      [ "$#" -ge 2 ] || { echo "--repo requires a value" >&2; exit 2; }
+      REPO="$2"; shift 2 ;;
+    --log-dir)
+      [ "$#" -ge 2 ] || { echo "--log-dir requires a value" >&2; exit 2; }
+      LOG_DIR="$2"; shift 2 ;;
     -h|--help)
       sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
       exit 0
