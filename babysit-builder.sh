@@ -1707,7 +1707,9 @@ BUILD_STALL_SWEEP_LIMIT="${BUILD_STALL_SWEEP_LIMIT:-200}"
 # A failed or possibly-truncated lookup for ANY label means we cannot prove no
 # stalled ticket remains behind that label, so the whole sweep aborts (HALT_RC=5)
 # rather than falling through to read the ticket queue — that fallthrough is
-# exactly how a stalled ticket gets rebuilt into a duplicate PR. The same is
+# exactly how a stalled ticket gets rebuilt into a duplicate PR. The same
+# HALT_RC=5 covers a failed dedup pass (the awk/mv step below): an unverified
+# record set is just as untrustworthy as a failed lookup. The same is
 # true if a resumed PR's branch cannot be fetched or checked out into a
 # worktree (HALT_RC=6), or if a resumable label cannot be removed from it
 # (HALT_RC=7): its ticket is still build-ready, so continuing on to the next
@@ -1775,11 +1777,21 @@ PY
   # here (as a naive dedup-by-PR would) leaves a stale resumable label in
   # place, and the PR resurfaces under it on the very next sweep for another,
   # redundant build cycle.
-  awk -F"$sep" -v OFS="$sep" '
+  if ! awk -F"$sep" -v OFS="$sep" '
     !($1 in head) { order[++n] = $1; head[$1] = $2; src[$1] = $3; tick[$1] = $4 }
     { labels[$1] = (labels[$1] == "" ? $5 : labels[$1] "," $5) }
     END { for (i = 1; i <= n; i++) { pr = order[i]; print pr, head[pr], src[pr], tick[pr], labels[pr] } }
-  ' "$records" > "$records.dedup" && mv "$records.dedup" "$records"
+  ' "$records" > "$records.dedup"; then
+    echo "[build] ERROR: could not deduplicate stalled-PR records; aborting run before reading the ticket queue to avoid rebuilding a stalled ticket into a duplicate PR" >&2
+    rm -f "$records.dedup"
+    HALT_RC=5
+    return 0
+  fi
+  if ! mv "$records.dedup" "$records"; then
+    echo "[build] ERROR: could not finalize deduplicated stalled-PR records; aborting run before reading the ticket queue to avoid rebuilding a stalled ticket into a duplicate PR" >&2
+    HALT_RC=5
+    return 0
+  fi
 
   local pr_num head_ref source ticket label cycle_rc rm_label
   # fd 3: the harnesses inherit stdin, and would otherwise consume this file.
