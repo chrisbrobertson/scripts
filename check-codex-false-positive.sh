@@ -86,8 +86,13 @@ halting_re = re.compile(
 
 best = None  # (mtime, log_path, line_idx, halting_line, transcript_path)
 
+# Both driver-launched and directly-run babysitters write
+# <project>-<timestamp>-<pid>.log — match the naming convention itself
+# rather than requiring "driver" to appear in the filename.
+log_name_re = re.compile(r'^.+-\d{8}-\d{6}-\d+\.log$')
+
 for fn in os.listdir(log_dir):
-    if 'driver' not in fn or not fn.endswith('.log'):
+    if not log_name_re.match(fn):
         continue
     path = os.path.join(log_dir, fn)
     try:
