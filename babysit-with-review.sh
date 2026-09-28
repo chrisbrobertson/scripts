@@ -2301,7 +2301,38 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
   _retry_pairs=()
   _retry_lookup_failed=0
   for _label in "${RESUMABLE_STALL_LABELS[@]}"; do
-    if ! _pr_num=$(gh pr list --state open --label "$_label" --limit 1 --json number -q '.[0].number' 2>>"$LOG"); then
+    if [ "$_label" = "review-merge-conflict" ]; then
+      # Unlike the other four labels, more than one open PR can legitimately
+      # carry this one at once (each conflicts independently against the base
+      # branch), and `--limit 1` always returns the same PR from GitHub's
+      # default ordering — so a second, since-resolved conflict PR could sit
+      # behind an older, still-unresolved one forever, never rediscovered (see
+      # #111 review cycle 3, BLOCKING). List every open PR with the label and
+      # probe each one's real mergeable state, picking the first that is
+      # actually MERGEABLE; if none are, leave the pair empty exactly as
+      # before — the sweep falls through to new work and re-checks all of
+      # them again next iteration.
+      if ! _conflict_prs=$(gh pr list --state open --label "$_label" --json number -q '.[].number' 2>>"$LOG"); then
+        echo "[outer] WARNING: gh pr list failed while checking for PRs labelled $_label; skipping new work this iteration" | tee -a "$LOG" >&2
+        _retry_lookup_failed=1
+        break
+      fi
+      # Fall back to the first PR in the list if none turn out MERGEABLE, so
+      # the existing per-PR mergeable recheck and defer-with-log below still
+      # runs against a concrete PR (same observable logging as the old
+      # single-PR lookup) instead of going silent when every PR is still
+      # genuinely conflicting.
+      _pr_num=""
+      for _cpr in $_conflict_prs; do
+        [ -z "$_pr_num" ] && _pr_num="$_cpr"
+        _cmergeable=$(gh pr view "$_cpr" --json mergeable -q .mergeable 2>>"$LOG" || echo "")
+        if [ "$_cmergeable" = "MERGEABLE" ]; then
+          _pr_num="$_cpr"
+          break
+        fi
+      done
+      unset _conflict_prs _cpr _cmergeable
+    elif ! _pr_num=$(gh pr list --state open --label "$_label" --limit 1 --json number -q '.[0].number' 2>>"$LOG"); then
       # A GitHub API failure here must NOT be treated as "no stalled PR" —
       # that would let new implementation work start while a real stalled
       # PR sits unlabelled-for-discovery, silently defeating the retry gate.
