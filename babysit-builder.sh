@@ -1766,7 +1766,11 @@ PY
     fi
     printf '%s\n' "$BUILD_DIR" >> "$WORKTREE_LIST"
 
-    gh pr edit "$pr_num" --repo "$REPO" --remove-label "$label" >> "$LOG" 2>&1 || true
+    if ! gh pr edit "$pr_num" --repo "$REPO" --remove-label "$label" >> "$LOG" 2>&1; then
+      echo "[build] WARNING: could not remove $label from PR #$pr_num; leaving it labelled and skipping this cycle so it is retried next sweep" >&2
+      discard_build_worktree
+      continue
+    fi
     gh pr ready "$pr_num" --repo "$REPO" >> "$LOG" 2>&1 || true
 
     cycle_rc=0

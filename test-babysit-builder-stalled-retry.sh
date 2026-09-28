@@ -50,6 +50,9 @@ case "$*" in
     printf '%s' "${STUB_PR_MCP:-[]}"; exit 0 ;;
   "pr list --repo "*"--state open --label build-codex-outdated"*) printf '%s' "${STUB_PR_OUTDATED:-[]}"; exit 0 ;;
   "pr list --repo "*"--state open --label build-codex-no-credits"*) printf '%s' "${STUB_PR_CREDITS:-[]}"; exit 0 ;;
+  "pr edit "*"--remove-label "*)
+    [ "${STUB_REMOVE_LABEL_FAIL:-0}" = 1 ] && exit 1
+    exit 0 ;;
   "issue list --repo "*"--label build-ready"*) printf '%s' "${STUB_QUEUE:-[]}"; exit 0 ;;
   *) exit 0 ;;
 esac
@@ -194,7 +197,17 @@ assert_grep "stalled retry (fetch failure): run halts rather than skipping to th
 assert_not_grep "stalled retry (fetch failure): ticket queue is never read" "CALL=gh issue list" "$r"
 assert_not_grep "stalled retry (fetch failure): no build cycle starts for the unreachable PR" "=== build cycle:" "$TMP/err"
 
-# ---------- scenario 8: the same PR shows up under two resumable labels (e.g.
+# ---------- scenario 8: label removal itself fails — the review cycle must be
+# skipped (not run un-gated) so the label stays in place for a later sweep to
+# find, rather than the PR silently keeping a stale resumable label forever ----------
+r="$TMP/remove-label-fail.record"
+run_builder "$r" STUB_REMOVE_LABEL_FAIL=1 STUB_PR_MCP="$(pr_json 99 stalled-pr-branch github 46)" STUB_QUEUE="$(queue_json 503)"
+assert_grep "stalled retry (label removal failure): warns and leaves the label for next sweep" "could not remove build-mcp-outage from PR #99" "$TMP/err"
+assert_not_grep "stalled retry (label removal failure): review cycle never starts" "=== build cycle: PR #99" "$TMP/err"
+assert_not_grep "stalled retry (label removal failure): PR is never un-drafted" "CALL=gh pr ready 99" "$r"
+assert_grep "stalled retry (label removal failure): not a halting condition — the ticket queue still gets read" "CALL=gh issue list" "$r"
+
+# ---------- scenario 9: the same PR shows up under two resumable labels (e.g.
 # a labelling race) — it must run through the build cycle exactly once, not
 # once per label it happens to carry ----------
 r="$TMP/dedup.record"
