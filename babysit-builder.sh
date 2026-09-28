@@ -1831,28 +1831,41 @@ PY
     fi
     printf '%s\n' "$BUILD_DIR" >> "$WORKTREE_LIST"
 
-    # $label may be a comma-joined list (dedup above merges every resumable
-    # label a single PR was found under). Every one must come off: leaving
-    # any behind means the PR resurfaces under it on the very next sweep for
-    # a second, redundant build cycle. A failure partway through means we
-    # cannot prove the PR is fully unlabelled, so — same as the fetch/checkout
-    # failures above — halt rather than fall through to the ticket queue,
-    # which would rebuild this still-build-ready ticket into a duplicate PR.
-    local -a resume_labels
-    IFS=',' read -r -a resume_labels <<< "$label"
-    for rm_label in "${resume_labels[@]}"; do
-      if ! gh pr edit "$pr_num" --repo "$REPO" --remove-label "$rm_label" >> "$LOG" 2>&1; then
-        echo "[build] ERROR: could not remove $rm_label from PR #$pr_num; halting before reading the ticket queue to avoid rebuilding its still-build-ready ticket into a duplicate PR" >&2
-        discard_build_worktree
-        HALT_RC=7
-        return 0
-      fi
-    done
     gh pr ready "$pr_num" --repo "$REPO" >> "$LOG" 2>&1 || true
 
     cycle_rc=0
     run_build_cycle "$pr_num" || cycle_rc=$?
     if [ "$cycle_rc" -eq 0 ]; then
+      # $label may be a comma-joined list (dedup above merges every resumable
+      # label a single PR was found under). Every one must come off, but only
+      # now that the build cycle has actually reached a terminal state — not
+      # before run_build_cycle runs. If this process were interrupted or
+      # killed at any point during the cycle, a label already removed up
+      # front would leave the PR carrying no resumable label while its
+      # ticket is still build-ready: invisible to this same sweep on the
+      # next run, and free for fetch_github_queue/fetch_jira_queue to rebuild
+      # into a duplicate PR (see #106). Leaving the label in place until
+      # success is confirmed means an interruption instead just leaves the
+      # PR exactly as discoverable as it was before this run started. A
+      # failure partway through removal means we cannot prove the PR is
+      # fully unlabelled, so — same as the fetch/checkout failures above —
+      # halt rather than fall through to the ticket queue, which would
+      # rebuild this still-build-ready ticket into a duplicate PR.
+      local -a resume_labels
+      IFS=',' read -r -a resume_labels <<< "$label"
+      local label_removed=1
+      for rm_label in "${resume_labels[@]}"; do
+        if ! gh pr edit "$pr_num" --repo "$REPO" --remove-label "$rm_label" >> "$LOG" 2>&1; then
+          echo "[build] ERROR: could not remove $rm_label from PR #$pr_num; halting before reading the ticket queue to avoid rebuilding its still-build-ready ticket into a duplicate PR" >&2
+          label_removed=0
+          break
+        fi
+      done
+      if [ "$label_removed" -eq 0 ]; then
+        discard_build_worktree
+        HALT_RC=7
+        return 0
+      fi
       # source/ticket are guaranteed non-empty here: the marker check above
       # halts before this point (and before the label is removed) whenever
       # either is empty.

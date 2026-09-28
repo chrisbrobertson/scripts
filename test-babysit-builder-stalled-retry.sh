@@ -64,15 +64,32 @@ chmod +x "$TMP/bin/gh"
 # per-PR review call inside run_build_cycle — enough to prove resume_stalled_prs
 # invoked the real run_build_cycle() for the right PR, without needing to fake
 # a full review or wait through the transport-failure retry/sleep path.
+# STUB_CODEX_MCP_OUTAGE=1 instead emits the transport-failure telltale on
+# every per-PR review call, so codex_review_with_retry exhausts its 3
+# attempts and run_build_cycle returns 2 (MCP outage) rather than 0.
 cat > "$TMP/bin/codex" <<'STUB'
 #!/bin/bash
 printf 'CALL=codex %s\n' "$*" >> "$RECORD"
 case "$*" in
   *"Say 'ok'."*) echo ok; exit 0 ;;
-  *) echo "generic review failure (not a version/credits issue)" >&2; exit 1 ;;
+  *)
+    if [ "${STUB_CODEX_MCP_OUTAGE:-0}" = 1 ]; then
+      echo "Transport send error: connection reset" >&2
+    else
+      echo "generic review failure (not a version/credits issue)" >&2
+    fi
+    exit 1 ;;
 esac
 STUB
 chmod +x "$TMP/bin/codex"
+
+# sleep: no-op stand-in so codex_review_with_retry's 0/60/300s backoff
+# between attempts doesn't actually block the test.
+cat > "$TMP/bin/sleep" <<'STUB'
+#!/bin/bash
+exit 0
+STUB
+chmod +x "$TMP/bin/sleep"
 
 # claude: never actually invoked in these scenarios (no new ticket reaches
 # build_ticket), but babysit-builder.sh checks both implementer/reviewer
@@ -210,13 +227,16 @@ assert_not_grep "stalled retry (fetch failure): no build cycle starts for the un
 # fails — the sweep must halt rather than skip to the next record/queue,
 # since a PR whose label we couldn't prove removed is still build-ready and
 # skipping past it risks rebuilding it into a duplicate PR (see #106: a bare
-# `continue` here let the ticket queue run with the ticket still build-ready) ----------
+# `continue` here let the ticket queue run with the ticket still build-ready).
+# Label removal now happens AFTER the build cycle reaches a terminal state
+# (see #106 follow-up), not before, so the review cycle does run and the PR
+# does get un-drafted here — only the final label-removal step fails ----------
 r="$TMP/remove-label-fail.record"
 run_builder "$r" STUB_REMOVE_LABEL_FAIL=1 STUB_PR_MCP="$(pr_json 99 stalled-pr-branch github 46)" STUB_QUEUE="$(queue_json 503)"
 assert_grep "stalled retry (label removal failure): run halts rather than skipping to the next record/queue" "Halting: stalled-PR sweep could not remove a resumable label" "$TMP/err"
 assert_grep "stalled retry (label removal failure): reports which label/PR could not be cleared" "could not remove build-mcp-outage from PR #99" "$TMP/err"
-assert_not_grep "stalled retry (label removal failure): review cycle never starts" "=== build cycle: PR #99" "$TMP/err"
-assert_not_grep "stalled retry (label removal failure): PR is never un-drafted" "CALL=gh pr ready 99" "$r"
+assert_grep "stalled retry (label removal failure): review cycle runs before label removal is attempted" "=== build cycle: PR #99" "$TMP/err"
+assert_grep "stalled retry (label removal failure): PR is un-drafted for the review" "CALL=gh pr ready 99" "$r"
 assert_not_grep "stalled retry (label removal failure): ticket queue is never read" "CALL=gh issue list" "$r"
 
 # ---------- scenario 9: the same PR shows up under two resumable labels (e.g.
@@ -264,6 +284,22 @@ assert_grep "stalled retry (no head branch): run halts rather than skipping the 
 assert_not_grep "stalled retry (no head branch): ticket queue is never read" "CALL=gh issue list" "$r"
 assert_not_grep "stalled retry (no head branch): resumable label is left in place" "--remove-label" "$r"
 assert_not_grep "stalled retry (no head branch): run_build_cycle never starts" "=== build cycle: PR #102" "$TMP/err"
+
+# ---------- scenario 13 (PR #106 review, BLOCKING): the resumed build cycle
+# hits a fresh MCP outage instead of reaching a terminal state — the
+# resumable label must NOT have been removed already, since removing it
+# up front (before run_build_cycle runs) would leave the PR carrying no
+# resumable label and its ticket still build-ready if this run were
+# interrupted anywhere during the cycle, invisible to the next sweep and
+# free to be rebuilt into a duplicate PR. Label removal only happens once
+# run_build_cycle actually reaches cycle_rc=0 (see #106) ----------
+r="$TMP/mcp-recur.record"
+run_builder "$r" STUB_CODEX_MCP_OUTAGE=1 STUB_PR_MCP="$(pr_json 103 stalled-pr-branch github 49)" STUB_QUEUE="$(queue_json 507)"
+assert_grep "stalled retry (mcp recurrence): run halts on renewed MCP outage" "Halting: reviewer MCP outage persists" "$TMP/err"
+assert_grep "stalled retry (mcp recurrence): build cycle actually ran" "=== build cycle: PR #103 @" "$TMP/err"
+assert_not_grep "stalled retry (mcp recurrence): resumable label was never removed" "CALL=gh pr edit 103 --repo owner/repo --remove-label" "$r"
+assert_grep "stalled retry (mcp recurrence): PR is re-quarantined behind the same label" "CALL=gh pr edit 103 --repo owner/repo --add-label build-mcp-outage" "$r"
+assert_not_grep "stalled retry (mcp recurrence): ticket queue is never read" "CALL=gh issue list" "$r"
 
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]
