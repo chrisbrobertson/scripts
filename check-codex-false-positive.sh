@@ -94,8 +94,11 @@ if not os.path.isdir(log_dir):
     print(f'Log directory {log_dir} does not exist.', file=sys.stderr)
     sys.exit(1)
 
+# babysit-with-review.sh has two halt sites for these two failure classes:
+# the main outer loop says "... on PR #N", the retry-exhausted-on-a-stalled-PR
+# branch says "... for PR #N". Accept both.
 halting_re = re.compile(
-    r'^Halting: Codex (version incompatibility|workspace out of credits) on PR #'
+    r'^Halting: Codex (version incompatibility|workspace out of credits) (?:on|for) PR #'
     + re.escape(pr) + r';.*See (\S+)'
 )
 
