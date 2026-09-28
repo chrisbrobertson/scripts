@@ -39,7 +39,9 @@ printf 'CALL=gh %s\n' "$*" >> "$RECORD"
 case "$*" in
   "auth status"*) exit 0 ;;
   "repo view "*"--json defaultBranchRef"*) echo main; exit 0 ;;
-  "pr list --repo "*"--state open --label build-mcp-outage"*) printf '%s' "${STUB_PR_MCP:-[]}"; exit 0 ;;
+  "pr list --repo "*"--state open --label build-mcp-outage"*)
+    [ "${STUB_PR_MCP_FAIL:-0}" = 1 ] && exit 1
+    printf '%s' "${STUB_PR_MCP:-[]}"; exit 0 ;;
   "pr list --repo "*"--state open --label build-codex-outdated"*) printf '%s' "${STUB_PR_OUTDATED:-[]}"; exit 0 ;;
   "pr list --repo "*"--state open --label build-codex-no-credits"*) printf '%s' "${STUB_PR_CREDITS:-[]}"; exit 0 ;;
   "issue list --repo "*"--label build-ready"*) printf '%s' "${STUB_QUEUE:-[]}"; exit 0 ;;
@@ -103,6 +105,10 @@ pr_json() {  # <number> <head_ref> <source> <ticket>
     "$1" "$2" "$3" "$4"
 }
 
+queue_json() {  # <issue-number> — a single build-ready ticket, for asserting it's never fetched
+  printf '[{"number": %s, "title": "t", "body": "", "url": "https://example.com/%s"}]' "$1" "$1"
+}
+
 run_builder() {  # <record> [env assignments...]
   local record="$1"; shift
   : > "$record"
@@ -144,6 +150,15 @@ r="$TMP/none.record"
 run_builder "$r"
 assert_not_grep "no stalled PR: sweep never removes a label" "--remove-label" "$r"
 assert_not_grep "no stalled PR: run_build_cycle never runs" "=== build cycle:" "$TMP/err"
+
+# ---------- scenario 5 (duplicate-PR failure path): the build-mcp-outage
+# lookup itself fails — the ticket queue must never be read, since we can't
+# prove no stalled ticket is sitting behind that label ----------
+r="$TMP/lookup-fail.record"
+run_builder "$r" STUB_PR_MCP_FAIL=1 STUB_QUEUE="$(queue_json 501)"
+assert_grep "stalled retry (lookup failure): run halts rather than falling through" "Halting: stalled-PR sweep" "$TMP/err"
+assert_not_grep "stalled retry (lookup failure): ticket queue is never read" "CALL=gh issue list" "$r"
+assert_not_grep "stalled retry (lookup failure): no build cycle starts for the queued ticket" "=== build cycle:" "$TMP/err"
 
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]
