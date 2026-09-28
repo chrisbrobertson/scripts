@@ -136,8 +136,13 @@ case "$msg" in *"'LOG'"*) pass "AT7 names LOG" ;; *) fail "AT7 names LOG ($msg)"
 
 # ---------- AT6: parser functions byte-identical to the builder ----------
 for f in valid_review_structure count_blocking; do
-  a=$(awk "/^$f\(\) *\{/,/^\}/" "$LIB" | hash_text); b=$(awk "/^$f\(\) *\{/,/^\}/" "$ROOT/babysit-builder.sh" | hash_text)
-  assert_eq "AT6 $f md5 matches babysit-builder.sh" "$a" "$b"
+  a=$(awk "/^$f\(\) *\{/,/^\}/" "$LIB" | hash_text); ra=$?
+  b=$(awk "/^$f\(\) *\{/,/^\}/" "$ROOT/babysit-builder.sh" | hash_text); rb=$?
+  if [ "$ra" -ne 0 ] || [ "$rb" -ne 0 ]; then
+    fail "AT6 $f md5 matches babysit-builder.sh (hash_text failed: rc=$ra/$rb)"
+  else
+    assert_eq "AT6 $f md5 matches babysit-builder.sh" "$a" "$b"
+  fi
 done
 
 # ---------- TC-3.x reviewer cases via review_with_retry ----------
