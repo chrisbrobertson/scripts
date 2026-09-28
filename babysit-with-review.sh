@@ -1595,7 +1595,7 @@ ${_hb}--- end prior review cycles ---
     echo "  [$REVIEWER reviewer] template=${_tmpl_name} has_history=${_has_history} cycle=${cycle}/${MAX_REVIEW_CYCLES}" | tee -a "$LOG" >&2
     unset _has_history _tmpl_name
 
-    echo "  [$REVIEWER reviewer] reviewing PR #$pr_num..." >&2
+    echo "  [$REVIEWER reviewer] reviewing PR #$pr_num..." | tee -a "$LOG" >&2
     local reviewer_rc=0
     review_with_retry "$codex_prompt" || reviewer_rc=$?
 
