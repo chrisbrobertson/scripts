@@ -68,7 +68,7 @@ MAX_SPEC_REVIEW_CYCLES  Spec review cycles before a draft is quarantined (defaul
 ## Consumer
 Operator running the research phase of the three-script pipeline
 (work-prep → builder → babysit-with-review). `babysit-builder.sh` is the downstream
-consumer of the `status:ready-to-build` sub-tickets this script creates.
+consumer of the `build-ready` sub-tickets this script creates.
 
 # Substance
 
@@ -100,10 +100,11 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
 - **Approval detection:** `gh pr list --json comments` on each open spec PR, matched
   against a case-insensitive `\bapproved\b` regex on comment bodies.
 - **Sub-ticket creation:** always a GitHub issue via `gh issue create`, labelled
-  `sub-ticket` (plus `status:ready-to-build`), even when the source ticket was Jira —
-  the builder queue (`gh issue list --label status:ready-to-build,sub-ticket`) only
-  reads GitHub issues, so Jira-sourced work is bridged into a GitHub issue at approval
-  time, not at draft time.
+  `sub-ticket` plus `build-ready` — the label the builder loop actually queues on —
+  even when the source ticket was Jira. The *source* ticket separately gets
+  `status:ready-to-build`, meaning "spec approved, sub-ticket exists" — the builder
+  queue (`gh issue list --label build-ready,sub-ticket`) only reads GitHub issues, so
+  Jira-sourced work is bridged into a GitHub issue at approval time, not at draft time.
 - **Multi-source ticket queue:** `--source both` merges `gh issue list` output with
   Jira's `$JIRA_BASE_URL/rest/api/3/search?jql=project=$JIRA_PROJECT+AND+status=Open`
   (Bearer auth via `JIRA_TOKEN`) into one queue; each ticket retains its origin so the
@@ -169,7 +170,7 @@ babysit-work-prep.sh [--repo OWNER/REPO] [--source github|jira|both]
 [draft] ticket #42 (github) → PR #101 opened
 [draft] ticket PROJ-7 (jira) → PR #102 opened
 [draft] ticket #43 (github) → already has open spec PR #98, skipped
-[approve] PR #98 → approved comment found → merged, ticket #40 labelled status:ready-to-build, sub-ticket #103 created
+[approve] PR #98 → approved comment found → merged, ticket #40 labelled status:ready-to-build, sub-ticket #103 created (labelled sub-ticket+build-ready)
 [approve] PR #99 → no approval comment yet, skipped
 
 # exit 0 even when zero tickets are drafted or approved this run
@@ -185,7 +186,7 @@ babysit-work-prep.sh [--repo OWNER/REPO] [--source github|jira|both]
 4. **No auto-merge without approval:** a spec PR is merged only after a matching
    approval comment is found; `gh pr merge` is never called speculatively.
 5. **Sub-ticket always GitHub:** regardless of ticket source, the sub-ticket fed to the
-   builder queue is a GitHub issue labelled `sub-ticket` + `status:ready-to-build`.
+   builder queue is a GitHub issue labelled `sub-ticket` + `build-ready`.
 6. **Max-tickets cap:** no more than `--max-tickets` (default 20) new drafts are started
    per invocation, regardless of queue size.
 7. **Dry-run is read-only:** `--dry-run` performs `gh`/Jira reads only — no worktree, no
@@ -227,7 +228,7 @@ manual migration of any open spec PRs and unlabelled tickets.
 Events emitted to stdout:
 - `[draft] ticket <id> (<source>) → PR #N opened`
 - `[draft] ticket <id> (<source>) → already has open spec PR #N, skipped`
-- `[approve] PR #N → approved comment found → merged, ticket #M labelled status:ready-to-build, sub-ticket #K created`
+- `[approve] PR #N → approved comment found → merged, ticket #M labelled status:ready-to-build, sub-ticket #K created (labelled sub-ticket+build-ready)`
 - `[approve] PR #N → no approval comment yet, skipped`
 
 Events emitted to stderr:
@@ -279,7 +280,7 @@ Events emitted to stderr:
 
 ## Composes with / replaces
 - **Composes with:**
-  - `babysit-builder.sh` (consumes `status:ready-to-build,sub-ticket` issues)
+  - `babysit-builder.sh` (consumes `build-ready,sub-ticket` issues)
   - `babysit-with-review.sh` (shares `REPO_BASE`, selectable-implementer plumbing, and
     `~/sisyphus-logs/` conventions, but runs as an independent process with its own
     stop file)
@@ -299,7 +300,7 @@ Events emitted to stderr:
 3. **Given** a converged (non-draft) spec PR with a comment containing "Approved, let's
    build this" from an authorized approver, **when** the approval sweep runs, **then**
    the PR is merged, the source ticket is labelled `status:ready-to-build`, and a new
-   sub-ticket issue is created.
+   sub-ticket issue labelled `sub-ticket` + `build-ready` is created.
 4. **Given** an open spec PR with no approval comment, **when** the approval sweep
    runs, **then** the PR is left open and untouched.
 5. **Given** `--source jira` and `JIRA_BASE_URL`/`JIRA_TOKEN` pointing at an
