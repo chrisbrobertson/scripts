@@ -1229,12 +1229,21 @@ flag_review_cycle_merge_conflict() {
   fi
   unset _mc_removed _mc_attempt
 
+  # Resolve against the PR's own base branch, not the wrapper's DEFAULT_BRANCH:
+  # a PR can target a release/feature base that differs from the repo default,
+  # and handing the operator a `git merge origin/<default>` command for the
+  # wrong base sends them through an incorrect resolution (see #111 review
+  # cycle 4, RECOMMENDED). Fall back to DEFAULT_BRANCH only if the lookup fails.
+  local _base_branch
+  _base_branch=$(gh pr view "$pr_num" --json baseRefName -q .baseRefName 2>>"$LOG") || _base_branch=""
+  [ -n "$_base_branch" ] || _base_branch="$DEFAULT_BRANCH"
+
   local body="**babysit-with-review: review passed but the PR has a real merge conflict**
 
 The review cycle completed with zero BLOCKING findings and \`codex-review\` was already set to success, but \`gh pr merge\` failed because GitHub reports this PR CONFLICTING against the base branch — not a transient CI or branch-protection race. Retrying the same merge cannot succeed on its own.
 
 Label \`review-merge-conflict\` has been added. Retrying the identical merge can never succeed on its own, so the stalled-PR sweep will NOT retry it until the conflict is actually gone. To resolve:
-- Merge the base branch into this branch and resolve the conflicts (\`gh pr checkout ${pr_num} && git fetch origin ${DEFAULT_BRANCH} && git merge origin/${DEFAULT_BRANCH}\`, resolve, push) — the wrapper's sweep detects the conflict is gone and automatically runs a fresh review cycle against the merged-up diff on a later iteration, no restart needed, or
+- Merge the base branch into this branch and resolve the conflicts (\`gh pr checkout ${pr_num} && git fetch origin ${_base_branch} && git merge origin/${_base_branch}\`, resolve, push) — the wrapper's sweep detects the conflict is gone and automatically runs a fresh review cycle against the merged-up diff on a later iteration, no restart needed, or
 - Close this PR if its change already landed another way."
   if [ -n "$head_sha" ]; then
     body="${body}
