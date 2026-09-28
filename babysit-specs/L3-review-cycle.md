@@ -110,6 +110,7 @@ From implementation (babysit-with-review.sh):
 - [ASSUMPTION] Plan-first approach on cycle 2+ improves fix quality and reduces trial-and-error. Flips if: planning overhead exceeds benefit, or plan mode introduces latency that slows convergence.
 - [ASSUMPTION] Detailed Codex explanations on cycle 3–4+ help Claude understand root causes better. Flips if: explanation verbosity confuses Claude or increases false positive rate.
 - [ASSUMPTION] Solution rationale in commit messages aids future review cycles and human understanding. Flips if: Claude over-explains trivial fixes and bloats commit history.
+- [ASSUMPTION] Hardcoding "Codex" in the `CLAUDE_REVIEW_PROMPT_*` templates (selected by cycle number only, independent of `$REVIEWER`) is harmless because `--reviewer claude` is rare in practice. Flips if: `--reviewer claude` sees real use — the implementer prompt would then tell Claude-as-implementer that "Codex has adjudicated" or produced a "counter-argument" when the actual reviewer was Claude, a factually wrong attribution baked into every cycle-1/4/5-6 prompt. Fix would be parameterizing these templates on `$REVIEWER` the same way the `CODEX_REVIEW_PROMPT_*` side and the telemetry lines already are.
 
 ## Contract
 
@@ -261,7 +262,7 @@ Each cycle uses a complete, deterministic prompt with NO conditional logic or te
 - `__PR_NUMBER__` → actual PR number
 - `__CYCLE__` → current cycle number
 - `__MAX_CYCLES__` → configured max (default 6)
-- `__HISTORY__` → prior reviews + commits (cycles 2+)
+- `__HISTORY_BLOCK__` → prior reviews + commits (cycles 2+)
 - `__PR_FEEDBACK__` → collected PR comments/reviews
 - `__REVIEW__` → reviewer output from current cycle
 - `__JUSTIFICATIONS__` → implementer's resolution justifications from previous cycle (cycles 5+)
@@ -471,7 +472,7 @@ Implementation:
 
 **Merge policy (non-negotiable):**
 - Only merge a PR after ALL blockers identified in the reviews have been handled.
-- YOU MUST NEVER MERGE A PR THAT HAS NOT BEEN REVIEWED. Never run `gh pr merge` yourself — push your fixes and end with `DONE_REVIEW`; the wrapper runs the next review cycle and performs the merge once it passes.
+- YOU MUST NEVER MERGE A PR THAT HAS NOT BEEN REVIEWED. Never run `gh pr merge` yourself — push your fixes and end with `DONE_REVIEW`; the wrapper runs the next Codex review cycle and performs the merge once it passes.
 
 Scope discipline:
 - Make minimal, targeted changes. Do NOT refactor adjacent code unless required by a finding.
@@ -519,7 +520,7 @@ Step 2: Execute your plan:
 
 **Merge policy (non-negotiable):**
 - Only merge a PR after ALL blockers identified in the reviews have been handled.
-- YOU MUST NEVER MERGE A PR THAT HAS NOT BEEN REVIEWED. Never run `gh pr merge` yourself — push your fixes and end with `DONE_REVIEW`; the wrapper runs the next review cycle and performs the merge once it passes.
+- YOU MUST NEVER MERGE A PR THAT HAS NOT BEEN REVIEWED. Never run `gh pr merge` yourself — push your fixes and end with `DONE_REVIEW`; the wrapper runs the next Codex review cycle and performs the merge once it passes.
 
 Scope discipline:
 - Make minimal, targeted changes. Do NOT refactor adjacent code unless required by a finding.
@@ -567,10 +568,10 @@ Step 2: Execute your plan:
 
 **Merge policy (non-negotiable):**
 - Only merge a PR after ALL blockers identified in the reviews have been handled.
-- YOU MUST NEVER MERGE A PR THAT HAS NOT BEEN REVIEWED. Never run `gh pr merge` yourself — push your fixes and end with `DONE_REVIEW`; the wrapper runs the next review cycle and performs the merge once it passes.
+- YOU MUST NEVER MERGE A PR THAT HAS NOT BEEN REVIEWED. Never run `gh pr merge` yourself — push your fixes and end with `DONE_REVIEW`; the wrapper runs the next Codex review cycle and performs the merge once it passes.
 
 Step 3: Post resolution justification as PR comment:
-  For EACH BLOCKING finding in the review, you must post a comment explaining:
+  For EACH BLOCKING finding in the Codex review, you must post a comment explaining:
   - If resolved: "BLOCKING <one-line finding description> resolved in commit <SHA>. Why this resolves it: <specific explanation of how your change addresses the root cause identified by Codex and satisfies the architectural constraints>"
   - If invalid: "BLOCKING <one-line finding description> is invalid. Reason: <explanation>. Supporting reference: <link to spec/docs/validated source proving the finding is incorrect>"
 
@@ -599,17 +600,17 @@ __REVIEW__
 ```
 A code review on PR #__PR_NUMBER__ has produced the findings below, along with existing feedback from automated tools and human reviewers.
 
-This is review cycle __CYCLE__ of __MAX_CYCLES__. Multiple previous cycles have not resolved BLOCKING issues. The reviewer has adjudicated your previous resolution justifications.
+This is review cycle __CYCLE__ of __MAX_CYCLES__. Multiple previous cycles have not resolved BLOCKING issues. Codex has adjudicated your previous resolution justifications.
 
 You MUST action every BLOCKING finding before this PR can merge. Treat actionable issues in existing PR feedback with the same BLOCKING priority.
 
 **CRITICAL: Process the ADJUDICATION section first, then plan your approach inline.** Do NOT use the plan mode tool — you are running non-interactively and plan mode requires human approval to exit.
 
-Step 1: Process adjudication results:
+Step 1: Process Codex adjudication results:
   - For each ACCEPTED item: the finding is resolved. No further action needed.
-  - For each DISAGREED item: the reviewer has provided a reasoned counter-argument with code evidence. You must either:
-    (a) Implement a different fix that specifically addresses the counter-argument, OR
-    (b) If you believe the counter-argument is itself incorrect, report via STUCK_REVIEW with the specific finding, the argument, and why you disagree (this escalates to human review).
+  - For each DISAGREED item: Codex has provided a reasoned counter-argument with code evidence. You must either:
+    (a) Implement a different fix that specifically addresses Codex's counter-argument, OR
+    (b) If you believe Codex's counter-argument is itself incorrect, report via STUCK_REVIEW with the specific finding, Codex's argument, and why you disagree (this escalates to human review).
 
 Step 2: Outline your implementation plan (as text output) for all remaining BLOCKING findings:
   - Include all DISAGREED items that you will re-address (from Step 1a)
@@ -629,13 +630,13 @@ Step 3: Execute your plan:
 
 **Merge policy (non-negotiable):**
 - Only merge a PR after ALL blockers identified in the reviews have been handled.
-- YOU MUST NEVER MERGE A PR THAT HAS NOT BEEN REVIEWED. Never run `gh pr merge` yourself — push your fixes and end with `DONE_REVIEW`; the wrapper runs the next review cycle and performs the merge once it passes.
+- YOU MUST NEVER MERGE A PR THAT HAS NOT BEEN REVIEWED. Never run `gh pr merge` yourself — push your fixes and end with `DONE_REVIEW`; the wrapper runs the next Codex review cycle and performs the merge once it passes.
 
 Step 4: Post resolution justification as PR comment:
   For EACH BLOCKING finding (including DISAGREED items you re-addressed), post a comment explaining:
   - If resolved: "BLOCKING <one-line finding description> resolved in commit <SHA>. Why this resolves it: <specific explanation of how your change addresses the root cause and satisfies the architectural constraints>"
   - If invalid: "BLOCKING <one-line finding description> is invalid. Reason: <explanation>. Supporting reference: <link to spec/docs/validated source proving the finding is incorrect>"
-  - If re-addressed after disagreement: "BLOCKING <one-line finding description> re-addressed after disagreement. Previous fix was insufficient because: <acknowledge the reviewer's point>. New fix in commit <SHA>: <explanation of how new approach resolves the concern>"
+  - If re-addressed after disagreement: "BLOCKING <one-line finding description> re-addressed after Codex disagreement. Previous fix was insufficient because: <acknowledge Codex's point>. New fix in commit <SHA>: <explanation of how new approach resolves Codex's concern>"
 
   Use `gh pr comment __PR_NUMBER__ --body "<text>"` to post the justification.
 
@@ -647,7 +648,7 @@ Scope discipline:
 
 End your final message with EXACTLY ONE of these sentinels on its own line:
 - DONE_REVIEW (you have addressed everything you intend to address AND posted resolution justifications)
-- STUCK_REVIEW <one-line reason> (you cannot proceed — use this if the reviewer's disagreement is itself incorrect and needs human review)
+- STUCK_REVIEW <one-line reason> (you cannot proceed — use this if Codex's disagreement is itself incorrect and needs human review)
 
 --- existing PR feedback begin ---
 __PR_FEEDBACK__
@@ -672,8 +673,8 @@ __REVIEW__
 - `[review] WARNING: could not resolve repo or head SHA for PR #N; leaving PR open rather than merging without the status check`
 - `[review] WARNING: gh pr ready failed for PR #N; attempting merge anyway` (best-effort undraft failed; merge is still attempted)
 - `[review] PR #N queued for auto-merge (merges when CI passes)` or `[review] PR #N merged.` (merge success)
-- `[$REVIEWER reviewer] template=<descriptive-baseline|descriptive-convergence|prescriptive-detailed|prescriptive-adjudication> cycle=M/N` (mode tracking)
-- `[claude] resolution justifications posted to PR #N` (cycle 4+ — after `gh pr comment` succeeds)
+- `[$REVIEWER reviewer] template=<descriptive-baseline|descriptive-convergence|prescriptive-detailed|prescriptive-adjudication> has_history=<yes|no> cycle=M/N` (mode tracking)
+- `[$IMPLEMENTER implementer] resolution justifications posted to PR #N` (cycle 4+ — logged unconditionally once the PR's last comment is fetched via `gh pr view`; there is no check that the implementer's own `gh pr comment` call actually succeeded)
 
 **Sinks:** Main log file (~/sisyphus-logs/<project>-<timestamp>-<pid>.log)
 
