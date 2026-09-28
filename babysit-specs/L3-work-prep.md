@@ -1,11 +1,11 @@
 ---
 spec_type: feature
-id: ARLO-FEAT-WORK-PREP
+id: ASF-FEAT-WORK-PREP
 status: review
 owners: [Chris Robertson]
-depends_on: [ARLO-SYS-AUTONOMOUS-DEV]
-parent_l1: ARLO-PROD-BABYSIT-WITH-REVIEW
-parent_l2: ARLO-SYS-AUTONOMOUS-DEV
+depends_on: [ASF-SYS-AUTONOMOUS-DEV]
+parent_l1: ASF-PROD-BABYSIT-WITH-REVIEW
+parent_l2: ASF-SYS-AUTONOMOUS-DEV
 fit_check: passed
 complexity:
   total: 3
@@ -67,7 +67,7 @@ consumer of the `status:ready-to-build` sub-tickets this script creates.
 # Substance
 
 ## What we know
-Decisions already recorded in ARLO-PROD-BABYSIT-WITH-REVIEW and ARLO-SYS-AUTONOMOUS-DEV
+Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOUS-DEV
 (owner-approved 2026-08-27):
 
 - **Two-phase outer loop, not one.** Phase 1 (drafting): for each undrafted ticket, a
@@ -95,7 +95,7 @@ Decisions already recorded in ARLO-PROD-BABYSIT-WITH-REVIEW and ARLO-SYS-AUTONOM
   sub-ticket.
 - **Jira degrades, does not fail the run.** If the Jira API is unavailable, Jira tickets
   are skipped and the run continues with GitHub-sourced tickets only (per
-  ARLO-SYS-AUTONOMOUS-DEV's cross-component contract for this integration).
+  ASF-SYS-AUTONOMOUS-DEV's cross-component contract for this integration).
 - **Shared infrastructure with `babysit-with-review.sh`:** same `REPO_BASE`
   auto-detection, same selectable-implementer plumbing, own stop file
   (`~/sisyphus-logs/<project>-work-prep.stop`) so it can run concurrently with
@@ -193,7 +193,7 @@ manual migration of any open spec PRs and unlabelled tickets.
 - **Approval sweep latency:** dominated by `gh pr list --json comments` calls; expected
   sub-second per open PR.
 - **Run of 20 tickets:** on the order of an hour, dominated by implementer inference
-  time (no formal SLO — internal tool, see ARLO-SYS-AUTONOMOUS-DEV SLOs section).
+  time (no formal SLO — internal tool, see ASF-SYS-AUTONOMOUS-DEV SLOs section).
 
 ## Security model
 - **AuthN / AuthZ:** Inherits `gh auth status`; Jira access via `JIRA_TOKEN` bearer
@@ -245,7 +245,7 @@ Events emitted to stderr:
   a rejected/changes-requested spec PR requires either a human edit or a fresh work-prep
   run against the same ticket.
 - **Non-GitHub, non-Jira ticket sources:** Linear, Shortcut, etc. are out of scope (see
-  ARLO-PROD-BABYSIT-WITH-REVIEW out-of-scope list).
+  ASF-PROD-BABYSIT-WITH-REVIEW out-of-scope list).
 - **Code changes:** this script only drafts spec documents; it never touches
   implementation code. `babysit-builder.sh` owns that step.
 - **Review cycles:** no Claude/Codex adversarial review of spec drafts; human approval
