@@ -62,8 +62,8 @@ Impact: <failure mode addressed — metrics or observability>
 # PR labels applied by cycle
 review-incomplete              # human action required (stuck, max cycles, etc.)
 review-mcp-outage             # Codex MCP transport failure (auto-retry)
-review-codex-outdated         # Codex CLI too old for configured model; run `codex update`, remove label, restart
-review-codex-no-credits        # Codex workspace out of credits; add credits, remove label, restart
+review-codex-outdated         # Codex CLI too old for configured model; run `codex update`, restart (do NOT remove the label — the sweep needs it to resume the PR)
+review-codex-no-credits        # Codex workspace out of credits; add credits, restart (do NOT remove the label — the sweep needs it to resume the PR)
 review-merge-failed            # review passed but `gh pr merge` failed (auto-retry, no halt)
 review-merge-conflict          # review passed but PR is genuinely CONFLICTING against base (no auto-retry, no halt)
 
