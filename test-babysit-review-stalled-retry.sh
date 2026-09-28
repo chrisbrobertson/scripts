@@ -64,13 +64,20 @@ mkdir -p "$TMP/bin"
 #
 # `pr view --json comments` forwards the script's real `-q` jq filter to the
 # real jq binary against a canned three-comment fixture — a forged marker
-# from a non-bot author (a different, "wrong" SHA an attacker could post
-# after pushing an unreviewed commit) plus a stale and a fresh marker from
-# the bot itself — so this harness actually exercises
+# from a non-bot author (a valid-hex "wrong" SHA an attacker could post after
+# pushing an unreviewed commit) plus a stale and a fresh marker from the bot
+# itself — so this harness actually exercises
 # review_merge_failed_recorded_head()'s author filter and its `tail -n1`
 # latest-marker selection, rather than a stub that hands back
 # STUB_RECORDED_HEAD unconditionally regardless of query (see PR #107
-# review, RECOMMENDED).
+# review, RECOMMENDED). The forged marker is valid-hex and sorted last in
+# the fixture (after both bot markers) so that if the author `select()` were
+# ever removed, `tail -n1` would surface the forged SHA instead of the real
+# one and the assertions below would actually fail — an earlier fixture used
+# a non-hex forged value sorted first, which `grep -o
+# '[0-9a-f]\{7,40\}'`/`tail -n1` could never select regardless of whether
+# author filtering ran, so it passed even with the filter removed (see PR
+# #107 review cycle 2, RECOMMENDED).
 cat > "$TMP/bin/gh" <<STUB
 #!/bin/bash
 printf 'CALL=gh %s\n' "\$*" >> "\$RECORD"
@@ -90,9 +97,9 @@ if [ "\$1" = "pr" ] && [ "\$2" = "view" ] && [ "\${4:-}" = "--json" ] && [ "\${5
   jq_filter="\${7:-}"
   data=\$(cat <<FIXTURE
 {"comments":[
-  {"author":{"login":"attacker"},"body":"<!-- babysit:merge-failed-head=eviltoken1 -->"},
   {"author":{"login":"babysit-bot"},"body":"<!-- babysit:merge-failed-head=0000000stale -->"},
-  {"author":{"login":"babysit-bot"},"body":"<!-- babysit:merge-failed-head=\$STUB_RECORDED_HEAD -->"}
+  {"author":{"login":"babysit-bot"},"body":"<!-- babysit:merge-failed-head=\$STUB_RECORDED_HEAD -->"},
+  {"author":{"login":"attacker"},"body":"<!-- babysit:merge-failed-head=eeeeeee1 -->"}
 ]}
 FIXTURE
 )
