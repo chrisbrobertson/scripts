@@ -178,16 +178,32 @@ block_text = ''.join(block).rstrip('\n')
 # a section, must not be reported as a clean verdict.
 REQUIRED_SECTIONS = ('BLOCKING', 'RECOMMENDED', 'INFORMATION')
 sections = {}
+header_counts = {}
+unexpected_headers = []
 current = None
 for l in block:
     stripped = l.strip()
     if stripped.startswith('## '):
         current = stripped[3:].strip()
+        header_counts[current] = header_counts.get(current, 0) + 1
+        if current not in REQUIRED_SECTIONS:
+            unexpected_headers.append(current)
         sections[current] = []
     elif current is not None and stripped:
         sections[current].append(stripped)
 
-clean = all(sections.get(name) == ['- (none)'] for name in REQUIRED_SECTIONS)
+# A well-formed verdict block has each required header exactly once and no
+# other "## " headers. Anything else — a second "## BLOCKING" (which would
+# otherwise silently overwrite the first occurrence's findings in `sections`
+# above), a missing header, or an unrelated "## " heading swept in by the
+# start/end scan — means this isn't a single clean verdict block, so don't
+# let it be reported as a likely false positive.
+duplicate_headers = sorted({name for name, count in header_counts.items()
+                             if name in REQUIRED_SECTIONS and count > 1})
+missing_headers = [name for name in REQUIRED_SECTIONS if name not in sections]
+malformed = bool(duplicate_headers) or bool(unexpected_headers) or bool(missing_headers)
+
+clean = (not malformed) and all(sections.get(name) == ['- (none)'] for name in REQUIRED_SECTIONS)
 
 print(f'PR #{pr} — {halting_line}')
 print(f'Driver log:      {log_path}')
@@ -195,7 +211,18 @@ print(f'Raw transcript:  {transcript_path}')
 print()
 print(block_text)
 print()
-if clean:
+if malformed:
+    reasons = []
+    if duplicate_headers:
+        reasons.append(f'duplicate section header(s): {", ".join(duplicate_headers)}')
+    if unexpected_headers:
+        reasons.append(f'unexpected section header(s): {", ".join(sorted(set(unexpected_headers)))}')
+    if missing_headers:
+        reasons.append(f'missing section header(s): {", ".join(missing_headers)}')
+    print('VERDICT: malformed verdict block (' + '; '.join(reasons) + ') — cannot '
+          'automatically determine clean/not-clean from this. Do NOT treat this as a '
+          'confirmed false positive; read the block above and the log directly.')
+elif clean:
     print('VERDICT: every section reads "(none)" — LIKELY FALSE POSITIVE. See CLAUDE.md '
           '"MCP resilience and pre-flight" for the incident this matches; the label probably '
           'does not reflect a real CLI/credits problem.')
