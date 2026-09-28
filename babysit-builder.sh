@@ -17,7 +17,7 @@
 
 set -uo pipefail
 
-VERSION="0.1.1"
+VERSION="0.2.0"
 
 usage() {
   cat <<'EOF'
@@ -63,8 +63,8 @@ Labels (all in the `build-*` namespace):
   build-max-cycles           PR exhausted MAX_REVIEW_CYCLES with findings open.
   build-incomplete           Build cycle bailed; manual review required.
   build-mcp-outage           Reviewer transport failure; retried next run.
-  build-codex-outdated       Codex CLI too old; upgrade then remove the label.
-  build-codex-no-credits     Codex workspace out of credits; add credits.
+  build-codex-outdated       Codex CLI too old; upgrade then re-run (auto-resumed).
+  build-codex-no-credits     Codex workspace out of credits; add credits, re-run.
 
 Exit codes: 0 completed, 1 fatal/pre-flight failure, 2 invalid arguments.
 EOF
@@ -916,7 +916,7 @@ ensure_build_labels() {
   gh label create build-mcp-outage --repo "$REPO" --color 0075CA \
     --description "Builder review stalled by MCP transport failure; retried next run" --force >/dev/null 2>&1 || return 1
   gh label create build-codex-outdated --repo "$REPO" --color e4e669 \
-    --description "Builder review blocked: Codex CLI too old; upgrade then remove label" --force >/dev/null 2>&1 || return 1
+    --description "Builder review blocked: Codex CLI too old; upgrade then re-run, auto-resumed" --force >/dev/null 2>&1 || return 1
   gh label create build-codex-no-credits --repo "$REPO" --color d93f0b \
     --description "Builder review blocked: Codex workspace out of credits" --force >/dev/null 2>&1 || return 1
 }
@@ -1062,14 +1062,14 @@ fail_build_cycle_codex_outdated() {
   quarantine_pr "$1" build-codex-outdated "Codex version incompatibility — review blocked" "$2" \
     "The Codex CLI is too old for the configured model. No code-quality review took place.
 
-To resume: upgrade the Codex CLI (\`codex update\`), then remove the \`build-codex-outdated\` label and re-run the builder."
+To resume: upgrade the Codex CLI (\`codex update\`), then re-run the builder. Do NOT remove the \`build-codex-outdated\` label yourself — the stalled-PR sweep finds this PR by that label, removes it, and re-runs the build cycle automatically on the next run; removing it manually leaves the ticket's \`build-ready\` label in place and risks a duplicate PR on the next run instead."
 }
 
 fail_build_cycle_codex_no_credits() {
   quarantine_pr "$1" build-codex-no-credits "Codex workspace out of credits — review blocked" "$2" \
     "The Codex workspace has no credits remaining. No code-quality review took place.
 
-To resume: add credits to the Codex workspace, then remove the \`build-codex-no-credits\` label and re-run the builder."
+To resume: add credits to the Codex workspace, then re-run the builder. Do NOT remove the \`build-codex-no-credits\` label yourself — the stalled-PR sweep finds this PR by that label, removes it, and re-runs the build cycle automatically on the next run; removing it manually leaves the ticket's \`build-ready\` label in place and risks a duplicate PR on the next run instead."
 }
 
 # Stamp the builder marker into a PR body so a later run can map the PR back to
@@ -1467,8 +1467,10 @@ mark_ticket_done() {
   } > "$comment_file"
   ticket_comment "$source" "$ticket" "$comment_file" \
     || echo "[build] WARNING: could not comment on ticket $ticket ($source)" >&2
-  ticket_swap_to_terminal "$source" "$ticket" build-done \
-    || echo "[build] ERROR: could not swap labels on ticket $ticket ($source); it may be rebuilt next run" >&2
+  if ! ticket_swap_to_terminal "$source" "$ticket" build-done; then
+    echo "[build] ERROR: could not swap labels on ticket $ticket ($source); it may be rebuilt next run" >&2
+    return 1
+  fi
 }
 
 # Create a fresh worktree on a new branch off the default branch tip.
@@ -1678,57 +1680,233 @@ safety_push_worktree() {
     || echo "[build] WARNING: safety-push failed for $BUILD_BRANCH" >&2
 }
 
-# ---------- outage sweep ----------
+# ---------- stalled-PR sweep ----------
 
-# Re-run the build cycle for PRs a previous run quarantined as build-mcp-outage.
-# Runs BEFORE the queue is read: those tickets are still build-ready, and reading
-# the queue first would rebuild them into duplicate PRs.
-resume_outage_prs() {
-  local raw_file="$TMP_ROOT/outage-prs.json" records="$TMP_ROOT/outage-records"
-  if ! gh pr list --repo "$REPO" --state open --label build-mcp-outage --limit 20 \
-    --json number,headRefName,body > "$raw_file" 2>> "$LOG"; then
-    echo "[build] WARNING: could not list build-mcp-outage PRs" >&2
-    return 0
-  fi
-  python3 - "$raw_file" > "$records" <<'PY'
+# All labels a previous run may have parked a PR under while a review cycle
+# could not complete. Every one of these must be swept here: the source
+# ticket keeps its `build-ready` label until mark_ticket_done runs (which only
+# happens on a resumed PR's clean halt), so any label this sweep doesn't
+# search for leaves the ticket eligible for fetch_github_queue/fetch_jira_queue
+# to rebuild into a SECOND PR for the same ticket on this very run (see #104,
+# the equivalent fix in babysit-with-review.sh's outer loop — resume_stalled_prs
+# is the build-loop counterpart of that sweep).
+RESUMABLE_BUILD_STALL_LABELS=(build-mcp-outage build-codex-outdated build-codex-no-credits)
+
+# Upper bound on stalled PRs fetched per label. If a label's lookup returns
+# this many results, more may exist beyond the page and we cannot tell — see
+# the in-loop check below. Env-overridable for test coverage of the truncation
+# path without needing 200 fixture PRs.
+BUILD_STALL_SWEEP_LIMIT="${BUILD_STALL_SWEEP_LIMIT:-200}"
+case "$BUILD_STALL_SWEEP_LIMIT" in ''|*[!0-9]*) echo "ERROR: BUILD_STALL_SWEEP_LIMIT must be a positive integer" >&2; exit 1 ;; esac
+[ "$BUILD_STALL_SWEEP_LIMIT" -ge 1 ] || { echo "ERROR: BUILD_STALL_SWEEP_LIMIT must be a positive integer" >&2; exit 1; }
+
+# Re-run the build cycle for PRs a previous run quarantined behind any label in
+# RESUMABLE_BUILD_STALL_LABELS. Runs BEFORE the queue is read: those tickets are
+# still build-ready, and reading the queue first would rebuild them into
+# duplicate PRs. Safe to resume all three the same way here: this only runs
+# after reviewer_preflight() has already passed for the current run (see the
+# call site), so a genuine outdated-CLI/no-credits condition would have halted
+# before we ever reach this sweep.
+#
+# A failed or possibly-truncated lookup for ANY label means we cannot prove no
+# stalled ticket remains behind that label, so the whole sweep aborts (HALT_RC=5)
+# rather than falling through to read the ticket queue — that fallthrough is
+# exactly how a stalled ticket gets rebuilt into a duplicate PR. The same
+# HALT_RC=5 covers a failed dedup pass (the awk/mv step below): an unverified
+# record set is just as untrustworthy as a failed lookup. The same is
+# true if a resumed PR's branch cannot be fetched or checked out into a
+# worktree (HALT_RC=6). Same again if a resumed PR carries no builder marker
+# (HALT_RC=8): with no source/ticket to pass to mark_ticket_done, its
+# ticket's build-ready label is never cleared, so the ticket queue must not
+# be read until that's fixed. That check runs before the resumable label is
+# removed and before anything else is touched, so the PR keeps its label and
+# stays discoverable by this same sweep once an operator adds the marker and
+# reruns (see #106). A record missing its PR number or head branch
+# (HALT_RC=9) is halted rather than skipped for the same reason: skipping it
+# via `continue` would let its still-build-ready ticket reach the queue and
+# get rebuilt into a duplicate PR.
+#
+# mark_ticket_done — the call that actually clears the ticket's build-ready
+# label — now runs BEFORE the resumable label is removed, not after: a PR
+# whose ticket swap fails must stay discoverable by this same sweep, or it's
+# invisible to every future run while its ticket sits build-ready forever
+# (HALT_RC=11, see #106 review). Since this sweep runs regardless of
+# --source, a resumed Jira-sourced PR can reach that Jira API call even
+# under --source github, which never validates Jira credentials at startup —
+# checked explicitly up front instead (HALT_RC=10), before the resumable
+# label is touched, rather than relying on the API call itself to fail (see
+# #106 review). Only once the ticket is confirmed done does a failure to
+# remove the now-stale resumable label (HALT_RC=7) stop being a
+# duplicate-PR risk — the ticket itself is already off the queue by then, so
+# that halt exists only so the label gets cleaned up on the next run.
+resume_stalled_prs() {
+  local raw_file="$TMP_ROOT/stalled-prs.json" records="$TMP_ROOT/stalled-records" label pr_count
+  # Field separator for $records: NOT a tab. Bash (and awk's default field
+  # splitting) treat space/tab/newline as "IFS whitespace" and collapse runs
+  # of them, silently dropping empty fields and shifting later columns left —
+  # exactly what happens when a resumed PR has no builder marker, leaving
+  # source/ticket empty. \x1f (ASCII unit separator) isn't in that collapsing
+  # class, so empty fields survive, and it can't collide with real content
+  # (PR number, branch name, ticket id, label name).
+  local sep=$'\x1f'
+  : > "$records"
+  for label in "${RESUMABLE_BUILD_STALL_LABELS[@]}"; do
+    if ! gh pr list --repo "$REPO" --state open --label "$label" --limit "$BUILD_STALL_SWEEP_LIMIT" \
+      --json number,headRefName,body > "$raw_file" 2>> "$LOG"; then
+      echo "[build] ERROR: could not list $label PRs; aborting run before reading the ticket queue to avoid rebuilding a stalled ticket into a duplicate PR" >&2
+      HALT_RC=5
+      return 0
+    fi
+    if ! pr_count=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$raw_file" 2>> "$LOG"); then
+      echo "[build] ERROR: $label PR lookup returned invalid JSON; aborting run before reading the ticket queue to avoid rebuilding a stalled ticket into a duplicate PR" >&2
+      HALT_RC=5
+      return 0
+    fi
+    if [ "$pr_count" -ge "$BUILD_STALL_SWEEP_LIMIT" ]; then
+      echo "[build] ERROR: $label PR lookup returned $pr_count results (limit $BUILD_STALL_SWEEP_LIMIT); more may be hidden beyond the page. Aborting run before reading the ticket queue to avoid rebuilding a stalled ticket into a duplicate PR" >&2
+      HALT_RC=5
+      return 0
+    fi
+    if ! python3 - "$raw_file" "$label" >> "$records" <<'PY'
 import json, re, sys
 marker = re.compile(r"<!-- babysit-builder\s+source=(\S+)\s+ticket=(\S+)\s+-->", re.I)
+label = sys.argv[2]
 with open(sys.argv[1], encoding="utf-8") as fh:
     prs = json.load(fh)
 for pr in prs:
     match = marker.search(pr.get("body") or "")
     source, ticket = (match.group(1), match.group(2)) if match else ("", "")
-    print("\t".join([str(pr.get("number") or ""), pr.get("headRefName") or "", source, ticket]))
+    print("\x1f".join([str(pr.get("number") or ""), pr.get("headRefName") or "", source, ticket, label]))
 PY
+    then
+      echo "[build] ERROR: could not parse $label PR records into the stalled-PR list; aborting run before reading the ticket queue to avoid rebuilding a stalled ticket into a duplicate PR" >&2
+      HALT_RC=5
+      return 0
+    fi
+  done
 
-  local pr_num head_ref source ticket cycle_rc
+  # A PR can be caught under more than one resumable label (e.g. a race
+  # between labelling and a manual edit); without this, it would appear twice
+  # in records and run through two build cycles in the same sweep. Collapse
+  # to one row per PR, but keep every label it was found under (comma-joined)
+  # so the loop below removes all of them — dropping the non-first labels
+  # here (as a naive dedup-by-PR would) leaves a stale resumable label in
+  # place, and the PR resurfaces under it on the very next sweep for another,
+  # redundant build cycle.
+  if ! awk -F"$sep" -v OFS="$sep" '
+    !($1 in head) { order[++n] = $1; head[$1] = $2; src[$1] = $3; tick[$1] = $4 }
+    { labels[$1] = (labels[$1] == "" ? $5 : labels[$1] "," $5) }
+    END { for (i = 1; i <= n; i++) { pr = order[i]; print pr, head[pr], src[pr], tick[pr], labels[pr] } }
+  ' "$records" > "$records.dedup"; then
+    echo "[build] ERROR: could not deduplicate stalled-PR records; aborting run before reading the ticket queue to avoid rebuilding a stalled ticket into a duplicate PR" >&2
+    rm -f "$records.dedup"
+    HALT_RC=5
+    return 0
+  fi
+  if ! mv "$records.dedup" "$records"; then
+    echo "[build] ERROR: could not finalize deduplicated stalled-PR records; aborting run before reading the ticket queue to avoid rebuilding a stalled ticket into a duplicate PR" >&2
+    HALT_RC=5
+    return 0
+  fi
+
+  local pr_num head_ref source ticket label cycle_rc rm_label
   # fd 3: the harnesses inherit stdin, and would otherwise consume this file.
-  while IFS=$'\t' read -r -u 3 pr_num head_ref source ticket; do
-    [ -n "$pr_num" ] && [ -n "$head_ref" ] || continue
-    echo "[build] resuming build cycle for PR #$pr_num (build-mcp-outage)"
+  while IFS="$sep" read -r -u 3 pr_num head_ref source ticket label; do
+    if [ -z "$pr_num" ] || [ -z "$head_ref" ]; then
+      echo "[build] ERROR: stalled-PR record has no PR number or head branch (pr_num='$pr_num' head_ref='$head_ref'); halting before reading the ticket queue to avoid rebuilding its still-build-ready ticket into a duplicate PR" >&2
+      HALT_RC=9
+      return 0
+    fi
+
+    # Check the builder marker before removing anything: without a
+    # source/ticket pair, mark_ticket_done can never be called for this PR,
+    # so stripping its resumable label now would strand it — no sweep looks
+    # for an unlabelled PR, so even an operator who adds the marker and
+    # reruns exactly as instructed can never get this PR rediscovered (see
+    # #106). Halt immediately instead, before fetching/checking out
+    # anything, leaving the label in place so the next sweep finds it again.
+    if [ -z "$source" ] || [ -z "$ticket" ]; then
+      echo "[build] ERROR: PR #$pr_num carries no builder marker; cannot confirm its ticket via mark_ticket_done, so halting before reading the ticket queue to avoid rebuilding its still-build-ready ticket into a duplicate PR. Add a builder marker to the PR body, then re-run — the stalled-PR sweep will find this PR again next time since its resumable label is left in place." >&2
+      HALT_RC=8
+      return 0
+    fi
+
+    echo "[build] resuming build cycle for PR #$pr_num ($label)"
     if ! git fetch origin "$head_ref" >> "$LOG" 2>&1; then
-      echo "[build] WARNING: could not fetch origin/$head_ref for PR #$pr_num; skipped" >&2
-      continue
+      echo "[build] ERROR: could not fetch origin/$head_ref for PR #$pr_num; halting before reading the ticket queue to avoid rebuilding its still-build-ready ticket into a duplicate PR" >&2
+      HALT_RC=6
+      return 0
     fi
     BUILD_BRANCH="$head_ref"
     BUILD_DIR="$TMP_ROOT/wt-resume-$pr_num"
     if ! git worktree add -f -B "$head_ref" "$BUILD_DIR" FETCH_HEAD >> "$LOG" 2>&1; then
-      echo "[build] WARNING: could not create worktree for PR #$pr_num; skipped" >&2
+      echo "[build] ERROR: could not create worktree for PR #$pr_num; halting before reading the ticket queue to avoid rebuilding its still-build-ready ticket into a duplicate PR" >&2
       BUILD_DIR=""; BUILD_BRANCH=""
-      continue
+      HALT_RC=6
+      return 0
     fi
     printf '%s\n' "$BUILD_DIR" >> "$WORKTREE_LIST"
 
-    gh pr edit "$pr_num" --repo "$REPO" --remove-label build-mcp-outage >> "$LOG" 2>&1 || true
     gh pr ready "$pr_num" --repo "$REPO" >> "$LOG" 2>&1 || true
 
     cycle_rc=0
     run_build_cycle "$pr_num" || cycle_rc=$?
     if [ "$cycle_rc" -eq 0 ]; then
-      if [ -n "$source" ] && [ -n "$ticket" ]; then
-        mark_ticket_done "$source" "$ticket" "$pr_num" "PR halted for human merge"
-      else
-        echo "[build] WARNING: PR #$pr_num carries no builder marker; its ticket keeps build-ready and may be rebuilt" >&2
+      # This sweep runs before SOURCE-based gating and regardless of which
+      # --source this run was started with, so a resumed PR whose marker
+      # says source=jira can reach ticket_swap_to_terminal's Jira path even
+      # under --source github, which never validates Jira credentials at
+      # startup (that check only fires for --source jira|both — see the
+      # pre-flight block). Check explicitly here, before mark_ticket_done
+      # (and therefore before the resumable label comes off), rather than
+      # relying on jira_api's curl call to fail on an unset URL/token: the
+      # label must still be in place if this halts (see #106 review).
+      if [ "$source" = "jira" ] && { [ -z "${JIRA_BASE_URL:-}" ] || [ -z "${JIRA_TOKEN:-}" ] || [ -z "${JIRA_PROJECT:-}" ]; }; then
+        echo "[build] ERROR: PR #$pr_num's ticket $ticket is a Jira ticket but JIRA_BASE_URL/JIRA_TOKEN/JIRA_PROJECT are not fully set (this run started with --source $SOURCE); cannot mark it done. Halting before reading the ticket queue to avoid rebuilding its still-build-ready ticket into a duplicate PR. Its resumable label is left in place, so the sweep finds this PR again once Jira credentials are configured." >&2
+        discard_build_worktree
+        HALT_RC=10
+        return 0
+      fi
+
+      # source/ticket are guaranteed non-empty here: the marker check above
+      # halts before this point whenever either is empty.
+      #
+      # Mark the ticket done BEFORE touching the resumable label(s). If
+      # mark_ticket_done fails (the label-swap API call errors) and the
+      # resumable label had already been stripped, the PR would carry no
+      # resumable label while its ticket sits build-ready forever —
+      # invisible to every future sweep and free for
+      # fetch_github_queue/fetch_jira_queue to rebuild into a duplicate PR
+      # (see #106 review). Halting here instead leaves the PR exactly as
+      # discoverable as it was before this run started.
+      if ! mark_ticket_done "$source" "$ticket" "$pr_num" "PR halted for human merge"; then
+        echo "[build] ERROR: could not mark ticket $ticket ($source) done for PR #$pr_num; halting before reading the ticket queue to avoid rebuilding its still-build-ready ticket into a duplicate PR. Its resumable label is left in place, so the sweep finds this PR again once the underlying failure is fixed." >&2
+        discard_build_worktree
+        HALT_RC=11
+        return 0
+      fi
+
+      # $label may be a comma-joined list (dedup above merges every resumable
+      # label a single PR was found under). Every one must come off now that
+      # the ticket has been confirmed done. A failure partway through means
+      # we cannot prove the PR is fully unlabelled, so halt rather than fall
+      # through to the ticket queue — the ticket itself is already marked
+      # done at this point, so the only risk left is this same PR being
+      # re-swept and re-built next run, not a duplicate PR.
+      local -a resume_labels
+      IFS=',' read -r -a resume_labels <<< "$label"
+      local label_removed=1
+      for rm_label in "${resume_labels[@]}"; do
+        if ! gh pr edit "$pr_num" --repo "$REPO" --remove-label "$rm_label" >> "$LOG" 2>&1; then
+          echo "[build] ERROR: could not remove $rm_label from PR #$pr_num; halting so the sweep can retry the removal next run" >&2
+          label_removed=0
+          break
+        fi
+      done
+      if [ "$label_removed" -eq 0 ]; then
+        discard_build_worktree
+        HALT_RC=7
+        return 0
       fi
     else
       HALT_RC="$cycle_rc"
@@ -1769,14 +1947,21 @@ if [ "$DRY_RUN" -eq 0 ]; then
   esac
   unset _probe_rc
 
-  resume_outage_prs
+  resume_stalled_prs
   if [ "$HALT_RC" -ne 0 ]; then
     case "$HALT_RC" in
-      2) echo "Halting: reviewer MCP outage persists; the PR is labelled build-mcp-outage and will be retried next run. See $LOG" >&2 ;;
-      3) echo "Halting: Codex version incompatibility; upgrade the CLI, remove build-codex-outdated, then re-run. See $LOG" >&2 ;;
-      4) echo "Halting: Codex workspace out of credits; add credits, remove build-codex-no-credits, then re-run. See $LOG" >&2 ;;
+      2) echo "Halting: reviewer MCP outage persists; the PR stays labelled build-mcp-outage and will be retried next run. See $LOG" >&2 ;;
+      3) echo "Halting: Codex version incompatibility; upgrade the CLI (codex update), then re-run — the stalled-PR sweep finds the build-codex-outdated PR itself. See $LOG" >&2 ;;
+      4) echo "Halting: Codex workspace out of credits; add credits, then re-run — the stalled-PR sweep finds the build-codex-no-credits PR itself. See $LOG" >&2 ;;
+      5) echo "Halting: stalled-PR sweep could not confirm the resumable labels are clear (lookup failure or possible truncation); fix the reported condition, then re-run. See $LOG" >&2 ;;
+      6) echo "Halting: stalled-PR sweep could not fetch or check out a resumed PR's branch; its ticket is still build-ready. Fix the reported condition, then re-run — the sweep will find the same PR again. See $LOG" >&2 ;;
+      7) echo "Halting: stalled-PR sweep could not remove a resumable label from a resumed PR whose ticket was already marked done. Fix the reported condition, then re-run — the sweep will find the same PR again. See $LOG" >&2 ;;
+      8) echo "Halting: stalled-PR sweep found a PR with no builder marker; its ticket is still build-ready and cannot be marked done. Its resumable label was left in place, so add a marker to the PR body then re-run — the sweep finds the same PR again — or manually clear the ticket's build-ready label. See $LOG" >&2 ;;
+      9) echo "Halting: stalled-PR sweep found a record with no PR number or head branch; its ticket is still build-ready. Fix the reported condition, then re-run — the sweep will find the same PR again. See $LOG" >&2 ;;
+      10) echo "Halting: stalled-PR sweep found a resumed Jira ticket but JIRA_BASE_URL/JIRA_TOKEN/JIRA_PROJECT are not fully set; its ticket is still build-ready. Set Jira credentials (or run with --source jira|both, which requires them at startup), then re-run — the sweep will find the same PR again. See $LOG" >&2 ;;
+      11) echo "Halting: stalled-PR sweep could not mark a resumed PR's ticket done; its ticket is still build-ready and its resumable label was left in place. Fix the reported condition, then re-run — the sweep will find the same PR again. See $LOG" >&2 ;;
     esac
-    echo "Builder halted during outage sweep."
+    echo "Builder halted during stalled-PR sweep."
     exit 0
   fi
 fi
@@ -1815,9 +2000,9 @@ while IFS=$'\t' read -r -u 3 ticket_source ticket_key title_b64 body_b64 url_b64
   build_ticket "$ticket_source" "$ticket_key" "$title" "$body" "$ticket_url"
   if [ "$HALT_RC" -ne 0 ]; then
     case "$HALT_RC" in
-      2) echo "Halting: reviewer MCP outage; the PR is labelled build-mcp-outage and will be retried next run. See $LOG" >&2 ;;
-      3) echo "Halting: Codex version incompatibility; upgrade the CLI, remove build-codex-outdated, then re-run. See $LOG" >&2 ;;
-      4) echo "Halting: Codex workspace out of credits; add credits, remove build-codex-no-credits, then re-run. See $LOG" >&2 ;;
+      2) echo "Halting: reviewer MCP outage; the PR stays labelled build-mcp-outage and will be retried next run. See $LOG" >&2 ;;
+      3) echo "Halting: Codex version incompatibility; upgrade the CLI (codex update), then re-run — the stalled-PR sweep finds the build-codex-outdated PR itself. See $LOG" >&2 ;;
+      4) echo "Halting: Codex workspace out of credits; add credits, then re-run — the stalled-PR sweep finds the build-codex-no-credits PR itself. See $LOG" >&2 ;;
     esac
     break
   fi
