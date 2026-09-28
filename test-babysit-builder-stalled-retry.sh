@@ -27,6 +27,12 @@ pass() { echo "ok - $1"; PASS=$((PASS + 1)); }
 fail() { echo "not ok - $1" >&2; FAIL=$((FAIL + 1)); }
 assert_grep() { if grep -qF -- "$2" "$3" 2>/dev/null; then pass "$1"; else echo "  missing '$2' in $3" >&2; sed 's/^/    /' "$3" >&2; fail "$1"; fi; }
 assert_not_grep() { if grep -qF -- "$2" "$3" 2>/dev/null; then echo "  unexpected '$2' in $3" >&2; sed 's/^/    /' "$3" >&2; fail "$1"; else pass "$1"; fi; }
+assert_count() {  # <label> <expected-count> <pattern> <file>
+  local expected="$2" actual
+  actual=$(grep -cF -- "$3" "$4" 2>/dev/null || true)
+  actual=${actual:-0}
+  if [ "$actual" = "$expected" ]; then pass "$1"; else echo "  expected $expected occurrence(s) of '$3' in $4, got $actual" >&2; sed 's/^/    /' "$4" >&2; fail "$1"; fi
+}
 
 mkdir -p "$TMP/bin"
 
@@ -177,6 +183,15 @@ run_builder "$r" BUILD_STALL_SWEEP_LIMIT=3 STUB_PR_MCP="$(pr_json_n 3)" STUB_QUE
 assert_grep "stalled retry (limit hit): run halts rather than assuming the page is complete" "Halting: stalled-PR sweep" "$TMP/err"
 assert_not_grep "stalled retry (limit hit): ticket queue is never read" "CALL=gh issue list" "$r"
 assert_not_grep "stalled retry (limit hit): no build cycle starts for the queued ticket" "=== build cycle:" "$TMP/err"
+
+# ---------- scenario 7: the same PR shows up under two resumable labels (e.g.
+# a labelling race) — it must run through the build cycle exactly once, not
+# once per label it happens to carry ----------
+r="$TMP/dedup.record"
+run_builder "$r" STUB_PR_MCP="$(pr_json 100 stalled-pr-branch github 47)" STUB_PR_OUTDATED="$(pr_json 100 stalled-pr-branch github 47)"
+assert_count "stalled retry (dedup): build cycle runs exactly once for the duplicated PR" 1 "=== build cycle: PR #100 @" "$TMP/err"
+assert_count "stalled retry (dedup): only the first-seen label's removal is attempted" 1 "CALL=gh pr edit 100 --repo owner/repo --remove-label" "$r"
+assert_not_grep "stalled retry (dedup): the second label is never touched" "--remove-label build-codex-outdated" "$r"
 
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]

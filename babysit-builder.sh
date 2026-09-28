@@ -1737,6 +1737,12 @@ for pr in prs:
 PY
   done
 
+  # A PR can be caught under more than one resumable label (e.g. a race
+  # between labelling and a manual edit); without this, it would appear twice
+  # in records and run through two build cycles in the same sweep. Keep the
+  # first occurrence only — awk preserves record order.
+  awk -F'\t' '!seen[$1]++' "$records" > "$records.dedup" && mv "$records.dedup" "$records"
+
   local pr_num head_ref source ticket label cycle_rc
   # fd 3: the harnesses inherit stdin, and would otherwise consume this file.
   while IFS=$'\t' read -r -u 3 pr_num head_ref source ticket label; do
