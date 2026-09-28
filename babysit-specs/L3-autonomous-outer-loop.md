@@ -63,7 +63,7 @@ Developer invoking babysit-with-review.sh from project root directory.
 
 ## What we know
 From implementation (babysit-with-review.sh):
-- Script version: `VERSION="1.1.2"` (accessible via `--version`)
+- Script version: `VERSION="1.3.0"` (accessible via `--version`)
 - Loop runs from iter=1 to MAX_ITER (default 50)
 - Each iteration: MCP-outage retry check → `git worktree add` → collect_state() → `run_implementer` → worktree teardown → detect sentinel → stuck check → sleep
 - `run_implementer` dispatches to `run_claude` (default) or `run_codex_implementer` based on `$IMPLEMENTER`
@@ -131,7 +131,7 @@ REPO_BASE=<path>        # override helper-script base path (also via --repo-base
 Non-idempotent. Each iteration advances git state (commits, PRs). Re-running after halt resumes from current git state, not from start.
 
 ### Versioning policy
-Script version: `1.1.2` (semver, `--version` flag). Breaking changes (env var renames, sentinel format changes) require manual migration by user.
+Script version: `1.3.0` (semver, `--version` flag). Breaking changes (env var renames, sentinel format changes) require manual migration by user.
 
 ## Performance budget
 - **p50 iteration latency:** ~2 minutes (dominated by Claude inference)
