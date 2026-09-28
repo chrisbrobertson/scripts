@@ -143,19 +143,43 @@ _, log_path, idx, halting_line, transcript_path = best
 with open(log_path, errors='replace') as f:
     lines = f.readlines()
 
+# One babysitter log can contain multiple PR review cycles, so an unbounded
+# backward scan for "## BLOCKING" could select a clean verdict left over from
+# a *different, earlier* PR — e.g. a pre-flight failure on this PR prints no
+# review at all. babysit-with-review.sh tags the start of each cycle with
+# "=== review handoff: PR #N @ ... ===" (see its run_review_cycle); bound the
+# verdict search to the nearest such line for *this* PR before the halt so
+# output from an earlier cycle can never be picked up.
+handoff_re = re.compile(
+    r'^=== review handoff: PR #' + re.escape(pr) + r' @ .* ===\s*$'
+)
+
+handoff_idx = None
+for j in range(idx - 1, -1, -1):
+    if handoff_re.match(lines[j].strip()):
+        handoff_idx = j
+        break
+
+if handoff_idx is None:
+    print(f'Found halt line in {log_path} but no "=== review handoff: PR #{pr} @ ..." '
+          'line before it — no review verdict was printed for this handoff (e.g. a '
+          'pre-flight failure before Codex ran). Cannot check for a false positive; '
+          'a manual check is still required.', file=sys.stderr)
+    print(f'Log referenced by halt line: {transcript_path}', file=sys.stderr)
+    sys.exit(1)
+
 # Walk backward from the halt to the nearest preceding "## BLOCKING" header —
 # the start of the verdict block the review actually printed just before the
-# telltale scan fired. A long review can place its verdict arbitrarily far
-# back, so scan the whole file rather than capping the lookback distance.
+# telltale scan fired. Never cross the handoff boundary found above.
 start = None
-for j in range(idx - 1, -1, -1):
+for j in range(idx - 1, handoff_idx, -1):
     if lines[j].strip() == '## BLOCKING':
         start = j
         break
 
 if start is None:
-    print(f'Found halt line in {log_path} but no "## BLOCKING" verdict block before it.',
-          file=sys.stderr)
+    print(f'Found halt line in {log_path} and a review handoff for PR #{pr} before it, '
+          'but no "## BLOCKING" verdict block between them.', file=sys.stderr)
     print(f'Log referenced by halt line: {transcript_path}', file=sys.stderr)
     sys.exit(1)
 
@@ -173,10 +197,11 @@ for k in range(start, idx):
 # and `end`, naively parsing from `start` would silently ignore or mask it
 # (e.g. Codex quoting the review-format template earlier in its own
 # output, or printing a verdict twice). Bound the span by the nearest
-# bracket lines on both sides of `start` and refuse to guess which
-# occurrence is the real verdict if more than one appears in it.
-span_start = 0
-for j in range(start - 1, -1, -1):
+# bracket lines on both sides of `start` (never crossing this PR's handoff
+# boundary) and refuse to guess which occurrence is the real verdict if
+# more than one appears in it.
+span_start = handoff_idx + 1
+for j in range(start - 1, handoff_idx, -1):
     if lines[j].startswith('  ['):
         span_start = j + 1
         break
