@@ -96,6 +96,10 @@ assert_grep "TC-2.8 labels the PR review-mcp-outage" "CALL=gh label create revie
 assert_grep "TC-2.8 adds the review-mcp-outage label" "CALL=gh pr edit 7 --add-label review-mcp-outage" "$RECORD"
 assert_grep "TC-2.8 drafts the PR" "CALL=gh pr ready 7 --undo" "$RECORD"
 assert_grep "TC-2.8 posts an outage comment" "CALL=gh pr comment 7 --body-file -" "$RECORD"
+assert_grep "TC-2.8 outage comment names the MCP transport failure" \
+  "codex MCP transport failure — review pending" "$CASE/stubs/gh-comment-body"
+assert_grep "TC-2.8 outage comment states the reason" \
+  "Reason: codex MCP transport failure after 3 retries (cycle 1)" "$CASE/stubs/gh-comment-body"
 assert_not_grep "TC-2.8 does not take the generic review-incomplete path" "review-incomplete" "$RECORD"
 assert_grep "TC-2.8 logs the MCP outage reason" \
   "codex MCP outage for PR #7: codex MCP transport failure after 3 retries (cycle 1)" "$CASE/stderr"
