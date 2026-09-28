@@ -51,6 +51,7 @@ case "$*" in
   "pr ready "*) exit "${STUB_READY_RC:-0}" ;;
   "pr merge "*"--auto"*) exit "${STUB_MERGE_AUTO_RC:-0}" ;;
   "pr merge "*) exit "${STUB_MERGE_RC:-0}" ;;
+  "pr edit "*"--add-label review-merge-failed"*) exit "${STUB_EDIT_RC:-0}" ;;
   *) exit 0 ;;
 esac
 STUB
@@ -128,6 +129,17 @@ assert_grep "both merges fail: review-merge-failed label is created" "CALL=gh la
 assert_grep "both merges fail: review-merge-failed label is added to the PR" "CALL=gh pr edit 60 --add-label review-merge-failed" "$r"
 assert_grep "both merges fail: an explanatory comment is posted" "CALL=gh pr comment 60 --body-file -" "$r"
 assert_not_grep "both merges fail: the PR is NOT re-drafted (review already passed, status already green)" "CALL=gh pr ready 60 --undo" "$r"
+
+# ---------- both merges fail AND the merge-failure label itself can't be
+# applied: fail-closed (#107) — the stalled-PR retry sweep only ever
+# searches by label, so an unlabelled PR here would sit undiscoverable while
+# the outer loop moves on to new work (the exact #60 orphan class this
+# function exists to close). Must halt, not swallow the failure ----------
+r="$TMP/label-fails.record"
+run_merge "$r" STUB_MERGE_AUTO_RC=1 STUB_MERGE_RC=1 STUB_EDIT_RC=1
+rc=$(cat "$TMP/rc")
+if [ "$rc" -ne 0 ]; then pass "label failure: wrapper halts (non-zero exit) rather than continuing"; else fail "label failure: wrapper halts (non-zero exit) rather than continuing"; fi
+assert_grep "label failure: an ERROR is logged" "ERROR: gh pr edit --add-label failed for PR #60" "$TMP/err"
 
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]

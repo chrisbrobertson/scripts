@@ -36,8 +36,10 @@
 # `review-codex-no-credits` = Codex workspace out of credits; add credits then restart.
 # `review-merge-failed` = review already passed (codex-review=success already set) but
 # `gh pr merge` itself failed; unlike the other three this does NOT halt the wrapper
-# (the reviewer backend is fine) — it's picked up by the same pre-iter sweep, lowest
-# priority, on the next outer iteration of the same run, no restart needed.
+# on the merge failure itself (the reviewer backend is fine) — it's picked up by the
+# same pre-iter sweep, lowest priority, on the next outer iteration of the same run,
+# no restart needed. It DOES halt, fail-closed, if the label itself can't be applied,
+# since the sweep can only find this PR again by that label.
 
 set -uo pipefail
 
@@ -1086,13 +1088,15 @@ The babysitter has halted — this is not recoverable while it's running. To res
 # retry sweep — which only ever searches by label — could never find it again
 # and it sat open forever).
 #
-# Unlike fail_review_cycle_mcp/_codex_outdated/_codex_no_credits, this is NOT
-# fail-closed and does not re-draft the PR: the review already passed, the
-# codex-review status is already green, and the only thing that failed is the
-# git-hosting-side merge op (commonly a transient CI/branch-protection race),
-# so leaving it ready-and-mergeable is correct, not a hole to close. A
-# labelling failure here is logged and swallowed rather than halting the
-# babysitter, since the underlying work is otherwise done.
+# Unlike fail_review_cycle_mcp/_codex_outdated/_codex_no_credits, this does not
+# re-draft the PR: the review already passed, the codex-review status is
+# already green, and the only thing that failed is the git-hosting-side merge
+# op (commonly a transient CI/branch-protection race), so leaving it
+# ready-and-mergeable is correct, not a hole to close. The label itself is
+# still fail-closed, same as the other three: the stalled-PR retry sweep only
+# ever searches by label, so a labelling failure here would leave the PR
+# undiscoverable while the outer loop moves on to new work (the exact #60
+# orphan class this function exists to close) — halt instead.
 # Args: <pr_num>
 flag_review_cycle_merge_failed() {
   local pr_num="$1"
@@ -1102,9 +1106,12 @@ flag_review_cycle_merge_failed() {
     --description "Babysit review passed but gh pr merge failed; wrapper retries automatically" \
     --force >>"$LOG" 2>&1 || true
 
+  # Fail-closed: if we can't label the PR, halt — it must not sit unlabelled
+  # while the loop starts new work, since only this label lets the retry
+  # sweep find it again.
   if ! gh pr edit "$pr_num" --add-label review-merge-failed >>"$LOG" 2>&1; then
-    echo "  [review] WARNING: gh pr edit --add-label failed for PR #$pr_num; the merge-failure retry sweep won't find it — manually add 'review-merge-failed' or merge by hand" | tee -a "$LOG" >&2
-    return 0
+    echo "ERROR: gh pr edit --add-label failed for PR #$pr_num — merge failed and PR is unlabelled; manually add 'review-merge-failed' or merge by hand before restarting" | tee -a "$LOG" >&2
+    exit 1
   fi
 
   local body
