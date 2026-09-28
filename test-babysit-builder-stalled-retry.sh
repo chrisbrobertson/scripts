@@ -53,6 +53,9 @@ case "$*" in
   "pr edit "*"--remove-label "*)
     [ "${STUB_REMOVE_LABEL_FAIL:-0}" = 1 ] && exit 1
     exit 0 ;;
+  "issue edit "*"--remove-label build-ready --add-label build-done"*)
+    [ "${STUB_MARK_DONE_FAIL:-0}" = 1 ] && exit 1
+    exit 0 ;;
   "issue list --repo "*"--label build-ready"*) printf '%s' "${STUB_QUEUE:-[]}"; exit 0 ;;
   *) exit 0 ;;
 esac
@@ -300,6 +303,21 @@ assert_grep "stalled retry (mcp recurrence): build cycle actually ran" "=== buil
 assert_not_grep "stalled retry (mcp recurrence): resumable label was never removed" "CALL=gh pr edit 103 --repo owner/repo --remove-label" "$r"
 assert_grep "stalled retry (mcp recurrence): PR is re-quarantined behind the same label" "CALL=gh pr edit 103 --repo owner/repo --add-label build-mcp-outage" "$r"
 assert_not_grep "stalled retry (mcp recurrence): ticket queue is never read" "CALL=gh issue list" "$r"
+
+# ---------- scenario 14 (PR #106 review, BLOCKING): mark_ticket_done fails
+# (the ticket label swap API call errors) after the build cycle reaches a
+# terminal state — the resumable label must NOT already be gone, since
+# mark_ticket_done previously ran only after label removal and its failure
+# was silently swallowed (`ticket_swap_to_terminal ... || echo ...` always
+# returned 0), so a still-queued ticket could be rebuilt into a duplicate PR.
+# The fix marks the ticket done first and gates label removal on that
+# succeeding ----------
+r="$TMP/mark-done-fail.record"
+run_builder "$r" STUB_MARK_DONE_FAIL=1 STUB_PR_MCP="$(pr_json 104 stalled-pr-branch github 50)" STUB_QUEUE="$(queue_json 508)"
+assert_grep "stalled retry (mark-done failure): run halts rather than skipping to the next record/queue" "Halting: stalled-PR sweep could not mark a resumed PR's ticket done" "$TMP/err"
+assert_grep "stalled retry (mark-done failure): build cycle actually ran" "=== build cycle: PR #104 @" "$TMP/err"
+assert_not_grep "stalled retry (mark-done failure): resumable label is left in place" "CALL=gh pr edit 104 --repo owner/repo --remove-label" "$r"
+assert_not_grep "stalled retry (mark-done failure): ticket queue is never read" "CALL=gh issue list" "$r"
 
 echo "$PASS passed; $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -1467,8 +1467,10 @@ mark_ticket_done() {
   } > "$comment_file"
   ticket_comment "$source" "$ticket" "$comment_file" \
     || echo "[build] WARNING: could not comment on ticket $ticket ($source)" >&2
-  ticket_swap_to_terminal "$source" "$ticket" build-done \
-    || echo "[build] ERROR: could not swap labels on ticket $ticket ($source); it may be rebuilt next run" >&2
+  if ! ticket_swap_to_terminal "$source" "$ticket" build-done; then
+    echo "[build] ERROR: could not swap labels on ticket $ticket ($source); it may be rebuilt next run" >&2
+    return 1
+  fi
 }
 
 # Create a fresh worktree on a new branch off the default branch tip.
@@ -1713,18 +1715,25 @@ case "$BUILD_STALL_SWEEP_LIMIT" in ''|*[!0-9]*) echo "ERROR: BUILD_STALL_SWEEP_L
 # HALT_RC=5 covers a failed dedup pass (the awk/mv step below): an unverified
 # record set is just as untrustworthy as a failed lookup. The same is
 # true if a resumed PR's branch cannot be fetched or checked out into a
-# worktree (HALT_RC=6), or if a resumable label cannot be removed from it
-# (HALT_RC=7): its ticket is still build-ready, so continuing on to the next
-# record — or worse, to the ticket queue — risks the same duplicate. Same
-# again if a resumed PR carries no builder marker (HALT_RC=8): with no
-# source/ticket to pass to mark_ticket_done, its ticket's build-ready label
-# is never cleared, so the ticket queue must not be read until that's fixed.
-# That check runs before the resumable label is removed and before anything
-# else is touched, so the PR keeps its label and stays discoverable by this
-# same sweep once an operator adds the marker and reruns (see #106). A record
-# missing its PR number or head branch (HALT_RC=9) is halted rather than
-# skipped for the same reason: skipping it via `continue` would let its
-# still-build-ready ticket reach the queue and get rebuilt into a duplicate PR.
+# worktree (HALT_RC=6). Same again if a resumed PR carries no builder marker
+# (HALT_RC=8): with no source/ticket to pass to mark_ticket_done, its
+# ticket's build-ready label is never cleared, so the ticket queue must not
+# be read until that's fixed. That check runs before the resumable label is
+# removed and before anything else is touched, so the PR keeps its label and
+# stays discoverable by this same sweep once an operator adds the marker and
+# reruns (see #106). A record missing its PR number or head branch
+# (HALT_RC=9) is halted rather than skipped for the same reason: skipping it
+# via `continue` would let its still-build-ready ticket reach the queue and
+# get rebuilt into a duplicate PR.
+#
+# mark_ticket_done — the call that actually clears the ticket's build-ready
+# label — now runs BEFORE the resumable label is removed, not after: a PR
+# whose ticket swap fails must stay discoverable by this same sweep, or it's
+# invisible to every future run while its ticket sits build-ready forever
+# (HALT_RC=11, see #106 review). Only once the ticket is confirmed done does
+# a failure to remove the now-stale resumable label (HALT_RC=7) stop being a
+# duplicate-PR risk — the ticket itself is already off the queue by then, so
+# that halt exists only so the label gets cleaned up on the next run.
 resume_stalled_prs() {
   local raw_file="$TMP_ROOT/stalled-prs.json" records="$TMP_ROOT/stalled-records" label pr_count
   # Field separator for $records: NOT a tab. Bash (and awk's default field
@@ -1838,27 +1847,37 @@ PY
     cycle_rc=0
     run_build_cycle "$pr_num" || cycle_rc=$?
     if [ "$cycle_rc" -eq 0 ]; then
+      # source/ticket are guaranteed non-empty here: the marker check above
+      # halts before this point whenever either is empty.
+      #
+      # Mark the ticket done BEFORE touching the resumable label(s). If
+      # mark_ticket_done fails (the label-swap API call errors) and the
+      # resumable label had already been stripped, the PR would carry no
+      # resumable label while its ticket sits build-ready forever —
+      # invisible to every future sweep and free for
+      # fetch_github_queue/fetch_jira_queue to rebuild into a duplicate PR
+      # (see #106 review). Halting here instead leaves the PR exactly as
+      # discoverable as it was before this run started.
+      if ! mark_ticket_done "$source" "$ticket" "$pr_num" "PR halted for human merge"; then
+        echo "[build] ERROR: could not mark ticket $ticket ($source) done for PR #$pr_num; halting before reading the ticket queue to avoid rebuilding its still-build-ready ticket into a duplicate PR. Its resumable label is left in place, so the sweep finds this PR again once the underlying failure is fixed." >&2
+        discard_build_worktree
+        HALT_RC=11
+        return 0
+      fi
+
       # $label may be a comma-joined list (dedup above merges every resumable
-      # label a single PR was found under). Every one must come off, but only
-      # now that the build cycle has actually reached a terminal state — not
-      # before run_build_cycle runs. If this process were interrupted or
-      # killed at any point during the cycle, a label already removed up
-      # front would leave the PR carrying no resumable label while its
-      # ticket is still build-ready: invisible to this same sweep on the
-      # next run, and free for fetch_github_queue/fetch_jira_queue to rebuild
-      # into a duplicate PR (see #106). Leaving the label in place until
-      # success is confirmed means an interruption instead just leaves the
-      # PR exactly as discoverable as it was before this run started. A
-      # failure partway through removal means we cannot prove the PR is
-      # fully unlabelled, so — same as the fetch/checkout failures above —
-      # halt rather than fall through to the ticket queue, which would
-      # rebuild this still-build-ready ticket into a duplicate PR.
+      # label a single PR was found under). Every one must come off now that
+      # the ticket has been confirmed done. A failure partway through means
+      # we cannot prove the PR is fully unlabelled, so halt rather than fall
+      # through to the ticket queue — the ticket itself is already marked
+      # done at this point, so the only risk left is this same PR being
+      # re-swept and re-built next run, not a duplicate PR.
       local -a resume_labels
       IFS=',' read -r -a resume_labels <<< "$label"
       local label_removed=1
       for rm_label in "${resume_labels[@]}"; do
         if ! gh pr edit "$pr_num" --repo "$REPO" --remove-label "$rm_label" >> "$LOG" 2>&1; then
-          echo "[build] ERROR: could not remove $rm_label from PR #$pr_num; halting before reading the ticket queue to avoid rebuilding its still-build-ready ticket into a duplicate PR" >&2
+          echo "[build] ERROR: could not remove $rm_label from PR #$pr_num; halting so the sweep can retry the removal next run" >&2
           label_removed=0
           break
         fi
@@ -1868,10 +1887,6 @@ PY
         HALT_RC=7
         return 0
       fi
-      # source/ticket are guaranteed non-empty here: the marker check above
-      # halts before this point (and before the label is removed) whenever
-      # either is empty.
-      mark_ticket_done "$source" "$ticket" "$pr_num" "PR halted for human merge"
     else
       HALT_RC="$cycle_rc"
     fi
@@ -1919,9 +1934,10 @@ if [ "$DRY_RUN" -eq 0 ]; then
       4) echo "Halting: Codex workspace out of credits; add credits, then re-run — the stalled-PR sweep finds the build-codex-no-credits PR itself. See $LOG" >&2 ;;
       5) echo "Halting: stalled-PR sweep could not confirm the resumable labels are clear (lookup failure or possible truncation); fix the reported condition, then re-run. See $LOG" >&2 ;;
       6) echo "Halting: stalled-PR sweep could not fetch or check out a resumed PR's branch; its ticket is still build-ready. Fix the reported condition, then re-run — the sweep will find the same PR again. See $LOG" >&2 ;;
-      7) echo "Halting: stalled-PR sweep could not remove a resumable label from a resumed PR; its ticket is still build-ready. Fix the reported condition, then re-run — the sweep will find the same PR again. See $LOG" >&2 ;;
+      7) echo "Halting: stalled-PR sweep could not remove a resumable label from a resumed PR whose ticket was already marked done. Fix the reported condition, then re-run — the sweep will find the same PR again. See $LOG" >&2 ;;
       8) echo "Halting: stalled-PR sweep found a PR with no builder marker; its ticket is still build-ready and cannot be marked done. Its resumable label was left in place, so add a marker to the PR body then re-run — the sweep finds the same PR again — or manually clear the ticket's build-ready label. See $LOG" >&2 ;;
       9) echo "Halting: stalled-PR sweep found a record with no PR number or head branch; its ticket is still build-ready. Fix the reported condition, then re-run — the sweep will find the same PR again. See $LOG" >&2 ;;
+      11) echo "Halting: stalled-PR sweep could not mark a resumed PR's ticket done; its ticket is still build-ready and its resumable label was left in place. Fix the reported condition, then re-run — the sweep will find the same PR again. See $LOG" >&2 ;;
     esac
     echo "Builder halted during stalled-PR sweep."
     exit 0
