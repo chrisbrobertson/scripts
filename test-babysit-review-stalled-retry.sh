@@ -46,28 +46,61 @@ assert_not_grep() { if grep -qF -- "$2" "$3" 2>/dev/null; then echo "  unexpecte
 # can't distinguish them.
 assert_not_line() { if grep -qxF -- "$2" "$3" 2>/dev/null; then echo "  unexpected exact line '$2' in $3" >&2; sed 's/^/    /' "$3" >&2; fail "$1"; else pass "$1"; fi; }
 
+if ! command -v jq >/dev/null 2>&1; then
+  echo "SKIP: jq not on PATH; this harness needs it to exercise the real gh -q filter used by review_merge_failed_recorded_head" >&2
+  exit 0
+fi
+# Resolve jq's absolute path now, before run_outer_iteration() restricts PATH
+# to "$TMP/bin:/usr/bin:/bin" for the stubbed subshell — a jq installed
+# elsewhere (e.g. Homebrew's /opt/homebrew/bin or /usr/local/bin) would
+# otherwise vanish from the stub's PATH even though this preflight passed.
+JQ_BIN=$(command -v jq)
+
 mkdir -p "$TMP/bin"
 
 # gh: records every invocation. `pr list --label X` answers with the PR
 # number configured for that label via STUB_PR_<LABEL_UPPER>, or empty
 # (no match) otherwise — standing in for "this label isn't on any open PR".
-cat > "$TMP/bin/gh" <<'STUB'
+#
+# `pr view --json comments` forwards the script's real `-q` jq filter to the
+# real jq binary against a canned three-comment fixture — a forged marker
+# from a non-bot author (a different, "wrong" SHA an attacker could post
+# after pushing an unreviewed commit) plus a stale and a fresh marker from
+# the bot itself — so this harness actually exercises
+# review_merge_failed_recorded_head()'s author filter and its `tail -n1`
+# latest-marker selection, rather than a stub that hands back
+# STUB_RECORDED_HEAD unconditionally regardless of query (see PR #107
+# review, RECOMMENDED).
+cat > "$TMP/bin/gh" <<STUB
 #!/bin/bash
-printf 'CALL=gh %s\n' "$*" >> "$RECORD"
-case "$*" in
+printf 'CALL=gh %s\n' "\$*" >> "\$RECORD"
+case "\$*" in
   "repo view"*) echo main; exit 0 ;;
   "api user"*) printf 'babysit-bot'; exit 0 ;;
-  "pr list --state open --label review-codex-outdated"*) printf '%s' "${STUB_PR_OUTDATED:-}"; exit 0 ;;
-  "pr list --state open --label review-mcp-outage"*) printf '%s' "${STUB_PR_MCP:-}"; exit 0 ;;
-  "pr list --state open --label review-codex-no-credits"*) printf '%s' "${STUB_PR_CREDITS:-}"; exit 0 ;;
-  "pr list --state open --label review-merge-failed"*) printf '%s' "${STUB_PR_MERGE_FAILED:-}"; exit 0 ;;
-  "pr view "*"--json headRefOid"*) printf '%s' "${STUB_CURRENT_HEAD:-}"; exit 0 ;;
-  "pr view "*"--json comments"*)
-    if [ -n "${STUB_RECORDED_HEAD:-}" ]; then
-      printf '<!-- babysit:merge-failed-head=%s -->\n' "$STUB_RECORDED_HEAD"
-    fi
-    exit 0 ;;
-  "pr edit "*"--remove-label"*) exit "${STUB_REMOVE_LABEL_RC:-0}" ;;
+  "pr list --state open --label review-codex-outdated"*) printf '%s' "\${STUB_PR_OUTDATED:-}"; exit 0 ;;
+  "pr list --state open --label review-mcp-outage"*) printf '%s' "\${STUB_PR_MCP:-}"; exit 0 ;;
+  "pr list --state open --label review-codex-no-credits"*) printf '%s' "\${STUB_PR_CREDITS:-}"; exit 0 ;;
+  "pr list --state open --label review-merge-failed"*) printf '%s' "\${STUB_PR_MERGE_FAILED:-}"; exit 0 ;;
+  "pr view "*"--json headRefOid"*) printf '%s' "\${STUB_CURRENT_HEAD:-}"; exit 0 ;;
+esac
+if [ "\$1" = "pr" ] && [ "\$2" = "view" ] && [ "\${4:-}" = "--json" ] && [ "\${5:-}" = "comments" ]; then
+  if [ -z "\${STUB_RECORDED_HEAD:-}" ]; then
+    exit 0
+  fi
+  jq_filter="\${7:-}"
+  data=\$(cat <<FIXTURE
+{"comments":[
+  {"author":{"login":"attacker"},"body":"<!-- babysit:merge-failed-head=eviltoken1 -->"},
+  {"author":{"login":"babysit-bot"},"body":"<!-- babysit:merge-failed-head=0000000stale -->"},
+  {"author":{"login":"babysit-bot"},"body":"<!-- babysit:merge-failed-head=\$STUB_RECORDED_HEAD -->"}
+]}
+FIXTURE
+)
+  printf '%s' "\$data" | "$JQ_BIN" -r "\$jq_filter"
+  exit 0
+fi
+case "\$*" in
+  "pr edit "*"--remove-label"*) exit "\${STUB_REMOVE_LABEL_RC:-0}" ;;
   "pr ready "*) exit 0 ;;
   *) exit 0 ;;
 esac
