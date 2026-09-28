@@ -103,6 +103,22 @@ printf '<%s>\n' "$@" >> "$RECORD"
 if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
   exit 0
 fi
+# The stalled-PR sweep's review-merge-conflict branch resolves the repo with
+# `gh repo view --json nameWithOwner` and then pages issues via `gh api
+# --paginate`; both must resolve to *something* (empty api output = no conflict
+# PRs) so the sweep completes and proceeds to new work, exactly like `gh pr
+# list` above. Other `gh repo view` fields (e.g. preflight's defaultBranchRef)
+# still fail so their `|| echo main` fallback holds.
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  case "$*" in
+    *nameWithOwner*) echo owner/repo; exit 0 ;;
+  esac
+fi
+if [ "$1" = "api" ]; then
+  case "$*" in
+    *issues*labels=review-merge-conflict*) exit 0 ;;
+  esac
+fi
 exit 1
 STUB
   chmod +x "$bin/gh"
