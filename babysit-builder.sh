@@ -1730,7 +1730,11 @@ resume_stalled_prs() {
       HALT_RC=5
       return 0
     fi
-    pr_count=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$raw_file")
+    if ! pr_count=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$raw_file" 2>> "$LOG"); then
+      echo "[build] ERROR: $label PR lookup returned invalid JSON; aborting run before reading the ticket queue to avoid rebuilding a stalled ticket into a duplicate PR" >&2
+      HALT_RC=5
+      return 0
+    fi
     if [ "$pr_count" -ge "$BUILD_STALL_SWEEP_LIMIT" ]; then
       echo "[build] ERROR: $label PR lookup returned $pr_count results (limit $BUILD_STALL_SWEEP_LIMIT); more may be hidden beyond the page. Aborting run before reading the ticket queue to avoid rebuilding a stalled ticket into a duplicate PR" >&2
       HALT_RC=5
