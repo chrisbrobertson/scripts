@@ -101,12 +101,18 @@ halting_re = re.compile(
 
 best = None  # (mtime, log_path, line_idx, halting_line, transcript_path)
 
-# Both driver-launched and directly-run babysitters write
-# <project>-<timestamp>-<pid>.log — match the naming convention itself
-# rather than requiring "driver" to appear in the filename, and scope
-# to the requested repo's project name so a same-numbered PR in another
-# project's logs can't be picked up instead.
-log_name_re = re.compile(r'^' + re.escape(project) + r'-\d{8}-\d{6}-\d+\.log$')
+# Two distinct log-naming conventions exist, both written by processes
+# related to this project's babysitter run:
+#   - the babysitter itself: <project>-<timestamp>-<pid>.log
+#   - staff-fleet's babysit-driver.sh wrapper (new-fleet.sh), which
+#     redirects the babysitter's stdout/stderr (including its halt line)
+#     into its own file with no PID suffix: <project>-driver-<timestamp>.log
+# Match both rather than requiring a PID, and scope to the requested
+# repo's project name so a same-numbered PR in another project's logs
+# can't be picked up instead.
+log_name_re = re.compile(
+    r'^' + re.escape(project) + r'-(?:driver-)?\d{8}-\d{6}(?:-\d+)?\.log$'
+)
 
 for fn in os.listdir(log_dir):
     if not log_name_re.match(fn):
