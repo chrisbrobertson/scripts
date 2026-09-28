@@ -43,7 +43,7 @@
 
 set -uo pipefail
 
-VERSION="1.3.0"
+VERSION="1.3.1"
 
 usage() {
   cat <<'EOF'
@@ -1273,6 +1273,17 @@ codex_review_with_retry() {
     rc=${PIPESTATUS[0]}
     set -e
 
+    # Structural success first: a clean, valid review always wins, even if the
+    # transcript also contains a telltale substring — Codex's own commentary can
+    # quote back reviewed source/spec text verbatim (e.g. reviewing this very
+    # function, whose source defines compat_re/credits_re/mcp_re literally),
+    # which must not be mistaken for a real backend error.
+    if [ "$rc" -eq 0 ] && [ -s "$TMP_REVIEW" ]; then
+      if valid_review_structure "$TMP_REVIEW"; then return 0; fi
+      echo "  [codex] exit 0 but review missing required section headers (## BLOCKING / ## RECOMMENDED / ## INFORMATION); treating as failure" | tee -a "$LOG" >&2
+      # fall through to telltale checks
+    fi
+
     # Compat check first (before mcp_re): version mismatch → return 3, no retry.
     if grep -qE "$compat_re" "$TMP_CODEX_FULL" 2>/dev/null; then
       echo "  [codex] FATAL: backend compatibility failure on attempt $attempt (rc=$rc); Codex CLI is too old for the configured model" | tee -a "$LOG" >&2
@@ -1283,14 +1294,6 @@ codex_review_with_retry() {
     if grep -qE "$credits_re" "$TMP_CODEX_FULL" 2>/dev/null; then
       echo "  [codex] FATAL: Codex workspace out of credits on attempt $attempt (rc=$rc); add credits and restart" | tee -a "$LOG" >&2
       return 4
-    fi
-
-    # Structural validation: require all three section headers before treating as success.
-    # This closes the exit-0-garbage hole (e.g. a deprecation warning in place of a review).
-    if [ "$rc" -eq 0 ] && [ -s "$TMP_REVIEW" ]; then
-      if valid_review_structure "$TMP_REVIEW"; then return 0; fi
-      echo "  [codex] exit 0 but review missing required section headers (## BLOCKING / ## RECOMMENDED / ## INFORMATION); treating as failure" | tee -a "$LOG" >&2
-      # fall through to return 1
     fi
 
     if grep -qE "$mcp_re" "$TMP_CODEX_FULL" 2>/dev/null; then

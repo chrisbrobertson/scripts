@@ -18,7 +18,10 @@ assert_not_grep() { if grep -qF -- "$2" "$3" 2>/dev/null; then echo "  unexpecte
 # ---------- stubs ----------
 # Each stub consumes $STUB_DIR/<tool>.<n> in order. A response file may carry
 # directive lines: @@RC=<n> (exit code), @@COMMIT (claude: make an empty commit
-# in cwd), @@STDOUT (codex: also echo the body to stdout, for telltale scans).
+# in cwd), @@STDOUT (codex: also echo the body to stdout, for telltale scans),
+# @@NOISE:<text> (codex: print <text> to stdout only, independent of @@STDOUT —
+# simulates transcript chatter that quotes reviewed source/spec text verbatim
+# while the real output-last-message file still gets the clean review body).
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/_next" <<'S'
 #!/usr/bin/env bash
@@ -44,6 +47,7 @@ rc=$(grep -m1 '^@@RC=' "$f" | cut -d= -f2); rc=${rc:-0}
 out=""; while [ "$#" -gt 0 ]; do [ "$1" = "--output-last-message" ] && { out="$2"; shift 2; continue; }; shift; done
 body=$(grep -v '^@@' "$f")
 echo "codex diagnostic noise"
+grep '^@@NOISE:' "$f" | sed 's/^@@NOISE://'
 grep -q '^@@STDOUT' "$f" && printf '%s\n' "$body"
 [ -n "$out" ] && ! grep -q '^@@STDOUT' "$f" && printf '%s\n' "$body" > "$out"
 exit "$rc"
@@ -166,6 +170,20 @@ assert_eq "TC-3.9 compat telltale → rc 3 immediately" "$rc/$(grep -c CALL=code
 
 new_case tc313; printf '@@STDOUT\n@@RC=1\nERROR: Your workspace is out of credits.\n' > "$STUB_DIR/codex.1"; rc=0; run_reviewer >/dev/null 2>&1 || rc=$?
 assert_eq "TC-3.13 credits telltale → rc 4 immediately" "$rc/$(grep -c CALL=codex "$RECORD")" "4/1"
+
+# Regression (#82, 2026-09-27): a clean, structurally valid review must win over an
+# incidental telltale match in transcript noise — e.g. reviewing a diff that quotes
+# compat_re/credits_re's own literal string values back verbatim. Before the fix,
+# these false-positived as rc 3 / rc 4 and halted the babysitter on real PRs.
+new_case tc_fp_compat
+{ printf '@@RC=0\n@@NOISE:transcript excerpt: local compat_re='"'"'requires a newer version of Codex'"'"'\n'; printf '%s\n' "$CLEAN"; } > "$STUB_DIR/codex.1"
+rc=0; run_reviewer >/dev/null 2>&1 || rc=$?
+assert_eq "regression: clean review beats incidental compat_re match in transcript noise → rc 0" "$rc/$(grep -c CALL=codex "$RECORD")" "0/1"
+
+new_case tc_fp_credits
+{ printf '@@RC=0\n@@NOISE:transcript excerpt: local credits_re='"'"'Your workspace is out of credits'"'"'\n'; printf '%s\n' "$CLEAN"; } > "$STUB_DIR/codex.1"
+rc=0; run_reviewer >/dev/null 2>&1 || rc=$?
+assert_eq "regression: clean review beats incidental credits_re match in transcript noise → rc 0" "$rc/$(grep -c CALL=codex "$RECORD")" "0/1"
 
 new_case tc311; stub codex.1 "$MISSING_REC"; rc=0; run_reviewer >/dev/null 2>&1 || rc=$?
 assert_eq "TC-3.11 missing RECOMMENDED → rc 1" "$rc" "1"
