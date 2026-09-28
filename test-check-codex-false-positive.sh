@@ -150,7 +150,7 @@ $HANDOFF
 $HALT
 EOF
 run_case "empty ADJUDICATION section reads as malformed" \
-  "ADJUDICATION section present but carries no bullets" "$TMP/case5.log"
+  "ADJUDICATION section violates the wrapper" "$TMP/case5.log"
 
 # ---------- Case 6: real BLOCKING finding is not a false positive ----------
 cat > "$TMP/case6.log" <<EOF
@@ -187,6 +187,48 @@ $HALT
 EOF
 run_case "indented ## ADJUDICATION header does not read as false positive" \
   "nonblank content before the first column-0 section header" "$TMP/case7.log"
+
+# ---------- Case 8: ADJUDICATION bullet-rule violation is malformed ----------
+# "- (none)" alongside a real bullet violates the wrapper's exclusivity rule
+# (valid_review_structure() current=4). A nonempty-but-invalid ADJUDICATION must
+# not read as a clean verdict. (PR #94 cycle-5 NEW finding.)
+cat > "$TMP/case8.log" <<EOF
+  [codex] starting review
+$HANDOFF
+## ADJUDICATION
+- (none)
+- BLOCKING earlier finding: ACCEPTED — fix is sound
+## BLOCKING
+- (none)
+## RECOMMENDED
+- (none)
+## INFORMATION
+- (none)
+$HALT
+EOF
+run_case "ADJUDICATION with '- (none)' plus a real bullet is malformed" \
+  "ADJUDICATION section violates the wrapper" "$TMP/case8.log"
+
+# ---------- Case 9: valid ADJUDICATION bullet + continuation still clean ----------
+# A real bullet followed by an indented continuation line is valid to the wrapper,
+# so a clean cycle-5 verdict must still read as a false positive — the bullet-rule
+# check must not over-reject.
+cat > "$TMP/case9.log" <<EOF
+  [codex] starting review
+$HANDOFF
+## ADJUDICATION
+- BLOCKING earlier finding: ACCEPTED — fix is sound
+  and the anchor now scopes to the final rendering
+## BLOCKING
+- (none)
+## RECOMMENDED
+- (none)
+## INFORMATION
+- (none)
+$HALT
+EOF
+run_case "valid ADJUDICATION bullet with continuation reads as false positive" \
+  "LIKELY FALSE POSITIVE" "$TMP/case9.log"
 
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"

@@ -275,6 +275,39 @@ REQUIRED_SECTIONS = ('BLOCKING', 'RECOMMENDED', 'INFORMATION')
 # but only as the first section (cycles 5-6) and only with at least one bullet.
 ADJUDICATION = 'ADJUDICATION'
 KNOWN_SECTIONS = (ADJUDICATION,) + REQUIRED_SECTIONS
+
+
+def adjudication_content_malformed(content):
+    """Return True if the ADJUDICATION section body violates the wrapper's
+    current=4 bullet rules (babysit-with-review.sh valid_review_structure(),
+    lines 1094-1114). `content` is the section's lines, trailing-newline-stripped
+    only (leading whitespace preserved, blank lines already dropped). Rules:
+      - >=1 bullet is required (the END check adjudication_headings==1 && bullets<1);
+      - a "- (none)" bullet is exclusive: no other bullet may share the section,
+        in either order (none[current] and is_none&&bullets>0 guards);
+      - an indented continuation line is valid only after a real, non-"(none)"
+        bullet;
+      - any other line (prose, a "-x" pseudo-bullet, etc.) is invalid.
+    Mirrors the awk exactly so we never call a wrapper-rejected ADJUDICATION a
+    clean cycle-5/6 verdict."""
+    bullet_seen = False
+    none_seen = False
+    for line in content:
+        if line.startswith('- '):
+            is_none = line == '- (none)'
+            if none_seen or (is_none and bullet_seen):
+                return True
+            bullet_seen = True
+            if is_none:
+                none_seen = True
+        elif line[:1].isspace():
+            if not bullet_seen or none_seen:
+                return True
+        else:
+            return True
+    return not bullet_seen
+
+
 sections = {}
 header_counts = {}
 unexpected_headers = []
@@ -323,11 +356,16 @@ missing_headers = [name for name in REQUIRED_SECTIONS if name not in sections]
 # against the expected sequence (ADJUDICATION first when present) so a
 # same-length reordering (e.g. RECOMMENDED, BLOCKING, INFORMATION) is caught.
 out_of_order = headers_in_order != expected_order
-# When ADJUDICATION is present the wrapper requires it to carry >=1 bullet
-# (valid_review_structure() END check: adjudication_headings == 1 && bullets < 1).
-adjudication_empty = has_adjudication and not sections.get(ADJUDICATION)
+# When ADJUDICATION is present the wrapper requires its body to satisfy the
+# same current=4 bullet rules as the other sections (valid_review_structure()
+# lines 1094-1114): >=1 bullet, a "- (none)" bullet is exclusive, and indented
+# continuation lines are valid only after a real (non-"(none)") bullet. A
+# nonempty section carrying only wrapper-rejected text (e.g. prose, or "- (none)"
+# alongside another bullet) must therefore still read as malformed here.
+adjudication_bad = has_adjudication and adjudication_content_malformed(
+    sections.get(ADJUDICATION, []))
 malformed = (leading_content or bool(duplicate_headers) or bool(unexpected_headers)
-             or bool(missing_headers) or out_of_order or adjudication_empty)
+             or bool(missing_headers) or out_of_order or adjudication_bad)
 
 clean = (not malformed) and all(sections.get(name) == ['- (none)'] for name in REQUIRED_SECTIONS)
 
@@ -348,8 +386,10 @@ if malformed:
         reasons.append(f'unexpected section header(s): {", ".join(sorted(set(unexpected_headers)))}')
     if missing_headers:
         reasons.append(f'missing section header(s): {", ".join(missing_headers)}')
-    if adjudication_empty:
-        reasons.append('ADJUDICATION section present but carries no bullets')
+    if adjudication_bad:
+        reasons.append('ADJUDICATION section violates the wrapper\'s bullet rules '
+                       '(needs >=1 bullet; "- (none)" is exclusive; indented '
+                       'continuations only after a real bullet)')
     if out_of_order and not duplicate_headers and not missing_headers and not unexpected_headers:
         reasons.append(f'section headers out of order: found {", ".join(headers_in_order)} '
                         f'(expected {", ".join(expected_order)})')
