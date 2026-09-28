@@ -1364,20 +1364,32 @@ reviewer_binary_available() {
 # reset the local worktree to the default branch. Extracted from
 # run_review_cycle so BABYSIT_TEST_MODE=review-merge can drive it
 # deterministically.
-# Args: <pr_num> <cycle>
+# Args: <pr_num> <cycle> <expected_head>
 merge_reviewed_pr() {
   local pr_num="$1"
   local cycle="$2"
-  # expected_head, when passed, is the SHA the caller knows was actually
-  # reviewed: the fresh-review call site (run_review_cycle) passes the local
-  # HEAD captured right after the review pass succeeded, and the
-  # review-merge-failed retry sweep passes the current head only after
-  # confirming it matches its recorded reviewed head. Using it directly
-  # instead of re-fetching headRefOid here closes the TOCTOU window where a
-  # commit pushed after the review verdict (but before this function runs)
-  # would otherwise get a green status posted against it — and merged —
-  # despite never having been reviewed (see PR #107 review, BLOCKING).
+  # expected_head is the SHA the caller knows was actually reviewed: the
+  # fresh-review call site (run_review_cycle) passes the local HEAD captured
+  # right after the review pass succeeded, and the review-merge-failed retry
+  # sweep passes the current head only after confirming it matches its
+  # recorded reviewed head. Using it directly instead of re-fetching
+  # headRefOid here closes the TOCTOU window where a commit pushed after the
+  # review verdict (but before this function runs) would otherwise get a
+  # green status posted against it — and merged — despite never having been
+  # reviewed (see PR #107 review, BLOCKING).
+  #
+  # A missing/empty value means the caller couldn't determine what was
+  # actually reviewed (e.g. `git rev-parse HEAD` failed) — fail closed rather
+  # than falling back to the PR's current remote head, which could be a
+  # commit pushed after the review verdict and never examined (see PR #107
+  # review, BLOCKING).
   local expected_head="${3:-}"
+
+  if [ -z "$expected_head" ]; then
+    echo "  [review] FATAL: no reviewed head SHA available for PR #$pr_num; refusing to post codex-review status or merge against an unverified head" | tee -a "$LOG" >&2
+    fail_review_cycle "$pr_num" "reviewed head SHA unavailable before merge (cycle $cycle)"
+    return 0
+  fi
 
   echo "  [review] zero blocking findings; PR #$pr_num cleared after $cycle cycle(s)" | tee -a "$LOG" >&2
 
@@ -1385,11 +1397,7 @@ merge_reviewed_pr() {
   # This is the ONLY place this status is set green — the implementation agent never sets it.
   local _owner_repo _head_sha
   _owner_repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
-  if [ -n "$expected_head" ]; then
-    _head_sha="$expected_head"
-  else
-    _head_sha=$(gh pr view "$pr_num" --json headRefOid -q .headRefOid 2>/dev/null || echo "")
-  fi
+  _head_sha="$expected_head"
   if [ -n "$_owner_repo" ] && [ -n "$_head_sha" ]; then
     if gh api -X POST "repos/${_owner_repo}/statuses/${_head_sha}" \
         -f state=success \
@@ -1912,8 +1920,11 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight
       # Covers the case where a fully-reviewed PR (zero blocking findings) is
       # still marked draft when the merge is attempted — `gh pr ready` must
       # be called before `gh pr merge`, and a `gh pr ready` failure must not
-      # prevent the merge attempt.
-      merge_reviewed_pr "${TEST_PR_NUM:-7}" "${TEST_CYCLE:-1}"
+      # prevent the merge attempt. TEST_HEAD_SHA stands in for the caller's
+      # verified reviewed head (merge_reviewed_pr now requires one — see PR
+      # #107 review, BLOCKING); defaults to the gh stub's own default head so
+      # existing fixtures need no change.
+      merge_reviewed_pr "${TEST_PR_NUM:-7}" "${TEST_CYCLE:-1}" "${TEST_HEAD_SHA:-deadbeef}"
       ;;
     review-head-unchanged)
       # Each stdin line is "pre_sha post_sha". Prints "pre=<p> post=<q>
