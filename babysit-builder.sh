@@ -1695,6 +1695,8 @@ RESUMABLE_BUILD_STALL_LABELS=(build-mcp-outage build-codex-outdated build-codex-
 # the in-loop check below. Env-overridable for test coverage of the truncation
 # path without needing 200 fixture PRs.
 BUILD_STALL_SWEEP_LIMIT="${BUILD_STALL_SWEEP_LIMIT:-200}"
+case "$BUILD_STALL_SWEEP_LIMIT" in ''|*[!0-9]*) echo "ERROR: BUILD_STALL_SWEEP_LIMIT must be a positive integer" >&2; exit 1 ;; esac
+[ "$BUILD_STALL_SWEEP_LIMIT" -ge 1 ] || { echo "ERROR: BUILD_STALL_SWEEP_LIMIT must be a positive integer" >&2; exit 1; }
 
 # Re-run the build cycle for PRs a previous run quarantined behind any label in
 # RESUMABLE_BUILD_STALL_LABELS. Runs BEFORE the queue is read: those tickets are
