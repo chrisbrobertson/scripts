@@ -1,11 +1,11 @@
 #!/bin/bash
 # test-babysit-review-cycle-mcp-outage.sh — recording-stub coverage for
 # run_review_cycle()'s MCP-outage terminal path in babysit-with-review.sh
-# (QA-TEST-PLAN.md TC-2.8). test-babysit-mcp-resilience.sh already covers
-# codex_review_with_retry() returning 2 after 3 transport failures; this file
-# covers the layer above it — that run_review_cycle() turns that rc=2 into
-# fail_review_cycle_mcp() (label review-mcp-outage, draft, comment, return 2)
-# rather than falling through to the generic fail_review_cycle()
+# (QA-TEST-PLAN.md TC-2.8). TC-3.4 (codex_review_with_retry() returning 2
+# after 3 transport failures) remains a manual test — see QA-TEST-PLAN.md;
+# this file covers the layer above it — that run_review_cycle() turns that
+# rc=2 into fail_review_cycle_mcp() (label review-mcp-outage, draft, comment,
+# return 2) rather than falling through to the generic fail_review_cycle()
 # (review-incomplete) path used for every other non-zero reviewer_rc. No
 # network: codex, sleep, and gh are stubs on PATH.
 set -uo pipefail
@@ -22,9 +22,9 @@ assert_grep() { if grep -qF -- "$2" "$3" 2>/dev/null; then pass "$1"; else echo 
 assert_not_grep() { if grep -qF -- "$2" "$3" 2>/dev/null; then echo "  unexpected '$2' in $3" >&2; fail "$1"; else pass "$1"; fi; }
 
 # ---------- stubs ----------
-# codex/sleep follow the same numbered-response-file protocol as
-# test-babysit-mcp-resilience.sh: each call consumes $STUB_DIR/codex.<n> in
-# call order (a response file may carry @@RC=<n> and @@STDOUT directives).
+# codex/sleep use a numbered-response-file protocol: each call consumes
+# $STUB_DIR/codex.<n> in call order (a response file may carry @@RC=<n>
+# and @@STDOUT directives).
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/_next" <<'S'
 #!/bin/bash
