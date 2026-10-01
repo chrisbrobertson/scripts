@@ -140,9 +140,9 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
   `codex-review=success`, so the status can never go green against a SHA the PR does
   not carry. Confirmed against
   the shipped implementation: `babysit-with-review.sh` uses `wip/<project>/iter-<N>`
-  off `HEAD` (`git worktree add -b "$_wt_branch" "$_wt_dir" HEAD`, line ~1991);
+  off `HEAD` (`git worktree add -b "$_wt_branch" "$_wt_dir" HEAD`, line ~2530);
   `babysit-work-prep.sh` uses `work-prep/<slug>-<pid>` off the default branch's SHA
-  (`git worktree add -b "$branch" "$worktree" "$base_sha"`, line ~1243). Neither ever
+  (`git worktree add -b "$branch" "$worktree" "$base_sha"`, line ~1258). Neither ever
   reuses a branch across attempts, so a rebuilt ticket starts from a genuinely clean
   base every time — no state from a prior crashed or abandoned attempt can leak in.
   Builder follows the same pattern (e.g., `build/<slug>-<pid>`).
@@ -183,7 +183,7 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
     compatibility/credits probe runs once at startup and exits 1 on failure, before any
     implementer time is spent. `babysit-with-review.sh` probes per review cycle because
     it interleaves with implementation; builder knows its whole queue up front.
-    `reviewer_preflight` (`babysit-builder.sh:885`) only special-cases `compat_re`
+    `reviewer_preflight` (`babysit-builder.sh:890`) only special-cases `compat_re`
     (return 3) and `credits_re` (return 4); it does not retry on `mcp_re` the way
     `codex_review_with_retry` does mid-cycle. A transient MCP transport blip at
     startup is therefore indistinguishable from any other probe failure — it falls
@@ -259,7 +259,7 @@ sign-off before `babysit-builder.sh` is built against this spec:
   (`build-ready-for-merge` convergence, `build-max-cycles`, and an ordinary `build-incomplete`
   bail) pass the same generic "PR halted for human merge" string — it does not carry the
   bail's real semantics there, so a human must read the PR's own label to tell those three
-  apart. The fourth path, a PR-branch/worktree-branch mismatch (`babysit-builder.sh:1626`,
+  apart. The fourth path, a PR-branch/worktree-branch mismatch (`babysit-builder.sh:1633`,
   also `build-incomplete`-labelled), passes a distinct "PR quarantined — branch mismatch"
   heading instead, so that one case is self-describing in the ticket comment.
   The three resumable quarantine labels (`build-mcp-outage`, `build-codex-outdated`,
@@ -275,11 +275,11 @@ sign-off before `babysit-builder.sh` is built against this spec:
   `babysit-with-review.sh`'s outer loop, `ASF-FEAT-OUTER-LOOP`, see #104).
   Owner should confirm the `build-incomplete` → `build-done` swap reads correctly, or
   whether a distinct ticket-side label is preferred. The queue query itself
-  (`gh issue list --label build-ready`, `babysit-builder.sh:1328`; the JQL
-  `labels=build-ready` clause, `babysit-builder.sh:1354`) does filter on
+  (`gh issue list --label build-ready`, `babysit-builder.sh:1333`; the JQL
+  `labels=build-ready` clause, `babysit-builder.sh:1359`) does filter on
   `build-ready` presence alone — but `fetch_github_queue` and `fetch_jira_queue`
   additionally post-filter out any ticket that also carries `build-done` or
-  `build-needs-clarification` (`babysit-builder.sh:1341`, `:1379`), as a safety net
+  `build-needs-clarification` (`babysit-builder.sh:1346`, `:1384`), as a safety net
   for a half-failed swap that added the terminal label without removing
   `build-ready`. The intended path is still the atomic swap (remove `build-ready`,
   add the terminal label in the same operation) once the PR reaches either
@@ -380,7 +380,7 @@ babysit-builder.sh [--repo OWNER/REPO] [--source github|jira|both]
 7. **A terminal ticket is never re-selected.** Every terminal transition (kickback to
    `build-needs-clarification`, or merge-track to `build-done`) removes `build-ready`
    in the same operation that adds the terminal label. `fetch_github_queue` and
-   `fetch_jira_queue` (`babysit-builder.sh:1341`, `:1379`) additionally post-filter
+   `fetch_jira_queue` (`babysit-builder.sh:1346`, `:1384`) additionally post-filter
    out any ticket carrying a terminal label alongside `build-ready`, so even a
    half-failed swap (terminal label added, `build-ready` not removed) does not cause
    re-selection. A ticket only re-enters the queue when a human (or work-prep)
@@ -395,7 +395,7 @@ ticket carries no in-progress marker. This is deliberate, not a defect to fix.
 
 ### Versioning policy
 Companion script to `babysit-with-review.sh`, versioned independently via semver
-(`--version`; current: 0.2.0). Breaking changes to the `build-*` label schema or the
+(`--version`; current: 0.2.1). Breaking changes to the `build-*` label schema or the
 spec-resolution contract require manual migration of any open build PRs.
 
 ## Performance budget
