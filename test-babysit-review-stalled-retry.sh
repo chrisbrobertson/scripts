@@ -120,6 +120,7 @@ case "\$*" in
   "pr list --state open --label review-codex-outdated"*) printf '%s' "\${STUB_PR_OUTDATED:-}"; exit 0 ;;
   "pr list --state open --label review-mcp-outage"*) printf '%s' "\${STUB_PR_MCP:-}"; exit 0 ;;
   "pr list --state open --label review-codex-no-credits"*) printf '%s' "\${STUB_PR_CREDITS:-}"; exit 0 ;;
+  "pr list --state open --label review-codex-auth-expired"*) printf '%s' "\${STUB_PR_AUTH_EXPIRED:-}"; exit 0 ;;
   "pr list --state open --label review-merge-failed"*) printf '%s' "\${STUB_PR_MERGE_FAILED:-}"; exit 0 ;;
   "pr view "*"--json headRefOid"*) printf '%s' "\${STUB_CURRENT_HEAD:-}"; exit 0 ;;
   "pr merge "*) exit "\${STUB_MERGE_RC:-0}" ;;
@@ -237,7 +238,7 @@ if [ "$HAVE_JQ" -eq 1 ]; then
 
 # ---------- scenario 1c: a PR is stalled behind review-merge-failed (the #60
 # orphan class: review already passed, only the merge itself failed) — unlike
-# the other three labels, this must NOT go through a full review cycle: a
+# the other four labels, this must NOT go through a full review cycle: a
 # transient reviewer_preflight failure there would draft the PR and label it
 # review-incomplete, discarding the already-passed review (PR #107 review,
 # BLOCKING). It must retry the merge directly instead. The recorded reviewed

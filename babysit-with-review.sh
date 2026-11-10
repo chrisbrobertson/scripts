@@ -20,22 +20,24 @@
 #
 # MCP-outage resilience: when Codex is selected as reviewer and cannot reach
 # its backend, the wrapper retries up to 3 times (0 / 60s / 300s back-off),
-# labels the PR `review-mcp-outage`, and halts. `review-codex-outdated` and
-# `review-codex-no-credits` label and halt the same way for their own
-# failure classes. All three halt the wrapper — there is no in-process
-# retry once a label is applied. At the top of every outer iteration
-# (i.e. after the operator addresses the cause and restarts the wrapper),
-# the pre-iter scan retries whichever labelled PR it finds first (in that
-# priority order) automatically before running the implementer. The label
-# itself must NOT be removed by hand: the sweep finds the stalled PR by
-# that label and removes it itself; removing it manually leaves the PR
-# stuck in draft with nothing to find it.
+# labels the PR `review-mcp-outage`, and halts. `review-codex-outdated`,
+# `review-codex-no-credits`, and `review-codex-auth-expired` label and halt
+# the same way for their own failure classes. All four halt the wrapper —
+# there is no in-process retry once a label is applied. At the top of every
+# outer iteration (i.e. after the operator addresses the cause and restarts
+# the wrapper), the pre-iter scan retries whichever labelled PR it finds
+# first (in that priority order) automatically before running the
+# implementer. The label itself must NOT be removed by hand: the sweep finds
+# the stalled PR by that label and removes it itself; removing it manually
+# leaves the PR stuck in draft with nothing to find it.
 # `review-incomplete` = human action required, no auto-retry.
 # `review-mcp-outage` = transport failure, often transient; restart the wrapper to retry.
 # `review-codex-outdated` = Codex CLI too old for model; upgrade CLI then restart.
 # `review-codex-no-credits` = Codex workspace out of credits; add credits then restart.
+# `review-codex-auth-expired` = Codex CLI's OAuth refresh token is dead; run
+# `codex login` then restart.
 # `review-merge-failed` = review already passed (codex-review=success already set) but
-# `gh pr merge` itself failed; unlike the other three this does NOT halt the wrapper
+# `gh pr merge` itself failed; unlike the other four this does NOT halt the wrapper
 # on the merge failure itself (the reviewer backend is fine) — it's picked up by the
 # same pre-iter sweep, lowest priority, on the next outer iteration of the same run,
 # no restart needed. It DOES halt, fail-closed, if the label itself can't be applied,
@@ -46,14 +48,14 @@
 # permanent condition, not a transient CI/branch-protection race. Retrying the same
 # merge can never succeed on its own, so it needs a human to merge the base branch in
 # (or close the PR) — the wrapper never pushes a conflict-resolution commit itself.
-# Unlike the other four labels, it IS in RESUMABLE_STALL_LABELS but is gated: the
+# Unlike the other five labels, it IS in RESUMABLE_STALL_LABELS but is gated: the
 # pre-iter sweep checks `gh pr view --json mergeable` first and only acts once that
 # reports the conflict is gone, then runs a full fresh review cycle (not a merge-only
 # shortcut) against the merged-up diff. Does not halt the wrapper.
 
 set -uo pipefail
 
-VERSION="1.4.0"
+VERSION="1.5.0"
 
 usage() {
   cat <<'EOF'
@@ -106,6 +108,9 @@ PR labels used by the review cycle:
   review-codex-no-credits  Codex workspace has no credits; same as above —
                            the wrapper has already halted, so add credits
                            then restart. Do NOT remove the label yourself.
+  review-codex-auth-expired  Codex CLI's OAuth refresh token is dead; same as
+                           above — run \`codex login\` then restart. Do NOT
+                           remove the label yourself.
   review-merge-failed    Review already passed (codex-review=success already
                          set) but \`gh pr merge\` itself failed; does NOT
                          halt the wrapper, retried by the same sweep on the
@@ -1098,18 +1103,59 @@ The babysitter has halted — this is not recoverable while it's running. To res
     || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
 }
 
+# Mark a PR as stalled by a dead Codex CLI OAuth refresh token.
+# Operator must re-authenticate (`codex login`), remove the label, and restart.
+# Args: <pr_num> <reason_string>
+# Safety commands (ready --undo, edit --add-label) are fail-closed: gh failure → exit 1.
+# Notification commands (label create, pr comment) are best-effort.
+fail_review_cycle_codex_auth_expired() {
+  local pr_num="$1"
+  local reason="$2"
+
+  echo "  [review] Codex CLI authentication expired for PR #$pr_num: $reason" | tee -a "$LOG" >&2
+
+  gh label create review-codex-auth-expired \
+    --color d93f0b \
+    --description "Babysit codex review stalled: CLI OAuth token expired; run codex login then restart" \
+    --force >>"$LOG" 2>&1 || true
+
+  # Fail-closed: if we can't draft the PR, halt — it must not remain mergeable.
+  if ! gh pr ready "$pr_num" --undo >>"$LOG" 2>&1; then
+    echo "ERROR: gh pr ready --undo failed for PR #$pr_num — PR may still be mergeable; manually quarantine before restarting" | tee -a "$LOG" >&2
+    exit 1
+  fi
+
+  # Fail-closed: if we can't label the PR, halt — it must not remain unlabelled.
+  if ! gh pr edit "$pr_num" --add-label review-codex-auth-expired >>"$LOG" 2>&1; then
+    echo "ERROR: gh pr edit --add-label failed for PR #$pr_num — PR may be unlabelled; manually add 'review-codex-auth-expired' before restarting" | tee -a "$LOG" >&2
+    exit 1
+  fi
+
+  local body
+  body="**babysit-with-review: Codex CLI authentication expired — review blocked**
+
+Reason: ${reason}
+
+The Codex CLI's OAuth refresh token is dead (already used, or revoked), so every call fails identically. No code-quality review took place.
+
+The babysitter has halted — this is not recoverable while it's running. To resume: re-authenticate (\`codex login\`), then restart the babysitter. Do NOT remove the \`review-codex-auth-expired\` label yourself — the stalled-PR retry sweep finds this PR by that label, removes it, and re-runs the review automatically on the next start; removing it manually leaves the PR stuck in draft."
+  printf '%s\n' "$body" \
+    | gh pr comment "$pr_num" --body-file - >>"$LOG" 2>&1 \
+    || echo "  [review] WARNING: gh pr comment failed for PR #$pr_num" | tee -a "$LOG" >&2
+}
+
 # Mark a PR as stalled by a `gh pr merge` failure after an already-clean
 # review (see #82/#60: a PR reached this point with BLOCKING=0 and
 # codex-review=success already set, but nothing labelled it, so the stalled-PR
 # retry sweep — which only ever searches by label — could never find it again
 # and it sat open forever).
 #
-# Unlike fail_review_cycle_mcp/_codex_outdated/_codex_no_credits, this does not
-# re-draft the PR: the review already passed, the codex-review status is
-# already green, and the only thing that failed is the git-hosting-side merge
-# op (commonly a transient CI/branch-protection race), so leaving it
+# Unlike fail_review_cycle_mcp/_codex_outdated/_codex_no_credits/_codex_auth_expired,
+# this does not re-draft the PR: the review already passed, the codex-review
+# status is already green, and the only thing that failed is the git-hosting-side
+# merge op (commonly a transient CI/branch-protection race), so leaving it
 # ready-and-mergeable is correct, not a hole to close. The label itself is
-# still fail-closed, same as the other three: the stalled-PR retry sweep only
+# still fail-closed, same as the other four: the stalled-PR retry sweep only
 # ever searches by label, so a labelling failure here would leave the PR
 # undiscoverable while the outer loop moves on to new work (the exact #60
 # orphan class this function exists to close) — halt instead.
@@ -1348,12 +1394,17 @@ valid_review_structure() {
 #   2 — codex MCP transport failure; all retries exhausted.
 #   3 — backend compatibility failure; Codex CLI too old for configured model (no retry).
 #   4 — Codex workspace out of credits; no retry.
+#   5 — Codex CLI OAuth credentials expired; no retry.
 codex_review_with_retry() {
   local codex_prompt="$1"
   local attempt
   local delays=(0 60 300)
   local compat_re='requires a newer version of Codex'
   local credits_re='Your workspace is out of credits'
+  # OAuth refresh-token failure: the CLI's own token is dead (already used /
+  # revoked), so every call fails identically until an operator re-runs
+  # `codex login` — retrying without that is never going to help.
+  local auth_re='Failed to refresh token|workspace routing discovery unauthorized'
   # Telltale patterns for MCP transport failures. Update if Codex changes its error format.
   # Monitored via the MCP outage rate KPI (see L3-mcp-resilience.md kill criteria: >30% → find alternative reviewer).
   local mcp_re='Transport send error:|tool call error: tool call failed for `codex_apps/|error sending request for url \(https://chatgpt\.com/'
@@ -1397,6 +1448,12 @@ codex_review_with_retry() {
     if grep -qE "$credits_re" "$TMP_CODEX_FULL" 2>/dev/null; then
       echo "  [codex] FATAL: Codex workspace out of credits on attempt $attempt (rc=$rc); add credits and restart" | tee -a "$LOG" >&2
       return 4
+    fi
+
+    # Auth check: OAuth refresh token dead → return 5, no retry.
+    if grep -qE "$auth_re" "$TMP_CODEX_FULL" 2>/dev/null; then
+      echo "  [codex] FATAL: Codex CLI authentication expired on attempt $attempt (rc=$rc); run 'codex login' and restart" | tee -a "$LOG" >&2
+      return 5
     fi
 
     if grep -qE "$mcp_re" "$TMP_CODEX_FULL" 2>/dev/null; then
@@ -1462,6 +1519,7 @@ reviewer_preflight() {
   [ "$REVIEWER" = "codex" ] || return 0
   local compat_re='requires a newer version of Codex'
   local credits_re='Your workspace is out of credits'
+  local auth_re='Failed to refresh token|workspace routing discovery unauthorized'
   local probe_full
   probe_full=$(mktemp)
   local -a args=(exec -s read-only)
@@ -1474,6 +1532,7 @@ reviewer_preflight() {
   set -e
   if grep -qE "$compat_re" "$probe_full" 2>/dev/null; then rm -f "$probe_full"; return 3; fi
   if grep -qE "$credits_re" "$probe_full" 2>/dev/null; then rm -f "$probe_full"; return 4; fi
+  if grep -qE "$auth_re" "$probe_full" 2>/dev/null; then rm -f "$probe_full"; return 5; fi
   rm -f "$probe_full"
   [ "$rc" -eq 0 ] || return 1
 }
@@ -1630,6 +1689,10 @@ run_review_cycle() {
     echo "  [review] FATAL: Codex workspace out of credits (pre-flight probe for PR #$pr_num); add credits before restarting" | tee -a "$LOG" >&2
     fail_review_cycle_codex_no_credits "$pr_num" "Codex pre-flight probe: workspace out of credits"
     return 4
+  elif [ "$_probe_rc" -eq 5 ]; then
+    echo "  [review] FATAL: Codex CLI authentication expired (pre-flight probe for PR #$pr_num); run 'codex login' before restarting" | tee -a "$LOG" >&2
+    fail_review_cycle_codex_auth_expired "$pr_num" "Codex pre-flight probe: CLI OAuth token expired"
+    return 5
   elif [ "$_probe_rc" -ne 0 ]; then
     echo "  [review] FATAL: $REVIEWER pre-flight probe returned rc=$_probe_rc; bailing review cycle for PR #$pr_num" | tee -a "$LOG" >&2
     fail_review_cycle "$pr_num" "$REVIEWER pre-flight probe failed (rc=$_probe_rc) before checkout"
@@ -1720,6 +1783,9 @@ ${_hb}--- end prior review cycles ---
     elif [ "$REVIEWER" = "codex" ] && [ "$reviewer_rc" -eq 4 ]; then
       fail_review_cycle_codex_no_credits "$pr_num" "Codex workspace out of credits during review (cycle $cycle)"
       return 4
+    elif [ "$REVIEWER" = "codex" ] && [ "$reviewer_rc" -eq 5 ]; then
+      fail_review_cycle_codex_auth_expired "$pr_num" "Codex CLI authentication expired during review (cycle $cycle)"
+      return 5
     elif [ "$REVIEWER" = "codex" ] && [ "$reviewer_rc" -eq 2 ]; then
       fail_review_cycle_mcp "$pr_num" "codex MCP transport failure after 3 retries (cycle $cycle)"
       return 2
@@ -1948,12 +2014,17 @@ review_head_unchanged() {
 # Priority-ordered labels that mark a review cycle stalled in a way an
 # operator can resolve without abandoning the PR (as opposed to
 # review-incomplete, which always requires a human to pick the work back up).
-# review-merge-conflict is last: unlike the other four, finding it here is
+# review-codex-auth-expired sits with the other two Codex-backend labels
+# (outdated/no-credits): same shape as those two (fails preflight and the
+# in-cycle review identically until the operator takes a one-time action —
+# `codex login` — then any retry just works), so it gets the same plain
+# remove-label-and-retry treatment, no extra gating.
+# review-merge-conflict is last: unlike the other five, finding it here is
 # not enough to act — the sweep must also confirm via `gh pr view --json
 # mergeable` that the conflict is actually gone before doing anything,
 # since blindly retrying an unresolved conflict can never succeed (see the
 # review-merge-conflict handling in the outer sweep below).
-RESUMABLE_STALL_LABELS=(review-mcp-outage review-codex-outdated review-codex-no-credits review-merge-failed review-merge-conflict)
+RESUMABLE_STALL_LABELS=(review-mcp-outage review-codex-outdated review-codex-no-credits review-codex-auth-expired review-merge-failed review-merge-conflict)
 
 # Given one "<label> <pr_num_or_empty>" pair per entry in
 # RESUMABLE_STALL_LABELS (in the same order, as gh would return them), pick
@@ -2092,22 +2163,24 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight
       done
       ;;
     outer-retry-sweep)
-      # Each stdin line is five space-separated PR numbers (or empty fields,
+      # Each stdin line is six space-separated PR numbers (or empty fields,
       # written as "-"), one per label in RESUMABLE_STALL_LABELS order,
-      # standing in for what five `gh pr list --label ... -q .[0].number`
+      # standing in for what six `gh pr list --label ... -q .[0].number`
       # calls would return. Prints "label=<l> pr=<n>" for the first stalled
       # label found, or "none" — using the real pick_stalled_retry(). No
       # Claude/Codex/gh involved.
-      while IFS=' ' read -r _mcp _outdated _credits _merge_failed _merge_conflict; do
+      while IFS=' ' read -r _mcp _outdated _credits _auth_expired _merge_failed _merge_conflict; do
         [ "$_mcp" = "-" ] && _mcp=""
         [ "$_outdated" = "-" ] && _outdated=""
         [ "$_credits" = "-" ] && _credits=""
+        [ "$_auth_expired" = "-" ] && _auth_expired=""
         [ "$_merge_failed" = "-" ] && _merge_failed=""
         [ "$_merge_conflict" = "-" ] && _merge_conflict=""
         if _pick=$(pick_stalled_retry \
             "review-mcp-outage $_mcp" \
             "review-codex-outdated $_outdated" \
             "review-codex-no-credits $_credits" \
+            "review-codex-auth-expired $_auth_expired" \
             "review-merge-failed $_merge_failed" \
             "review-merge-conflict $_merge_conflict"); then
           echo "label=${_pick%% *} pr=${_pick#* }"
@@ -2292,14 +2365,14 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
   fi
 
   # Retry any PR stalled behind a resumable label (review-mcp-outage,
-  # review-codex-outdated, review-codex-no-credits, review-merge-failed,
-  # review-merge-conflict) from a previous run.
+  # review-codex-outdated, review-codex-no-credits, review-codex-auth-expired,
+  # review-merge-failed, review-merge-conflict) from a previous run.
   # The label search here is the ONLY way a stalled PR is found again, so
   # the label must still be on the PR when this runs — operators must NOT
   # remove it manually; the documented recovery is "fix the underlying
-  # cause, then restart" for the first three labels (the wrapper halts on
-  # all of them — see rc=2/3/4 handling below and at the HANDOFF_REVIEW call
-  # site — so none of them resolve on their own without a restart).
+  # cause, then restart" for the first four labels (the wrapper halts on
+  # all of them — see rc=2/3/4/5 handling below and at the HANDOFF_REVIEW
+  # call site — so none of them resolve on their own without a restart).
   # review-merge-failed and review-merge-conflict don't halt the wrapper —
   # they're picked up automatically within the same run once the underlying
   # condition (a transient merge failure, or a real conflict) clears.
@@ -2311,7 +2384,7 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
   _retry_lookup_failed=0
   for _label in "${RESUMABLE_STALL_LABELS[@]}"; do
     if [ "$_label" = "review-merge-conflict" ]; then
-      # Unlike the other four labels, more than one open PR can legitimately
+      # Unlike the other five labels, more than one open PR can legitimately
       # carry this one at once (each conflicts independently against the base
       # branch), and `--limit 1` always returns the same PR from GitHub's
       # default ordering — so a second, since-resolved conflict PR could sit
@@ -2384,7 +2457,7 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
     if [ "$_retry_label" = "review-merge-failed" ]; then
       # The review already passed (codex-review=success is already set on the
       # head SHA) — only `gh pr merge` itself failed. Routing this through
-      # run_review_cycle like the other three labels would re-run
+      # run_review_cycle like the other four labels would re-run
       # reviewer_preflight; a transient preflight failure there calls
       # fail_review_cycle, which drafts the PR and labels it
       # review-incomplete, discarding the already-passed review instead of
@@ -2447,7 +2520,7 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
       fi
       unset _recorded_head _current_head
     elif [ "$_retry_label" = "review-merge-conflict" ]; then
-      # Unlike the other four resumable labels, finding this one is not
+      # Unlike the other five resumable labels, finding this one is not
       # enough to act on: the whole reason it exists (see
       # flag_review_cycle_merge_conflict) is that retrying an unresolved
       # conflict can never succeed. Only proceed once GitHub's own mergeable
@@ -2503,6 +2576,7 @@ while [ "$iter" -lt "$MAX_ITER" ]; do
           2) echo "Halting: codex MCP outage persists for PR #$_retry_pr; retries exhausted. See $LOG" | tee -a "$LOG" >&2 ;;
           3) echo "Halting: Codex version incompatibility for PR #$_retry_pr; upgrade CLI before restarting. See $LOG" | tee -a "$LOG" >&2 ;;
           4) echo "Halting: Codex workspace out of credits for PR #$_retry_pr; add credits then restart. See $LOG" | tee -a "$LOG" >&2 ;;
+          5) echo "Halting: Codex CLI authentication expired for PR #$_retry_pr; run 'codex login' then restart. See $LOG" | tee -a "$LOG" >&2 ;;
           *) echo "Halting: review cycle returned unexpected rc=$_rc for PR #$_retry_pr. See $LOG" | tee -a "$LOG" >&2 ;;
         esac
         break
@@ -2613,6 +2687,7 @@ ${BASE_PROMPT}"
           2) echo "Halting: codex MCP transport outage on PR #$pr_num; retries exhausted. See $LOG" | tee -a "$LOG" >&2 ;;
           3) echo "Halting: Codex version incompatibility on PR #$pr_num; upgrade CLI before restarting. See $LOG" | tee -a "$LOG" >&2 ;;
           4) echo "Halting: Codex workspace out of credits on PR #$pr_num; add credits then restart. See $LOG" | tee -a "$LOG" >&2 ;;
+          5) echo "Halting: Codex CLI authentication expired on PR #$pr_num; run 'codex login' then restart. See $LOG" | tee -a "$LOG" >&2 ;;
           *) echo "Halting: review cycle returned unexpected rc=$_rc for PR #$pr_num. See $LOG" | tee -a "$LOG" >&2 ;;
         esac
         break

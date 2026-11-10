@@ -1,20 +1,23 @@
 # QA Test Plan — babysit-with-review.sh
 
 **Owner:** qa-lead  
-**Status:** Test Suite 4 automated and passing (178/178, last run 2026-09-28), now
+**Status:** Test Suite 4 automated and passing (180/180, last run 2026-11-10), now
 including automated pre-flight coverage for TC-1.2, lock-file-collision coverage
 for TC-1.3/TC-1.3b, lock-file-removal coverage for TC-1.4, sentinel-detection
 coverage for TC-1.5/TC-1.6, single-iteration outer-loop coverage for TC-1.1, and
 MAX_ITER-exhaustion coverage for TC-1.8 (see
 Suite 1), plus blocking-count coverage for TC-2.1/TC-2.2, merge-mechanics and
 merge-failed-label coverage for TC-2.2 via `test-babysit-review-merge-draft.sh`
-(31/31), stalled-PR retry-sweep coverage for TC-1.9 via
-`test-babysit-review-stalled-retry.sh` (50/50), sentinel/HEAD-unchanged coverage
+(31/31), stalled-PR retry-sweep *priority-ordering* coverage for TC-1.9 across
+all six resumable labels (including `review-codex-auth-expired`, added
+2026-11-10 — see TC-3.15), sentinel/HEAD-unchanged coverage
 for TC-2.4/TC-2.5, missing-reviewer graceful-degradation coverage for TC-2.9, and
 a separate `test-babysit-review-feedback.sh` harness covering the
-`collect_pr_feedback()` filter (TC-2.10/TC-2.11, see Suite 2; 16/16); Test Suites
-1-3 otherwise remain manual smoke tests against live Claude/Codex/gh, not yet
-executed  
+`collect_pr_feedback()` filter (TC-2.10/TC-2.11, see Suite 2; 16/16); a separate
+`test-babysit-review-stalled-retry.sh` harness drives the real sweep end to end
+against stubbed `gh`/`codex` (50/50, representative label only — see its own
+header); Test Suites 1-3 otherwise remain manual smoke tests against live
+Claude/Codex/gh, not yet executed  
 **Priority:** Medium (internal tool, existing implementation to verify)
 
 ## Test Strategy
@@ -242,19 +245,25 @@ actually run before every commit.
 
 ---
 
-### TC-1.9: Stalled-PR Retry Sweep (Five Resumable Labels)
+### TC-1.9: Stalled-PR Retry Sweep (Six Resumable Labels)
 **Status: automated, not manual (added 2026-09-28, extended same day for
-`review-merge-conflict`).** `test-babysit-review-stalled-retry.sh`
-(50 assertions) drives the outer loop's pre-iteration sweep over
-`RESUMABLE_STALL_LABELS` (`review-mcp-outage`, `review-codex-outdated`,
-`review-codex-no-credits`, `review-merge-failed`, `review-merge-conflict`,
-checked in that priority order — see L3-autonomous-outer-loop.md's
-"Stalled-PR pre-iteration retry" acceptance criterion) against stubbed
-`claude`/`codex`/`gh` on PATH, with no live network calls. This is the
-regression coverage for #82/#104/#107/#111.
+`review-merge-conflict`; extended 2026-11-10 for `review-codex-auth-expired`).**
+`test-babysit-review-stalled-retry.sh` (50 assertions) drives the outer loop's
+pre-iteration sweep over `RESUMABLE_STALL_LABELS` (`review-mcp-outage`,
+`review-codex-outdated`, `review-codex-no-credits`, `review-codex-auth-expired`,
+`review-merge-failed`, `review-merge-conflict`, checked in that priority
+order — see L3-autonomous-outer-loop.md's "Stalled-PR pre-iteration retry"
+acceptance criterion) against stubbed `claude`/`codex`/`gh` on PATH, with no
+live network calls. `review-codex-auth-expired` shares the same generic
+"remove label, re-run `run_review_cycle`" handling as the other two
+Codex-backend labels, proven representatively via `review-codex-outdated`
+(scenario 1, below) — its own priority-ordering coverage lives in
+`test-babysit-with-review-cli.sh`'s `outer-retry-sweep` assertions
+(TC-1.9's pure `pick_stalled_retry()` logic), not a dedicated end-to-end
+scenario here. This is the regression coverage for #82/#104/#107/#111.
 
 Covered scenarios:
-- **Reviewer available, one of the first three labels:** the sweep removes the
+- **Reviewer available, one of the first four labels:** the sweep removes the
   label itself before calling `run_review_cycle` (so a review that then bails
   to `review-incomplete` — a label the sweep must not retry — doesn't leave a
   stale resumable label behind for the next sweep to pick up), never merges an
@@ -278,7 +287,7 @@ Covered scenarios:
   the doomed merge, and logs the re-route (#111 review cycle 2).
 - **`review-merge-conflict`, still conflicting:** the label is left in place,
   `run_review_cycle` is never invoked, the sweep logs that it's deferring, and
-  — unlike the other four labels — it falls through to starting new
+  — unlike the other five labels — it falls through to starting new
   implementer work in the same iteration rather than looping back onto the
   same PR (#111 review cycle 2, BLOCKING: an earlier `continue`-based defer
   burned the entire `MAX_ITER` budget re-selecting an unresolved conflict).
@@ -298,20 +307,20 @@ Covered scenarios:
 - **No stalled PR:** the sweep is a no-op — never removes a label, never calls
   `gh pr ready`.
 
-**Given:** An open PR carries one of the five resumable labels  
+**Given:** An open PR carries one of the six resumable labels  
 **When:** The outer loop starts its next iteration  
 **Then:** The sweep resumes, merge-retries, or (for `review-merge-conflict`
 while still unresolved) defers-and-falls-through for that PR before reading
 the ticket queue for new work, per the scenario table above
 
 **Test steps (manual acceptance reference):**
-1. Label an open PR `review-codex-outdated` (or any of the other four)
+1. Label an open PR `review-codex-outdated` (or any of the other five)
 2. Run: `MAX_ITER=1 ~/repo/scripts/babysit-with-review.sh`
 3. Verify: Log shows the sweep found and retried/merge-retried/deferred the
    labelled PR before (or, for an unresolved `review-merge-conflict`, in the
    same iteration as) considering any new ticket
 4. Verify: the label removal timing matches the scenario table above (removed
-   before `run_review_cycle` for the first three labels; removed only after
+   before `run_review_cycle` for the first four labels; removed only after
    the merge is confirmed for `review-merge-failed`; removed only once
    `gh pr view --json mergeable` shows the conflict is gone for
    `review-merge-conflict`)
@@ -606,7 +615,7 @@ for the live-PR path.
 
 ## Test Suite 3: L3-mcp-resilience
 
-**Reference:** L3-mcp-resilience.md Acceptance Tests (lines 174-182)
+**Reference:** L3-mcp-resilience.md Acceptance Tests (lines 217-234)
 
 ### TC-3.1: Codex Success on Attempt 1
 **Given:** Codex succeeds on attempt 1  
@@ -719,6 +728,24 @@ for the live-PR path.
 **Test steps:**
 1. Trigger 3-attempt failure scenario (TC-3.4)
 2. Verify: `grep "MCP transport failure on attempt 3 of 3" ~/sisyphus-logs/*.log`
+
+---
+
+### TC-3.15: Codex CLI Authentication Expired (OAuth Token Dead)
+**Given:** Codex CLI's OAuth refresh token is dead (already used, or revoked)  
+**When:** `reviewer_preflight()` or `codex_review_with_retry()` is called  
+**Then:** Return 5 immediately (no retry); PR labeled `review-codex-auth-expired`
+
+**Test steps:**
+1. Simulate a dead refresh token (e.g. `codex logout` then attempt a review, or revoke the stored credential)
+2. Run the review cycle
+3. Verify: `codex exec` output contains `Failed to refresh token` and/or `workspace routing discovery unauthorized`
+4. Verify: `reviewer_preflight()` returns 5 before `gh pr checkout` runs (no checkout attempted)
+5. Verify: PR labeled `review-codex-auth-expired`, left in draft
+6. Verify: wrapper halts (same as `review-codex-outdated`/`review-codex-no-credits`)
+7. Run `codex login` and restart the wrapper; verify the stalled-PR retry sweep finds the PR by this label, removes it, and re-runs the review automatically
+
+**Note:** Numbered 3.15 (not 3.9) to avoid colliding with the TC-3.9–3.14 numbering already claimed by an open PR (#45) at the time this was added — see QA-TEST-PLAN.md top summary. Realized in practice 2026-11-10: this exact failure (`Failed to refresh token` + `unauthorized (401)`) was observed directly in a babysitter sandbox session, immediately bailing a brand-new PR's review cycle to `review-incomplete` with no actionable signal — the gap this TC and the `auth_re` telltale close.
 
 ---
 
