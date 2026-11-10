@@ -64,9 +64,9 @@ Labels (the whole set):
   bzr-ready     bzr-building    bzr-pr-ready        # build side
   bzr-blocked                                       # human escalation, either side
 Marker comments (agent-authored, first line):
-  <!-- bzr-claim role=issue|build host=H pid=P start="S" ts=T -->
-  <!-- bzr-attempt role=issue|build n=K reason="..." ts=T -->
-  <!-- bzr-escalated role=issue|build attempts=K ts=T -->
+  <!-- bzr-claim role=issues|build host=H pid=P start="S" ts=T -->
+  <!-- bzr-attempt role=issues|build n=K reason="..." ts=T -->
+  <!-- bzr-escalated role=issues|build attempts=K ts=T -->
 ```
 
 ### Implementation notes (2026-09-19)
