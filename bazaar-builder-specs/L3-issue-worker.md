@@ -61,7 +61,7 @@ STUCK <reason>                    # environmental, including reviewer unavailabl
 
 ## What we know
 - Owner decisions (2026-09-19): human approval is the only gate to ready (4); the agent may edit the issue body (5); bug vs feature is label-first, judgement fallback, and the plan ships a template (10); sub-issues are native and the issue loop may create them (7).
-- Spec drafting and the adversarial spec review already exist in `babysit-work-prep.sh` v0.2.0: the drafting prompt, `run_spec_review_cycle` (line 1040), the review checklist (contradiction with existing specs, undeclared duplication, dangling references, schema violations, invented design decisions), and the convergence note that a recurring design-decision finding becomes an `[ASSUMPTION]`, not an argument (lines 973, 1007).
+- Spec drafting and the adversarial spec review already exist in `babysit-work-prep.sh` v0.2.1: the drafting prompt, `run_spec_review_cycle` (line 1055), the review checklist (contradiction with existing specs, undeclared duplication, dangling references, schema violations, invented design decisions), and the convergence note that a recurring design-decision finding becomes an `[ASSUMPTION]`, not an argument (line 986).
 - `spec-guide.md` is the schema. Its standing rules apply: never infer a design decision into a spec; only the owner moves a spec to `ready`.
 - Comment authorship carries no signal; the marker line is the only way to tell agent comments apart.
 
