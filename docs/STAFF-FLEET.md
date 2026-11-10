@@ -1164,7 +1164,7 @@ cp ~/staff-fleet/secondbrain/profiles/staff-swe/config.yaml \
 
 ### 8.4 Tool access — no proxy allowlist anymore
 
-Before 2026-05-11, `claude-code-proxy.py:42` hardcoded an `_ALLOWED_TOOLS`
+Before 2026-05-11, `claude-code-proxy.py:43` hardcoded an `_ALLOWED_TOOLS`
 allowlist (`Bash(gh *) Bash(git *) ... Read Glob Grep`) passed as
 `--allowedTools` to every `claude -p` call. That mechanism doesn't exist for
 the native `openai-codex` provider — `new-fleet.sh` doesn't currently set an
