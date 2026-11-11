@@ -1,6 +1,10 @@
 # Plan — Codex version/model compatibility: silent-merge bug fix + retrospective review
 
-> **Status:** drafted, not yet implemented. Execute when ready.
+> **Status:** implemented. Forward path (`compat_re`, `review-codex-outdated`,
+> pre-flight probe, fail-closed `fail_review_cycle`) shipped in `475d555`;
+> retrospective review script + spec in `e6af8cb`; `find-bailed-merged-prs.sh`
+> compat telltales + `BAIL_REASON` column in `9be7a23`. Kept here as a
+> historical design record, not a live TODO.
 
 ---
 
