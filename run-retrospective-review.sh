@@ -73,6 +73,7 @@ fi
 # ---- telltale regexes (same as babysit-with-review.sh) ----
 
 COMPAT_RE='requires a newer version of Codex'
+CREDITS_RE='Your workspace is out of credits'
 MCP_RE='Transport send error:|tool call error: tool call failed for `codex_apps/|error sending request for url \(https://chatgpt\.com/'
 IDEMPOTENCY_PREFIX='<!-- retrospective-review: pr='
 
@@ -246,6 +247,7 @@ print(d.get("mergedAt") or "unknown")
   codex_rc=0
   review_ok=0
   compat_failed=0
+  credits_failed=0
 
   for attempt in 1 2 3; do
     if [ "${delays[$((attempt - 1))]}" -gt 0 ]; then
@@ -270,6 +272,13 @@ print(d.get("mergedAt") or "unknown")
       break
     fi
 
+    # Credits check — no retry, caller must add credits.
+    if grep -qE "$CREDITS_RE" "$tmp_codex_full" 2>/dev/null; then
+      echo "PR #$pr_num: Codex failure (no credits) → skipped (add credits before retrying)" >&2
+      credits_failed=1
+      break
+    fi
+
     # Structural validation: require all three section headers.
     if [ "$codex_rc" -eq 0 ] && [ -s "$tmp_review" ]; then
       if grep -qE '^## BLOCKING[[:space:]]*$' "$tmp_review" 2>/dev/null \
@@ -290,7 +299,7 @@ print(d.get("mergedAt") or "unknown")
     break  # non-transport failure or last MCP retry: stop
   done
 
-  if [ "$compat_failed" -eq 1 ]; then
+  if [ "$compat_failed" -eq 1 ] || [ "$credits_failed" -eq 1 ]; then
     n_skipped=$((n_skipped + 1))
     # Eager cleanup (spec invariant #3 note: don't accumulate worktrees mid-run).
     git worktree remove --force "$wt_dir" 2>/dev/null || true
