@@ -19,7 +19,7 @@ Usage:
   python3 test-llm-routing.py
 
   Or on a remote host:
-  ssh chrisrobertson@192.168.1.81 'python3 -' < test-llm-routing.py
+  ssh chrisrobertson@mbp16.local 'python3 -' < test-llm-routing.py
 
 Requires: `claude` CLI in PATH, outbound HTTPS to api.anthropic.com.
 No external Python packages needed.

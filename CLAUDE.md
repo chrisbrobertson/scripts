@@ -83,15 +83,26 @@ workflow, host inventory, and SSH prerequisites.
 non-interactively on a remote dev host without Docker:
 
 ```
-ssh chrisrobertson@192.168.1.81 'python3 -' < test-llm-routing.py
+ssh chrisrobertson@mbp16.local 'python3 -' < test-llm-routing.py
 ```
 
 Exemplar: `test-llm-routing.py:18-25`. Notes:
-- Works on `dev-laptop` role hosts (192.168.1.81, .85, .84, .229).
-- **Mac Mini (192.168.1.129) does NOT work** — SSH requires an interactive PTY
-  (see comment in `~/repos/home-lab-monitor/config.yml`).
-- **Spark DGX (192.168.1.93) is the GPU host** — prefer it when the test needs
-  CUDA/Ollama inference; treat it as shared.
+- Works on `dev-laptop` role hosts (`mbp16.local`, `mbp15-1.local`,
+  `CRs-MacBook-Pro-2.local` — confirmed reachable: `mbp16.local`/`mbp15-1.local`
+  directly, `CRs-MacBook-Pro-2.local` via `config.yml`). `config.yml`'s
+  2026-09-12 host consolidation replaced this fleet's literal `192.168.1.x`
+  addresses with mDNS names after a subnet move; this doc previously still
+  listed the old IPs (`.81`/`.85`/`.84`/`.229`) and was out of sync.
+- **Mac Mini (`mac-mini.local`) does NOT work** — reconfirmed 2026-11-11:
+  both plain and `-tt` (forced-PTY) non-interactive SSH are closed
+  immediately. The original explanation lived as an inline comment on
+  `config.yml`'s Mac Mini host entry ("SSH requires interactive PTY"); that
+  comment was dropped, without explanation, in that repo's 2026-09-12 host
+  consolidation (`2994b09`) and nothing has replaced it — the behavior still
+  holds, but take "requires a PTY" as the last recorded explanation rather
+  than a confirmed one.
+- **Spark DGX (`spark-86fd.local`) is the GPU host** — prefer it when the
+  test needs CUDA/Ollama inference; treat it as shared.
 
 ## babysit-with-review.sh — review gate and self-merge prevention
 
