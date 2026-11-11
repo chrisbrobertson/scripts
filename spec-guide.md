@@ -36,7 +36,7 @@ All layers share these keys:
 ```yaml
 spec_type: product | system | feature | task
 id: <PREFIX>-<LAYER-TAG>-<SLUG>       # see ID scheme below
-status: review | ready                # observed values; draft/deprecated presumably valid too
+status: review | approved | ready     # observed values; draft/deprecated presumably valid too
 owners: [Full Name]
 depends_on: [<ID>, ...]               # other spec IDs this one needs; [] if none
 fit_check: passed                     # see "Fit check" below
@@ -207,7 +207,7 @@ L4 has no `Composes with / replaces`, no `Analog`, no `Reader & next action`, an
 
 **Complexity scoring.** Every spec carries `total` / `band` / `drivers` / `scored_on`. This repo's specs use free-form driver names (`novelty`, `time_estimate`, `scope`, `external_integration`, `surface_span`) rather than a fixed dimension list, and only two totals appear (`2` → `trivial`, `3` → `moderate`) — **not enough examples here to pin down exact band thresholds or the full driver vocabulary.** Don't invent precise math; pick 2-4 drivers that plausibly explain the spec's difficulty, assign a total that's low for genuinely small/well-understood work, and ask the owner to confirm the band name if it matters for a `ready` gate decision.
 
-**Status lifecycle.** Observed values: `review` (awaiting owner approval) and `ready` (approved, safe to build against). `draft` and `deprecated` aren't used yet in this repo but are reasonable to introduce if needed — confirm with the owner before treating a spec as `ready` without an explicit status change.
+**Status lifecycle.** Observed values: `review` (awaiting owner approval), `approved` (L1/L2/L3 only, per `babysit-specs/README.md`'s "Coordination note" — security review complete and all findings accepted, but some blocker still holds it below `ready`, e.g. owner sign-off on an `[ASSUMPTION]` item), and `ready` (approved, safe to build against). `draft` and `deprecated` aren't used yet in this repo but are reasonable to introduce if needed — confirm with the owner before treating a spec as `ready` without an explicit status change.
 
 **Amending vs. new spec.** When a companion capability extends an existing product/system rather than standing alone, prefer amending the existing L1/L2 file's relevant prose (e.g. add a paragraph to `## What we know`, a new bullet to `## Composes with / replaces`) over creating a new L1/L2 or a separate amendments file. Record *why* in the index's Status section (see `babysit-specs/README.md`'s "Coordination note" style).
 

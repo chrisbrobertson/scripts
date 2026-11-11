@@ -34,7 +34,7 @@ executed
 
 ## Test Suite 1: L3-autonomous-outer-loop
 
-**Reference:** L3-autonomous-outer-loop.md Acceptance Tests (lines 167-176)
+**Reference:** L3-autonomous-outer-loop.md Acceptance Tests (lines 209-224)
 
 ### TC-1.1: Single Iteration Execution
 **Status: automated, not manual (added 2026-09-27).** A full `MAX_ITER=1`
@@ -320,7 +320,7 @@ the ticket queue for new work, per the scenario table above
 
 ## Test Suite 2: L3-review-cycle
 
-**Reference:** L3-review-cycle.md Acceptance Tests (lines 184-196)
+**Reference:** L3-review-cycle.md Acceptance Tests (lines 744-760)
 
 ### TC-2.1: Review Cycle with BLOCKING Issues
 **Status: automated (blocking-count only), not manual (added 2026-09-27).**
@@ -606,7 +606,7 @@ for the live-PR path.
 
 ## Test Suite 3: L3-mcp-resilience
 
-**Reference:** L3-mcp-resilience.md Acceptance Tests (lines 174-182)
+**Reference:** L3-mcp-resilience.md Acceptance Tests (lines 208-224)
 
 ### TC-3.1: Codex Success on Attempt 1
 **Given:** Codex succeeds on attempt 1  
