@@ -1,6 +1,11 @@
 # Plan — Babysit lock recovery + scheduled runs with bounded concurrency
 
-> **Status:** drafted, not yet implemented. Execute when ready.
+> **Status:** implemented (2026-11-11) — stale-vs-live lock detection,
+> `BABYSIT_NONINTERACTIVE`, `MAX_CONCURRENT_BABYSITS`, and the `launchd/`
+> template + install helper all shipped in `babysit-with-review.sh` 1.5.0.
+> See `CLAUDE.md`'s **Locking & scheduled runs** section and
+> `babysit-specs/L3-autonomous-outer-loop.md` AT3-AT3e. This plan file is
+> kept as historical context; the spec and CLAUDE.md are now authoritative.
 
 ## Context
 

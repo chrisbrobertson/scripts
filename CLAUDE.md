@@ -30,7 +30,7 @@ empirical tests (`test-*`). No formal test suite, no build step, no CI.
 | `new-fleet.sh` | Provision a staff-team fleet (staff-swe/sre/pm) for a service; see `docs/STAFF-FLEET.md` |
 | `claude-code-proxy.py` | Orphaned. OpenAI-compatible HTTP proxy that used to bridge Hermes to `claude -p`; `new-fleet.sh` dropped it for Hermes's native `openai-codex` provider in 84364ea (2026-05-11) — no longer wired to anything. |
 | `install-poolside-s21-mac.sh` | One-shot installer/validator for running Poolside Laguna S 2.1 locally on a 128 GB Apple Silicon Mac (unrelated to the home-lab fleet — self-contained, no remote hosts). Installs Ollama, the model, Poolside Agent CLI, uv, LiteLLM, Claude Code, and Codex CLI as needed; runs Ollama/LiteLLM as per-user launchd services; creates `pool-poolside`/`claude-poolside`/`codex-poolside` wrapper commands; runs a protocol + end-to-end test suite. `--repoint-opus`/`--repoint-codex`/`--repoint-all` persistently reroute Claude Code's Opus tier or the Codex CLI to the local model; `--restore-harnesses` reverts. Requires `--accept-poolside-eula` (the Poolside installer is interactive otherwise). |
-| `babysit-with-review.sh` | Autonomous implementation loop with independently selectable Claude/Codex implementer and reviewer harnesses, stop-file lock, and convergent PR-review cycle; see `--help` for role-specific model/effort switches. Pass `--repo-base PATH` (or `REPO_BASE` env var) if helper scripts live outside `~/repos/scripts` — auto-detects `~/repos` then `~/repo`. Versioned via semver (`--version`); current: 1.4.0. |
+| `babysit-with-review.sh` | Autonomous implementation loop with independently selectable Claude/Codex implementer and reviewer harnesses, stop-file lock, and convergent PR-review cycle; see `--help` for role-specific model/effort switches. Pass `--repo-base PATH` (or `REPO_BASE` env var) if helper scripts live outside `~/repos/scripts` — auto-detects `~/repos` then `~/repo`. Versioned via semver (`--version`); current: 1.5.0. See **Locking & scheduled runs** below. |
 | `babysit-work-prep.sh` | Ticket-to-spec intake loop. Drafts one TIF spec per GitHub/Jira ticket in an isolated worktree and opens a marked **draft** PR, then drives it through an adversarial spec review cycle (contradiction with existing specs, undeclared duplication, dangling references, schema violations, invented design decisions) — the PR only leaves draft at 0 BLOCKING, and the approval sweep refuses to act on a draft. Then merges approved spec PRs and creates idempotent `sub-ticket` + `build-ready` sub-tickets for `babysit-builder.sh` to pick up (the *source* ticket gets `status:ready-to-build`, meaning "spec approved, sub-ticket exists"). Approval defaults to the authenticated GitHub user; see `--help` for source, model, dry-run, and approver settings. |
 | `babysit-builder.sh` | Spec-to-PR build loop. Pulls any GitHub/Jira ticket labelled `build-ready`, implements its referenced spec in a per-ticket worktree, then runs the same convergent review cycle as `babysit-with-review.sh` — but **never merges**: it halts with the PR labelled for a human. Specs with gaps are kicked back (`SPEC_GAP` → `build-needs-clarification`) rather than built as-is. Own `build-*` label namespace and own stop file, so it runs concurrently with the other two loops. `resume_stalled_prs()` sweeps all three resumable quarantine labels (`build-mcp-outage`, `build-codex-outdated`, `build-codex-no-credits`) before the queue is read, mirroring the outer-loop fix in `babysit-with-review.sh` (#104) — the older `resume_outage_prs()` only covered `build-mcp-outage`, so a `build-codex-outdated`/`build-codex-no-credits` PR was never resumed and its ticket could be rebuilt into a duplicate PR. See `babysit-specs/L3-builder.md` and `--help`. Current: 0.2.1. |
 | `setup-branch-protection.sh` | Enable the `codex-review` required status check on a repo's default branch; run once per repo after deploying the updated wrapper |
@@ -60,6 +60,30 @@ empirical tests (`test-*`). No formal test suite, no build step, no CI.
 | `bazaar-build-worker.sh` | Bazaar build worker (spawned by `bazaar-build.sh`): precheck → plan → implement each sub-issue on one branch with a review cycle per unit, skip-and-revert on non-convergence → PR ready. Never merges. |
 | `test-bazaar-*.sh` | Harnesses for the Bazaar libs, controllers, and workers plus `test-bazaar-e2e.sh` (both controllers driving the real workers end to end); seven scripts, all offline: fake gh + throwaway git origin + scripted claude/codex stubs. Run them all before committing Bazaar changes |
 | `test-support/fake-gh.py` | Stateful `gh` stand-in over a JSON file used by `test-bazaar-common.sh`, `test-bazaar-build.sh`, `test-bazaar-issues.sh` |
+| `launchd/com.chrisrobertson.babysit.PROJECT.plist.template` | launchd LaunchAgent template for scheduling `babysit-with-review.sh`; `__PROJECT__`/`__PROJECT_PATH__` placeholders. See **Locking & scheduled runs** below. |
+| `launchd/install-babysit-agent.sh` | Fills the plist template for `<project_basename> <project_absolute_path>`, writes it to `~/Library/LaunchAgents/`, and bootstraps it via `launchctl` |
+
+## babysit-with-review.sh — locking & scheduled runs
+
+`babysit-with-review.sh` claims a per-project lock at `~/sisyphus-logs/<project>.stop`
+containing its own PID (atomically, via `set -C`/no-clobber, closing the stale-check/
+claim TOCTOU window). On startup it detects a stale (orphaned) lock — a PID that
+`kill -0` reports as no-longer-running, or an empty pre-upgrade `touch`-only file —
+and clears it automatically; a lock whose PID is still alive is a real collision.
+
+Set `BABYSIT_NONINTERACTIVE=1` to make both the live-lock collision and the
+concurrency-cap paths below exit 0 ("[skip] ...") instead of erroring — used by
+launchd/cron jobs so a busy project doesn't get marked as a failed run.
+
+Set `MAX_CONCURRENT_BABYSITS` (default 1) to cap the total number of simultaneous
+`babysit-with-review.sh` processes across all projects, counted via `pgrep`. Reaching
+the cap always exits 0 ("skipping") — intentional back-pressure, not a failure —
+regardless of `BABYSIT_NONINTERACTIVE`.
+
+See `launchd/com.chrisrobertson.babysit.PROJECT.plist.template` for a LaunchAgent
+example (`StartCalendarInterval`, no `KeepAlive`) and
+`launchd/install-babysit-agent.sh` to materialise and bootstrap it for a given
+project.
 
 ## Staff-fleet agents
 
