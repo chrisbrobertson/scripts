@@ -55,14 +55,14 @@ For each matching log, extract `(project, pr_num, outcome, reason)` tuples.
 | Outcome | Match phrase |
 | --- | --- |
 | `CLEARED` | line contains `cleared after` |
-| `BAILED` | line contains `bailing review cycle`, `hit MAX_REVIEW_CYCLES`, `HEAD unchanged`, `STUCK_REVIEW`, or `gh pr checkout.*failed` |
+| `BAILED` | line contains `bailing review cycle`, `hit MAX_REVIEW_CYCLES`, `HEAD unchanged`, `STUCK_REVIEW`, `gh pr checkout.*failed`, `marking PR`, `non-MCP failure`, `requires a newer version of Codex`, or `non-zero exit` |
 | `UNKNOWN` | none of the above (block may have been truncated) |
 
 A PR can appear in multiple logs (re-reviewed across runs). Keep the **worst** outcome: `BAILED > UNKNOWN > CLEARED`.
 
 **Extraction command:**
 ```bash
-grep -n "review handoff\|bailing review cycle\|hit MAX_REVIEW_CYCLES\|cleared after\|HEAD unchanged\|STUCK_REVIEW\|gh pr checkout.*failed" <log_file>
+grep -n "review handoff\|bailing review cycle\|hit MAX_REVIEW_CYCLES\|cleared after\|HEAD unchanged\|STUCK_REVIEW\|gh pr checkout.*failed\|marking PR\|non-MCP failure\|requires a newer version of Codex\|non-zero exit" <log_file>
 ```
 
 ### 3. Resolve project → GitHub repo
@@ -124,8 +124,8 @@ Produce a Markdown report with:
 
 ## Stop conditions
 
-- No babysit-with-review.sh logs in log dir → exit with "No review logs found."
-- No bailed handoffs → exit with "No bailed handoffs — no candidates."
+- No babysit-with-review.sh logs in log dir → exit with "No babysit-with-review.sh logs found in {log_dir} — nothing to audit."
+- No bailed handoffs → exit with "No bailed handoffs found — no candidates to audit."
 - gh auth not configured → instruct user to run `gh auth login` first.
 
 ---
