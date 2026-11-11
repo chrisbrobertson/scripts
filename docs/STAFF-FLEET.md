@@ -275,7 +275,7 @@ working tree, `claude` CLI on PATH, home-lab-monitor reachability).
   created staff-pm/spec-review-pr (triggered on-demand)
 
 --- babysitter chain pre-flight ---
-  OK: home-lab-monitor reachable at http://192.168.1.129:8888
+  OK: home-lab-monitor reachable at http://mac-mini.local:8888
   OK: this host (yourhost) is registered with the monitor
 
 All gateways started + orchestrator + dispatcher wired. Verify by DMing each bot:
@@ -1256,7 +1256,7 @@ HERMES_HOME=~/staff-fleet/secondbrain/.hermes/profiles/staff-swe hermes -p staff
 ```bash
 cat ~/sisyphus-logs/secondbrain.stop 2>/dev/null && echo "stop-file present"
 pgrep -f babysit-with-review.sh   # if this prints a PID, the stop-file is that run's active lock — don't remove it; see "Pause crons without disabling agents" instead
-curl -s http://192.168.1.129:8888/api/babysit | python3 -m json.tool
+curl -s http://mac-mini.local:8888/api/babysit | python3 -m json.tool
 gh pr list --repo yourorg/secondbrain --state open --author @me --json number
 gh issue list --repo yourorg/secondbrain --state open --label priority/p1 --json number
 gh issue list --repo yourorg/secondbrain --state open --label priority/p2 --json number
