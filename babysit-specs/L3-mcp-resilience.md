@@ -160,7 +160,7 @@ Function is internal to script; no versioning. Breaking changes (retry count, de
 - Tech lead: Chris Robertson
 - API council / platform review: N/A (internal function)
 - Security: telltale regex injection risk accepted — patterns are fixed strings, not user-injectable; maintenance comment added to source. See SECURITY-REVIEW-PLAN.md §4.
-- QA: Test cases documented in QA-TEST-PLAN.md (TC-3.1–3.8); not yet executed. Deferred pending network-blocking test environment.
+- QA: Test cases documented in QA-TEST-PLAN.md (TC-3.1–3.15). TC-3.1–3.8 (the live-network-dependent cases) are not yet executed, deferred pending network-blocking test environment. TC-3.9–3.15 (telltale priority, structural-validation edge cases, false-positive regression) are automated against the shared `lib/bazaar-review.sh` copy of this logic via `test-bazaar-review-lib.sh`; `babysit-with-review.sh`'s own `codex_review_with_retry()` copy still lacks equivalent harness coverage (see PRs #45/#91).
 
 ## Failure modes & blast radius
 - **`mcp_re` mismatch (false negative):** MCP transport failure not matched, returns 1 instead of 2. Blast: PR labeled `review-incomplete` (human-action) instead of `review-mcp-outage` (auto-retry).

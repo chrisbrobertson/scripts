@@ -606,7 +606,7 @@ for the live-PR path.
 
 ## Test Suite 3: L3-mcp-resilience
 
-**Reference:** L3-mcp-resilience.md Acceptance Tests (lines 174-182)
+**Reference:** L3-mcp-resilience.md Acceptance Tests (lines 209-224)
 
 ### TC-3.1: Codex Success on Attempt 1
 **Given:** Codex succeeds on attempt 1  
@@ -722,6 +722,94 @@ for the live-PR path.
 
 ---
 
+**Status note (TC-3.9 through TC-3.15 below):** these cover acceptance tests 9-15
+in L3-mcp-resilience.md (`compat_re`/`credits_re` priority, structural-validation
+edge cases, and the false-positive telltale regression), added to the spec after
+TC-3.1-3.8 were originally drafted. Unlike the rest of this suite, they are already
+automated — `test-bazaar-review-lib.sh` (recording-stub harness, no live
+Claude/Codex/gh calls) asserts each one by its TC ID against `review_with_retry()`
+in `lib/bazaar-review.sh`, the library `babysit-with-review.sh` keeps its own copy
+of (see CLAUDE.md). That harness covers the shared retry/telltale logic; it does
+not exercise `babysit-with-review.sh`'s own `codex_review_with_retry()` copy
+directly — that is the gap PRs #45/#91 (`BABYSIT_TEST_MODE` coverage) aim to close.
+
+### TC-3.9: Compat Telltale Alone
+**Given:** Codex exits non-zero with output containing `requires a newer version of Codex` (`compat_re` match) and no valid review  
+**When:** Function is called  
+**Then:** Return 3 immediately on attempt 1 (no retry, no 60s wait)
+
+**Automated:** `test-bazaar-review-lib.sh` case `tc39` ("TC-3.9 compat telltale → rc 3 immediately").
+
+---
+
+### TC-3.10: Compat Beats MCP Telltale
+**Given:** TMP_CODEX_FULL contains both `compat_re` and `mcp_re` matches and no valid review  
+**When:** Function checks telltales  
+**Then:** `compat_re` fires first and returns 3 (compat takes priority over mcp_re)
+
+**Automated:** `test-bazaar-review-lib.sh` case `tc310` ("TC-3.10 compat beats mcp telltale → rc 3").
+
+---
+
+### TC-3.11: Missing RECOMMENDED Header
+**Given:** Codex exits 0, TMP_REVIEW is non-empty but missing the `## RECOMMENDED` header  
+**When:** Function checks `valid_review_structure`  
+**Then:** Structural validation fails; with no `mcp_re` telltale, return 1 (no retry)
+
+**Automated:** `test-bazaar-review-lib.sh` case `tc311` ("TC-3.11 missing RECOMMENDED → rc 1").
+
+---
+
+### TC-3.12: Valid Structure Passes
+**Given:** Codex exits 0, TMP_REVIEW contains all three section headers each with ≥1 bullet and no extra `##` headings  
+**When:** Function checks `valid_review_structure`  
+**Then:** Structural validation passes and function returns 0
+
+**Automated:** implicitly covered by `test-bazaar-review-lib.sh` case `tc31` (TC-3.1's success path requires the same structural pass); not separately labeled `tc312` in the harness.
+
+---
+
+### TC-3.12b: Bare Headers Only
+**Given:** Codex exits 0, TMP_REVIEW contains all three section headers but each with zero bullets (bare headers only)  
+**When:** Function checks `valid_review_structure`  
+**Then:** Structural validation fails and function returns 1 (no retry)
+
+**Automated:** `test-bazaar-review-lib.sh` case `tc312b` ("TC-3.12b bare headers → rc 1").
+
+---
+
+### TC-3.13: Credits Telltale Alone
+**Given:** Codex exits non-zero with output containing `Your workspace is out of credits` (`credits_re` match) and no valid review  
+**When:** Function is called  
+**Then:** Return 4 immediately (no retry)
+
+**Automated:** `test-bazaar-review-lib.sh` case `tc313` ("TC-3.13 credits telltale → rc 4 immediately").
+
+---
+
+### TC-3.14: Credits Beats MCP Telltale
+**Given:** TMP_CODEX_FULL contains both `credits_re` and `mcp_re` matches and no valid review  
+**When:** Function checks telltales  
+**Then:** `credits_re` fires first and returns 4 (credits checked before mcp_re)
+
+**Automated:** `test-bazaar-review-lib.sh` case `tc314` ("TC-3.14 credits beats mcp telltale → rc 4").
+
+---
+
+### TC-3.15: Clean Review Beats Incidental Telltale Match (False-Positive Regression)
+**Given:** Codex exits 0, TMP_REVIEW is a valid clean review, and TMP_CODEX_FULL also
+contains a `compat_re` or `credits_re` match elsewhere in the transcript (e.g. Codex
+quoting reviewed source verbatim)  
+**When:** Function checks  
+**Then:** The structural success check fires first and returns 0 — the telltale match
+is never reached
+
+**Automated:** `test-bazaar-review-lib.sh` cases `tc_fp_compat`/`tc_fp_credits` — the
+2026-09-27 regression (see L3-mcp-resilience.md's "Flipped" assumption note and
+`review-codex-outdated`/`review-codex-no-credits` false-positive history above).
+
+---
+
 ## Test Suite 4: L4-selectable-implementer / L4-selectable-reviewer
 
 **Reference:** L4-selectable-implementer.md, L4-selectable-reviewer.md
@@ -773,9 +861,9 @@ add TC IDs here if this suite is ever split into individually-run cases):**
   indented detail lines
 
 This suite does not exercise the outer loop, the review-cycle state machine, or MCP
-resilience (Test Suites 1-3 still cover those, manually, until a
+resilience (Test Suites 1-3 still cover most of those, manually, until a
 `BABYSIT_TEST_MODE`-style harness exists for them too — see "Test Automation
-Recommendations" below).
+Recommendations" below for the exception, Suite 3's TC-3.9-3.15).
 
 ---
 
@@ -842,14 +930,17 @@ return happens before any gh/git call) and covers TC-2.9. The cycle loop
 itself, label application, and TC-2.6/2.8 remain untouched — no stub exists
 yet for those.
 
-**Still open, for the rest of Test Suite 2 and all of Suite 3** (review-cycle state
+**Still open, for the rest of Test Suite 2 and most of Suite 3** (review-cycle state
 machine, MCP resilience): those cases still require live Claude/Codex/gh calls or
 manual network interference (blocking `chatgpt.com` to simulate MCP failures)
 because no `BABYSIT_TEST_MODE`-style stub exists yet for `run_review_cycle`'s cycle
-loop or for `codex_review_with_retry`'s transport-failure paths. Extending
-`BABYSIT_TEST_MODE` (or a sibling stub mode) to cover those two surfaces would let
-the rest of Suites 2-3 collapse into the same fast, deterministic run as Suite 4
-and Suite 1's/Suite 2's automated cases.
+loop or for `babysit-with-review.sh`'s own `codex_review_with_retry()` copy.
+Extending `BABYSIT_TEST_MODE` (or a sibling stub mode) to cover those two surfaces
+would let the rest of Suite 2 and TC-3.1-3.8 collapse into the same fast,
+deterministic run as Suite 4 and Suite 1's/Suite 2's automated cases. TC-3.9-3.15
+are the exception: they're already covered this way, just against the `lib/bazaar-review.sh`
+copy of the same retry/telltale logic (`test-bazaar-review-lib.sh`) rather than
+`babysit-with-review.sh`'s copy — see Test Suite 3 above.
 
 ### Short-term (Manual Testing, Suites 1-3 only)
 - Use test repo: `~/test-babysit-repo/` for isolated testing
