@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Harness for lib/bazaar-common.sh: the role-independent controller contract
-# (BZR-FEAT-CONTROLLER acceptance tests 1-5, 9-12, 14). gh is test-support/fake-gh.py
-# over a JSON state file; workers are a stub script that writes a sentinel.
+# (BZR-FEAT-CONTROLLER acceptance tests 1-4, 9-12, 14; AT5 is role_sweeps-specific
+# and covered by test-bazaar-issues.sh instead — this harness's test role stubs
+# role_sweeps() as a no-op). gh is test-support/fake-gh.py over a JSON state file;
+# workers are a stub script that writes a sentinel.
 set -uo pipefail
 ROOT=$(cd "$(dirname "$0")" && pwd)
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
