@@ -59,7 +59,7 @@ empirical tests (`test-*`). No formal test suite, no build step, no CI.
 | `bazaar-issue-worker.sh` | Bazaar issue worker (spawned by `bazaar-issues.sh`): verify → questions or normalise → draft specs on `bzr/spec-N` → draft-time sub-issues → spec review cycle → sentinel |
 | `bazaar-build-worker.sh` | Bazaar build worker (spawned by `bazaar-build.sh`): precheck → plan → implement each sub-issue on one branch with a review cycle per unit, skip-and-revert on non-convergence → PR ready. Never merges. |
 | `test-bazaar-*.sh` | Harnesses for the Bazaar libs, controllers, and workers plus `test-bazaar-e2e.sh` (both controllers driving the real workers end to end); seven scripts, all offline: fake gh + throwaway git origin + scripted claude/codex stubs. Run them all before committing Bazaar changes |
-| `test-support/fake-gh.py` | Stateful `gh` stand-in over a JSON file used by `test-bazaar-common.sh`, `test-bazaar-build.sh`, `test-bazaar-issues.sh` |
+| `test-support/fake-gh.py` | Stateful `gh` stand-in over a JSON file; symlinked onto `PATH` as `gh` by every `test-bazaar-*.sh` harness except `test-bazaar-review-lib.sh` (which stubs `gh` directly) — `test-bazaar-common.sh`, `test-bazaar-build.sh`, `test-bazaar-issues.sh`, `test-bazaar-build-worker.sh`, `test-bazaar-issue-worker.sh`, `test-bazaar-e2e.sh` |
 
 ## Staff-fleet agents
 
