@@ -148,9 +148,11 @@ left untouched.
 
 ### Step 2 — Fix `[REPO]` placeholders in the SOUL files
 
-The SOUL.md templates, each role's `config.yaml` `cron:` block, and the PM
-handoff/spec-review prompts all include `--repo [REPO]` in `gh` command
-examples. Replace with the actual `owner/repo` slug everywhere it appears:
+The SOUL.md templates and the PM handoff/spec-review prompts include
+`--repo [REPO]` in `gh` command examples. (Each role's `config.yaml`
+`cron:` block does NOT — its daily-digest prompts rely on `terminal.cwd`
+instead and never reference `[REPO]`; see `new-fleet.sh:429-447`.) Replace
+with the actual `owner/repo` slug everywhere it appears:
 
 ```bash
 # Find your repo slugs:
@@ -165,15 +167,14 @@ sed -i '' 's/\[REPO\]/yourorg\/secondbrain/g' \
   ~/staff-fleet/secondbrain/profiles/staff-swe/SOUL.md \
   ~/staff-fleet/secondbrain/profiles/staff-sre/SOUL.md \
   ~/staff-fleet/secondbrain/profiles/staff-pm/SOUL.md \
-  ~/staff-fleet/secondbrain/profiles/staff-swe/config.yaml \
-  ~/staff-fleet/secondbrain/profiles/staff-sre/config.yaml \
-  ~/staff-fleet/secondbrain/profiles/staff-pm/config.yaml \
   ~/staff-fleet/secondbrain/profiles/staff-pm/handoff-prompt.txt \
   ~/staff-fleet/secondbrain/profiles/staff-pm/spec-review-prompt.txt
 
 # Then sync SOUL.md + config.yaml back into Hermes profiles — new-fleet.sh
 # copied the originals here once at fleet-creation time, and `gateway install`
-# (Step 5) reads config.yaml from THIS location, not the template above:
+# (Step 5) reads config.yaml from THIS location, not the template above.
+# config.yaml has no [REPO] to replace, but it still needs this sync so the
+# live profile matches the template directory (same reason SOUL.md does):
 for role in swe sre pm; do
   cp ~/staff-fleet/secondbrain/profiles/staff-${role}/SOUL.md \
      ~/staff-fleet/secondbrain/.hermes/profiles/staff-${role}/SOUL.md
@@ -187,15 +188,16 @@ The prompt files don't need a separate sync step — `start-gateways.sh` reads
 `profiles/` directory when it registers those cron jobs.
 
 Do this **before** running `start-gateways.sh` (Step 5): the three daily
-crons are created by Hermes from `config.yaml` on first `gateway install`,
-and the two extra cron jobs embed the prompt file's contents as a literal
-argument at creation time. A placeholder left in either copy of `config.yaml`
-at that point, or fixed only after the cron already exists, produces a
-literal "unknown repository [REPO]" error from `gh` — not a
-silently-wrong-repo result, since `terminal.cwd` is already pinned to the
-service repo. Re-registering after the fact means deleting the affected cron
-job (`hermes -p staff-<role> cron remove <job_id>`) and re-running
-`start-gateways.sh`.
+crons are created by Hermes from `config.yaml` on first `gateway install`
+(and never reference `[REPO]`, so they're unaffected either way — see
+above), but the two extra cron jobs embed the handoff/spec-review prompt
+file's contents as a literal argument at creation time. A `[REPO]`
+placeholder left in either prompt file at that point, or fixed only after
+the cron already exists, produces a literal "unknown repository [REPO]"
+error from `gh` — not a silently-wrong-repo result, since `terminal.cwd` is
+already pinned to the service repo. Re-registering after the fact means
+deleting the affected cron job (`hermes -p staff-<role> cron remove
+<job_id>`) and re-running `start-gateways.sh`.
 
 ### Step 3 — Fill in `service-context.md`
 
@@ -413,10 +415,11 @@ against it, unattended.
 
 ```
 team-dispatcher (every 5 min, --no-agent)
-    │  checks home-lab-monitor's distributed lock (GET /api/babysit;
-    │  falls back to a local ~/sisyphus-logs/<fleet>.stop file if
-    │  unreachable) — is a babysitter already running for this fleet
-    │  anywhere on the home-lab?
+    │  checks home-lab-monitor's distributed lock (GET /api/babysit) —
+    │  is a babysitter already running for this fleet anywhere on the
+    │  home-lab? Then unconditionally checks a local
+    │  ~/sisyphus-logs/<fleet>.stop file too (belt-and-suspenders, not
+    │  gated on the monitor being unreachable).
     │  if clear AND (open PRs by @me) + (open priority/p1 or /p2 issues) > 0:
     ▼
 babysit-driver.sh  (spawned via nohup)
@@ -1423,10 +1426,11 @@ profile's own cron `workdir`.
 
 **One babysitter per project at a time, enforced across the whole home-lab.**
 `team-dispatcher.sh` treats "already running" as a hard stop, checked via
-home-lab-monitor's `/api/babysit` with a local-stop-file fallback if that's
-unreachable. If home-lab-monitor is down AND you also manually started
+home-lab-monitor's `/api/babysit` plus an unconditional local-stop-file
+check (not gated on the monitor being unreachable — see 3.6). If
+home-lab-monitor is down AND you also manually started
 `babysit-with-review.sh` on another host, you can get two babysitters running
-against the same repo — the local fallback only protects the current host.
+against the same repo — the local stop-file only protects the current host.
 
 **Duplicate PRs are possible.** If `babysit-driver.sh`'s spawned
 `babysit-with-review.sh` crashes mid-run, `team-dispatcher` will simply
