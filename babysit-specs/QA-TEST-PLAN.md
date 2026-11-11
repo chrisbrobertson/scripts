@@ -1,9 +1,10 @@
 # QA Test Plan — babysit-with-review.sh
 
 **Owner:** qa-lead  
-**Status:** Test Suite 4 automated and passing (178/178, last run 2026-09-28), now
-including automated pre-flight coverage for TC-1.2, lock-file-collision coverage
-for TC-1.3/TC-1.3b, lock-file-removal coverage for TC-1.4, sentinel-detection
+**Status:** Test Suite 4 automated and passing (189/189, last run 2026-11-11), now
+including automated pre-flight coverage for TC-1.2, lock-file stale-vs-live/
+concurrency-cap coverage for TC-1.3/TC-1.3b/TC-1.3c/TC-1.3d/TC-1.3e, lock-file-removal
+coverage for TC-1.4, sentinel-detection
 coverage for TC-1.5/TC-1.6, single-iteration outer-loop coverage for TC-1.1, and
 MAX_ITER-exhaustion coverage for TC-1.8 (see
 Suite 1), plus blocking-count coverage for TC-2.1/TC-2.2, merge-mechanics and
@@ -94,28 +95,34 @@ reference; the automated cases are the ones that actually run before every commi
 ---
 
 ### TC-1.3: Lock File Semantics
-**Status: automated, not manual (added 2026-09-27).** This TC previously
-described a single scenario ("lock file exists → first iteration executes
-normally") that contradicts both the shipped code and
-`L3-autonomous-outer-loop.md` acceptance tests 3/3b: a *pre-existing* stop
-file is a startup collision (`exit 1`), not something the script tolerates.
-The two real scenarios — collision on a pre-existing lock file, and normal
-startup when none exists — are covered deterministically in
-`test-babysit-with-review-cli.sh` via `BABYSIT_TEST_MODE=outer-preflight`
-against a bare (collision case) or real (no-collision case) directory; no
-Claude/Codex/gh involved. The corrected manual steps below remain as the
-acceptance reference.
+**Status: automated, not manual (updated 2026-11-11, scheduling feature).**
+This TC previously treated any pre-existing stop file as an unconditional
+startup collision. Since `babysit-scheduling-plan.md` landed, the lock file
+holds the owning PID instead of being an empty `touch`(1) marker, so a
+pre-existing stop file is a collision (`exit 1`) only while that PID is
+still alive (`L3-autonomous-outer-loop.md` AT3); a dead-PID or empty
+(pre-upgrade) stop file is stale and gets cleared automatically (AT3c), and
+`BABYSIT_NONINTERACTIVE` / `MAX_CONCURRENT_BABYSITS` (AT3d/AT3e) make the
+same checks launchd/cron-friendly. All five scenarios are covered
+deterministically in `test-babysit-with-review-cli.sh` via
+`BABYSIT_TEST_MODE=outer-preflight` (bare directories for the live/stale
+cases, a real preflight repo for AT3b/AT3c so the post-clear startup path is
+also exercised, and a stubbed `pgrep` for AT3e); no Claude/Codex/gh
+involved. The corrected manual steps below remain as the acceptance
+reference.
 
-**Given:** Lock file exists before start-up  
+**Given:** Lock file exists before start-up, holding the PID of a still-running process  
 **When:** Script runs  
-**Then:** Exit 1 — collision (another instance may be running; the script
-creates the lock file itself and never expects to find one already there)
+**Then:** Exit 1 — collision (another instance is running; the script never
+claims a lock file whose live owner it can't verify), or exit 0 with a
+`[skip]`-prefixed message under `BABYSIT_NONINTERACTIVE`
 
 **Test steps:**
 1. Create test repo
-2. Pre-create lock file: `mkdir -p ~/sisyphus-logs && touch ~/sisyphus-logs/test-babysit.stop`
+2. Pre-create lock file with a live PID: `mkdir -p ~/sisyphus-logs && echo $$ > ~/sisyphus-logs/test-babysit.stop` (run from a shell that stays open)
 3. Run: `MAX_ITER=1 ~/repo/scripts/babysit-with-review.sh`
-4. Verify: Exit code 1, stderr contains `already exists`, no iteration executed
+4. Verify: Exit code 1, stderr contains `held by live PID`, no iteration executed
+5. Re-run with `BABYSIT_NONINTERACTIVE=1`; verify exit code 0, stderr contains `[skip]` and `held by live PID`
 
 ---
 
@@ -131,12 +138,58 @@ reference.
 
 **Given:** No lock file exists before start-up  
 **When:** Script runs  
-**Then:** Script creates the lock file itself; first iteration executes normally
+**Then:** Script creates the lock file itself (containing its own PID); first iteration executes normally
 
 **Test steps:**
 1. Create test repo (ensure `~/sisyphus-logs/test-babysit.stop` does not exist)
 2. Run: `MAX_ITER=1 ~/repo/scripts/babysit-with-review.sh`
 3. Verify: Exit code 0, iteration executed, lock file present during the run
+
+---
+
+### TC-1.3c: Lock File Semantics — Stale (Dead-PID or Empty) Lock
+**Status: automated, not manual (added 2026-11-11, scheduling feature).**
+Covered deterministically in `test-babysit-with-review-cli.sh` as the
+"TC-1.3 AT3c" case: a stop file holding a PID that isn't running (and,
+separately, a legacy empty stop file from before this feature), run against
+a real preflight repo so the post-clear startup path reaches pre-flight; no
+Claude/Codex/gh involved.
+
+**Given:** Lock file exists before start-up, holding a PID that is no longer running (or is empty)  
+**When:** Script runs  
+**Then:** Logs clearing the stale lock, then proceeds exactly as TC-1.3b
+
+**Test steps:**
+1. Create test repo
+2. Pre-create a stale lock: `mkdir -p ~/sisyphus-logs && echo 999999 > ~/sisyphus-logs/test-babysit.stop` (a PID guaranteed not to be running)
+3. Run: `MAX_ITER=1 ~/repo/scripts/babysit-with-review.sh`
+4. Verify: Exit code 0, stderr contains `clearing stale lock`, iteration executed
+
+---
+
+### TC-1.3d: Lock File Semantics — BABYSIT_NONINTERACTIVE
+**Status: automated, not manual (added 2026-11-11, scheduling feature).**
+See TC-1.3 steps 5 above; covered in the same `test-babysit-with-review-cli.sh`
+block ("TC-1.3 AT3d"). Exists so a launchd/cron job hitting a live-lock
+collision exits 0 instead of being marked failed.
+
+---
+
+### TC-1.3e: Lock File Semantics — MAX_CONCURRENT_BABYSITS Cap
+**Status: automated, not manual (added 2026-11-11, scheduling feature).**
+Covered deterministically in `test-babysit-with-review-cli.sh` ("TC-1.3
+AT3e") via a stubbed `pgrep` placed ahead of the real one on `PATH`
+(spinning up real concurrent processes would be flaky); no Claude/Codex/gh
+involved.
+
+**Given:** `MAX_CONCURRENT_BABYSITS` (default 1) other `babysit-with-review.sh` processes are already running  
+**When:** Script runs  
+**Then:** Exit 0 ("skipping") regardless of `BABYSIT_NONINTERACTIVE` — this is intended back-pressure, not a failure
+
+**Test steps:**
+1. With one babysit already running for any project
+2. Run a second: `MAX_CONCURRENT_BABYSITS=1 ~/repo/scripts/babysit-with-review.sh`
+3. Verify: Exit code 0, stderr contains `MAX_CONCURRENT_BABYSITS=1 — skipping`
 
 ---
 

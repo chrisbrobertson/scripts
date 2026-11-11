@@ -529,21 +529,37 @@ run_preflight "$TMP/preflight/diverged/work" "$TMP/preflight/home" \
 [ "$rc" -eq 1 ] && pass 'preflight: diverged from origin exits 1' || fail 'preflight: diverged from origin exits 1'
 if grep -q 'diverged from origin/main' "$TMP/preflight/diverged.err"; then pass 'preflight: diverged error names the cause'; else fail 'preflight: diverged error names the cause'; fi
 
-# Lock file collision: converts QA-TEST-PLAN.md TC-1.3 (lock file semantics)
-# into deterministic coverage. The STOP_FILE collision check runs unconditionally
-# before argument-mode dispatch and before any git/pre-flight work, so it needs
-# neither a git repo nor claude/codex/gh stubs — a bare cwd is enough. Covers
-# both AT3 (pre-existing stop file is a collision, exit 1) and AT3b (no
-# pre-existing stop file lets startup proceed) from
-# L3-autonomous-outer-loop.md.
+# Lock file semantics: converts QA-TEST-PLAN.md TC-1.3 (lock file semantics)
+# into deterministic coverage. The STOP_FILE stale-vs-live check runs
+# unconditionally before argument-mode dispatch and before any git/pre-flight
+# work. Since babysit-scheduling-plan.md's lock rework, the file holds the
+# owning PID instead of being an empty touch(1) marker, so a pre-existing
+# stop file is only a collision (AT3) when that PID is still alive; a dead
+# or empty PID is now a stale lock that gets cleared automatically (AT3c),
+# and BABYSIT_NONINTERACTIVE / MAX_CONCURRENT_BABYSITS (AT3d/AT3e) make the
+# same checks launchd/cron-friendly. No git repo or claude/codex/gh stubs
+# needed for the live/stale cases — a bare cwd is enough; AT3c reuses
+# make_preflight_repo so the post-clear startup path (git pre-flight) is
+# exercised too, matching the old AT3b "no pre-existing lock" case.
 mkdir -p "$TMP/lockfile/proj" "$TMP/lockfile/home/sisyphus-logs"
-touch "$TMP/lockfile/home/sisyphus-logs/proj.stop"
+sleep 30 &
+live_pid=$!
+echo "$live_pid" > "$TMP/lockfile/home/sisyphus-logs/proj.stop"
 rc=0
 ( cd "$TMP/lockfile/proj" && HOME="$TMP/lockfile/home" PATH="$TMP/bin:/usr/bin:/bin" \
     BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
   >"$TMP/lockfile/collision.out" 2>"$TMP/lockfile/collision.err" || rc=$?
-[ "$rc" -eq 1 ] && pass 'lock file: pre-existing stop file is a collision, exits 1 (TC-1.3 AT3)' || fail 'lock file: pre-existing stop file is a collision, exits 1 (TC-1.3 AT3)'
-assert_contains "$TMP/lockfile/collision.err" "ERROR: $TMP/lockfile/home/sisyphus-logs/proj.stop already exists." 'lock file: collision error names the existing lock path (TC-1.3 AT3)'
+[ "$rc" -eq 1 ] && pass 'lock file: live-PID lock is a collision, exits 1 (TC-1.3 AT3)' || fail 'lock file: live-PID lock is a collision, exits 1 (TC-1.3 AT3)'
+assert_contains "$TMP/lockfile/collision.err" "babysit lock $TMP/lockfile/home/sisyphus-logs/proj.stop held by live PID $live_pid for 'proj'" 'lock file: collision error names the lock path and live PID (TC-1.3 AT3)'
+
+rc=0
+( cd "$TMP/lockfile/proj" && HOME="$TMP/lockfile/home" PATH="$TMP/bin:/usr/bin:/bin" \
+    BABYSIT_NONINTERACTIVE=1 BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
+  >"$TMP/lockfile/collision-ni.out" 2>"$TMP/lockfile/collision-ni.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'lock file: BABYSIT_NONINTERACTIVE turns a live-PID collision into exit 0 (TC-1.3 AT3d)' || fail 'lock file: BABYSIT_NONINTERACTIVE turns a live-PID collision into exit 0 (TC-1.3 AT3d)'
+assert_contains "$TMP/lockfile/collision-ni.err" "[skip] babysit lock $TMP/lockfile/home/sisyphus-logs/proj.stop held by live PID $live_pid for 'proj'" 'lock file: BABYSIT_NONINTERACTIVE skip message names the live PID (TC-1.3 AT3d)'
+kill "$live_pid" 2>/dev/null || true
+wait "$live_pid" 2>/dev/null || true
 
 mkdir -p "$TMP/lockfile/nocollision" "$TMP/lockfile/home2"
 make_preflight_repo "$TMP/lockfile/nocollision" >/dev/null 2>&1
@@ -552,6 +568,48 @@ run_preflight "$TMP/lockfile/nocollision/work" "$TMP/lockfile/home2" \
   "$TMP/lockfile/nocollision.out" "$TMP/lockfile/nocollision.err" || rc=$?
 [ "$rc" -eq 0 ] && pass 'lock file: no pre-existing stop file lets startup proceed (TC-1.3 AT3b)' || fail 'lock file: no pre-existing stop file lets startup proceed (TC-1.3 AT3b)'
 assert_contains "$TMP/lockfile/nocollision.out" 'PREFLIGHT_OK branch=main' 'lock file: first iteration setup reaches pre-flight (TC-1.3 AT3b)'
+
+mkdir -p "$TMP/lockfile/stale/home/sisyphus-logs"
+make_preflight_repo "$TMP/lockfile/stale" >/dev/null 2>&1
+echo 999999 > "$TMP/lockfile/stale/home/sisyphus-logs/work.stop"
+rc=0
+run_preflight "$TMP/lockfile/stale/work" "$TMP/lockfile/stale/home" \
+  "$TMP/lockfile/stale.out" "$TMP/lockfile/stale.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'lock file: dead-PID lock is cleared and startup proceeds (TC-1.3 AT3c)' || fail 'lock file: dead-PID lock is cleared and startup proceeds (TC-1.3 AT3c)'
+assert_contains "$TMP/lockfile/stale.err" "[lock] clearing stale lock $TMP/lockfile/stale/home/sisyphus-logs/work.stop (previous PID 999999 no longer running)" 'lock file: stale-lock clearing is logged (TC-1.3 AT3c)'
+assert_contains "$TMP/lockfile/stale.out" 'PREFLIGHT_OK branch=main' 'lock file: startup reaches pre-flight after clearing a dead-PID lock (TC-1.3 AT3c)'
+
+mkdir -p "$TMP/lockfile/legacy/home/sisyphus-logs"
+make_preflight_repo "$TMP/lockfile/legacy" >/dev/null 2>&1
+touch "$TMP/lockfile/legacy/home/sisyphus-logs/work.stop"
+rc=0
+run_preflight "$TMP/lockfile/legacy/work" "$TMP/lockfile/legacy/home" \
+  "$TMP/lockfile/legacy.out" "$TMP/lockfile/legacy.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'lock file: an empty (pre-upgrade touch(1)) lock is treated as stale too (TC-1.3 AT3c)' || fail 'lock file: an empty (pre-upgrade touch(1)) lock is treated as stale too (TC-1.3 AT3c)'
+assert_contains "$TMP/lockfile/legacy.out" 'PREFLIGHT_OK branch=main' 'lock file: startup reaches pre-flight after clearing an empty legacy lock (TC-1.3 AT3c)'
+
+# MAX_CONCURRENT_BABYSITS global cap: stub `pgrep` (ahead of the real one on
+# PATH) to simulate other babysit-with-review.sh processes already running,
+# since spinning up real concurrent processes would be flaky.
+mkdir -p "$TMP/lockfile/capbin" "$TMP/lockfile/capproj" "$TMP/lockfile/caphome"
+cat > "$TMP/lockfile/capbin/pgrep" <<'STUB'
+#!/bin/bash
+echo 3
+STUB
+chmod +x "$TMP/lockfile/capbin/pgrep"
+rc=0
+( cd "$TMP/lockfile/capproj" && HOME="$TMP/lockfile/caphome" PATH="$TMP/lockfile/capbin:/usr/bin:/bin" \
+    BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
+  >"$TMP/lockfile/cap.out" 2>"$TMP/lockfile/cap.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'lock file: MAX_CONCURRENT_BABYSITS cap skips with exit 0, not an error (TC-1.3 AT3e)' || fail 'lock file: MAX_CONCURRENT_BABYSITS cap skips with exit 0, not an error (TC-1.3 AT3e)'
+assert_contains "$TMP/lockfile/cap.err" '2 babysit(s) running; MAX_CONCURRENT_BABYSITS=1 — skipping' 'lock file: cap-skip message reports other-process count and the configured cap (TC-1.3 AT3e)'
+
+rc=0
+( cd "$TMP/lockfile/capproj" && HOME="$TMP/lockfile/caphome" PATH="$TMP/lockfile/capbin:/usr/bin:/bin" \
+    BABYSIT_NONINTERACTIVE=1 BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
+  >"$TMP/lockfile/cap-ni.out" 2>"$TMP/lockfile/cap-ni.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'lock file: MAX_CONCURRENT_BABYSITS cap skip is exit 0 under BABYSIT_NONINTERACTIVE too (TC-1.3 AT3e)' || fail 'lock file: MAX_CONCURRENT_BABYSITS cap skip is exit 0 under BABYSIT_NONINTERACTIVE too (TC-1.3 AT3e)'
+assert_contains "$TMP/lockfile/cap-ni.err" '[skip] 2 babysit(s) running; MAX_CONCURRENT_BABYSITS=1 — skipping' 'lock file: BABYSIT_NONINTERACTIVE prefixes the cap-skip message with [skip] (TC-1.3 AT3e)'
 
 # Sentinel detection: converts QA-TEST-PLAN.md Suite 1 TC-1.5 (STOP halts the
 # loop) and TC-1.6 (HANDOFF_REVIEW <PR> triggers a review cycle) into

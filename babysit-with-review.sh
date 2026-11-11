@@ -17,6 +17,16 @@
 #   SLEEP_SEC          default 10   pause between outer iterations (seconds)
 #   STUCK_N            default 3    consecutive identical results = stuck
 #   MAX_REVIEW_CYCLES  default 6    max reviewer/implementer cycles per PR
+#   BABYSIT_NONINTERACTIVE   set non-empty to silence interactive errors and exit 0
+#                            on held/stale-lock paths. For launchd/cron use.
+#   MAX_CONCURRENT_BABYSITS  default 1   global cap on simultaneous babysit-with-review
+#                            processes. Counted via pgrep across all projects.
+#
+# Locking: the per-project lock at ~/sisyphus-logs/<project>.stop holds the
+# owning PID. On startup, a lock whose PID is no longer running is treated as
+# stale and cleared automatically — a live PID still blocks the new run (or,
+# under BABYSIT_NONINTERACTIVE, makes it exit 0 rather than erroring). See
+# launchd/com.chrisrobertson.babysit.PROJECT.plist.template for scheduling.
 #
 # MCP-outage resilience: when Codex is selected as reviewer and cannot reach
 # its backend, the wrapper retries up to 3 times (0 / 60s / 300s back-off),
@@ -53,7 +63,7 @@
 
 set -uo pipefail
 
-VERSION="1.4.0"
+VERSION="1.5.0"
 
 usage() {
   cat <<'EOF'
@@ -92,6 +102,10 @@ Env vars:
   SLEEP_SEC          default 10  (seconds)
   STUCK_N            default 3
   MAX_REVIEW_CYCLES  default 6
+  BABYSIT_NONINTERACTIVE   set non-empty to silence interactive errors and exit
+                           0 on held/stale-lock paths. For launchd/cron use.
+  MAX_CONCURRENT_BABYSITS  default 1   global cap on simultaneous
+                           babysit-with-review processes.
 
 PR labels used by the review cycle:
   review-incomplete      Human intervention required; wrapper will NOT retry.
@@ -259,27 +273,50 @@ mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/${PROJECT}-$(date +%Y%m%d-%H%M%S)-$$.log"
 STOP_FILE="$LOG_DIR/${PROJECT}.stop"
 
+NONINTERACTIVE="${BABYSIT_NONINTERACTIVE:-}"
+MAX_CONCURRENT_BABYSITS="${MAX_CONCURRENT_BABYSITS:-1}"
+
+# Exit cleanly when scheduled (launchd/cron); error visibly when interactive.
+soft_exit() {
+  local code="$1"; shift
+  if [ -n "$NONINTERACTIVE" ]; then
+    echo "[skip] $*" >&2
+    exit 0
+  fi
+  echo "$*" >&2
+  exit "$code"
+}
+
+# --- per-project lock: stale-vs-live ---
 if [ -f "$STOP_FILE" ]; then
-  cat >&2 <<EOF
-ERROR: $STOP_FILE already exists.
+  OLD_PID="$(cat "$STOP_FILE" 2>/dev/null)"
+  if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+    soft_exit 1 "babysit lock $STOP_FILE held by live PID $OLD_PID for '$PROJECT'"
+  else
+    echo "[lock] clearing stale lock $STOP_FILE (previous PID ${OLD_PID:-empty} no longer running)" >&2
+    rm -f "$STOP_FILE"
+  fi
+fi
 
-Another babysit may already be running for '$PROJECT'.
-
-To check:
-  pgrep -af babysit
-
-If no other instance is running (e.g. a previous run crashed), remove the
-lock file and try again:
-  rm $STOP_FILE
-EOF
-  exit 1
+# --- global concurrency cap ---
+# pgrep -cf matches argv, so it includes our own bash invocation. Subtract 1.
+RUNNING="$(pgrep -cf 'babysit-with-review\.sh' 2>/dev/null || echo 1)"
+OTHERS=$(( RUNNING > 0 ? RUNNING - 1 : 0 ))
+if [ "$OTHERS" -ge "$MAX_CONCURRENT_BABYSITS" ]; then
+  soft_exit 0 "$OTHERS babysit(s) running; MAX_CONCURRENT_BABYSITS=$MAX_CONCURRENT_BABYSITS — skipping"
 fi
 
 TMP_RESULT=$(mktemp)
 TMP_REVIEW=$(mktemp)
 TMP_REVIEW_RESULT=$(mktemp)
 TMP_CODEX_FULL=$(mktemp)
-touch "$LOG" "$STOP_FILE"
+touch "$LOG"
+
+# --- claim the lock atomically ---
+# set -C (no-clobber) closes the small TOCTOU window between stale-check and lock-claim.
+if ! ( set -C; echo "$$" > "$STOP_FILE" ) 2>/dev/null; then
+  soft_exit 1 "another babysit grabbed $STOP_FILE for '$PROJECT' between checks"
+fi
 trap 'rm -f "$STOP_FILE" "$TMP_RESULT" "$TMP_REVIEW" "$TMP_REVIEW_RESULT" "$TMP_CODEX_FULL"' EXIT
 
 echo "Babysitting $PROJECT v${VERSION} (implementer=$IMPLEMENTER, reviewer=$REVIEWER, max=$MAX_ITER, stuck=$STUCK_N, review_cycles=$MAX_REVIEW_CYCLES) → $LOG"

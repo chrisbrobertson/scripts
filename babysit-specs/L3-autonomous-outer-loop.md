@@ -48,9 +48,15 @@ STOP                      # terminates outer loop
 (no sentinel)             # continues to next iteration
 
 # Lock file protocol
-~/sisyphus-logs/<project>.stop  # absent = allow run, creation = halt next iteration
-# A pre-existing stop file is a collision: exit 1. Script creates the file itself.
-# Removing the file mid-run is the graceful stop mechanism.
+~/sisyphus-logs/<project>.stop  # holds the owning PID; absent = allow run
+# A pre-existing stop file is a collision only while its PID is alive: exit 1
+# (or exit 0 under BABYSIT_NONINTERACTIVE). A dead-PID or empty (legacy) stop
+# file is stale and is cleared automatically. Script claims the file itself
+# with `set -C` (atomic, no-clobber). MAX_CONCURRENT_BABYSITS (default 1)
+# additionally caps simultaneous processes across all projects via `pgrep`,
+# exit 0 ("skipping") when at capacity. Removing the file mid-run is the
+# graceful stop mechanism. See launchd/com.chrisrobertson.babysit.PROJECT.plist.template
+# for scheduled (launchd) usage.
 
 # Per-iteration git worktree
 git worktree add -b wip/<project>/iter-N <path>  # created before implementer
@@ -115,7 +121,7 @@ REPO_BASE=<path>        # override helper-script base path (also via --repo-base
 - **Exit via stop file removal:** Graceful — lock file absent at next iteration check
 
 ### Invariants
-1. **Lock file semantics:** Stop file *absent* (or just deleted) → halt at next iteration check. A *pre-existing* stop file at start-up is a collision → `exit 1`. The script creates the file itself on startup and removes it via EXIT trap.
+1. **Lock file semantics:** Stop file *absent* (or just deleted) → halt at next iteration check. A *pre-existing* stop file at start-up holds the PID that claimed it; if that PID is still alive, it's a collision → `exit 1` (or, under `BABYSIT_NONINTERACTIVE`, a silent `exit 0` so a launchd/cron job isn't marked failed). If the PID is dead (or the file is empty — the pre-scheduling-feature `touch`-only format), the lock is stale and is cleared automatically before the new run claims it. A separate global cap, `MAX_CONCURRENT_BABYSITS` (default 1, counted via `pgrep` across all projects), also `exit 0`s ("skipping") when already at capacity, interactive or not — this is intended back-pressure, not an error. The script claims the lock itself with `set -C` (no-clobber) to close the stale-check/claim TOCTOU window, and removes it via EXIT trap. See `launchd/com.chrisrobertson.babysit.PROJECT.plist.template` for scheduled-run usage.
 2. **Iteration ordering:** Iterations execute sequentially (i=1, 2, ..., N)
 3. **Worktree-before-collect:** `git worktree add` runs before `collect_state()`, which in turn runs before the implementer invocation
 4. **Worktree-before-sentinel:** Worktree teardown completes *before* sentinel handling (so `gh pr checkout` in `run_review_cycle` finds no conflicting checkout)
@@ -125,7 +131,9 @@ REPO_BASE=<path>        # override helper-script base path (also via --repo-base
 ### Error model
 - **Invalid CLI argument:** Exit 2 with usage message (before lock file created, before log opened)
 - **Pre-flight failure:** Exit 1 with corrective instructions (unstaged changes, diverged branch, etc.)
-- **Lock file collision (pre-existing stop file):** Exit 1 with instructions to check for running process
+- **Lock file collision (live-PID stop file):** Exit 1 naming the lock path and the live PID; `exit 0` instead under `BABYSIT_NONINTERACTIVE`
+- **Lock file stale (dead-PID or empty stop file):** Logged and cleared automatically; startup proceeds
+- **Global concurrency cap reached (`MAX_CONCURRENT_BABYSITS`):** `exit 0` ("skipping") regardless of `BABYSIT_NONINTERACTIVE` — intentional back-pressure, not a failure
 - **Stop file removed mid-run:** Log message, break loop, exit 0
 - **Implementer non-zero exit:** Push any WIP commits, tear down worktree, run crash-quarantine sweep, break outer loop, exit 0
 - **MAX_ITER exhausted:** Log "Hit MAX_ITER", break loop, exit 0
@@ -136,7 +144,7 @@ REPO_BASE=<path>        # override helper-script base path (also via --repo-base
 Non-idempotent. Each iteration advances git state (commits, PRs). Re-running after halt resumes from current git state, not from start.
 
 ### Versioning policy
-Script version: `1.4.0` (semver, `--version` flag). Breaking changes (env var renames, sentinel format changes) require manual migration by user.
+Script version: `1.5.0` (semver, `--version` flag). Breaking changes (env var renames, sentinel format changes) require manual migration by user.
 
 ## Performance budget
 - **p50 iteration latency:** ~2 minutes (dominated by Claude inference)
@@ -167,14 +175,14 @@ Script version: `1.4.0` (semver, `--version` flag). Breaking changes (env var re
 ## Verifiers
 - Tech lead: Chris Robertson
 - API council / platform review: N/A (internal tool, no public API)
-- Security: lock file race condition accepted for single-user scenario (TOCTOU window negligible; blast radius: both processes halt gracefully). See SECURITY-REVIEW-PLAN.md §1.
+- Security: lock file race condition accepted for single-user scenario; the stale-check/claim TOCTOU window is now closed by an atomic `set -C` claim rather than a plain `touch` (blast radius if still raced: both processes halt gracefully). See SECURITY-REVIEW-PLAN.md §1.
 - QA: Test cases documented in QA-TEST-PLAN.md (TC-1.*). Test harness exists: `BABYSIT_TEST_MODE` + `test-babysit-with-review-cli.sh`.
 
 ## Failure modes & blast radius
 - **Contract violation (malformed sentinel):** Sentinel not detected, loop continues to next iteration. Blast: wasted iteration, developer notices in log.
 - **Perf regression (iteration latency spike):** Loop slows but does not halt. Blast: developer waits longer for completion.
 - **Telemetry loss (log write failure):** Logged output lost, but iteration continues. Blast: debugging harder if issue occurs.
-- **Lock file race condition:** Two processes start simultaneously before lock file created. Blast: both run until one detects collision, then both halt. Rare due to PID in log filename.
+- **Lock file race condition:** Two processes start simultaneously before lock file created. Blast: the `set -C` atomic claim lets at most one win; the loser exits via "another babysit grabbed the lock between checks" rather than corrupting the lock file. Rare in practice due to PID in log filename.
 
 # Bounds
 
@@ -193,7 +201,7 @@ Script version: `1.4.0` (semver, `--version` flag). Breaking changes (env var re
 
 ## Assumptions-that-could-flip
 - **Sequential iteration assumption.** If flipped to parallel: requires process pool, shared state management, and conflict resolution.
-- **File-based lock assumption.** If flipped to distributed lock: requires lock service (Redis, etcd) for multi-host coordination.
+- **File-based lock assumption.** If flipped to distributed lock: requires lock service (Redis, etcd) for multi-host coordination. Single-host PID liveness (`kill -0`) and a global `pgrep`-based concurrency cap are sufficient for the current single-Mac, launchd-scheduled deployment.
 - **Sleep-based pacing assumption.** If flipped to backoff/adaptive: requires latency tracking and dynamic sleep calculation.
 - **Bash stdout logging assumption.** If flipped to structured logging: requires log aggregation service and JSON/structured output.
 
@@ -209,8 +217,11 @@ Script version: `1.4.0` (semver, `--version` flag). Breaking changes (env var re
 ## Acceptance tests
 1. **Given** a clean git repo on default branch, **when** babysit-with-review.sh runs with MAX_ITER=1, **then** exactly 1 iteration executes and loop exits with code 0.
 2. **Given** unstaged changes in working tree, **when** babysit-with-review.sh starts, **then** pre-flight check fails with corrective instructions and exit code 1.
-3. **Given** a pre-existing stop file `~/sisyphus-logs/<project>.stop` exists before start-up, **when** babysit-with-review.sh runs, **then** exit 1 (collision — the script requires creating the lock file itself).
-3b. **Given** no pre-existing stop file, **when** babysit-with-review.sh starts, **then** the script creates the stop file and the first iteration executes normally.
+3. **Given** a pre-existing stop file `~/sisyphus-logs/<project>.stop` holding the PID of a still-running process, **when** babysit-with-review.sh runs, **then** exit 1 naming the lock path and live PID (or, under `BABYSIT_NONINTERACTIVE`, exit 0 with a `[skip]`-prefixed message).
+3b. **Given** no pre-existing stop file, **when** babysit-with-review.sh starts, **then** the script creates the stop file (containing its own PID) and the first iteration executes normally.
+3c. **Given** a pre-existing stop file whose PID is no longer running (or is empty — the pre-scheduling-feature `touch`-only format), **when** babysit-with-review.sh starts, **then** it logs clearing the stale lock and the first iteration executes normally.
+3d. **Given** `BABYSIT_NONINTERACTIVE` is set and the stop file holds a live PID, **when** babysit-with-review.sh starts, **then** it exits 0 with a `[skip]`-prefixed message naming the lock path and PID, instead of exiting 1.
+3e. **Given** `MAX_CONCURRENT_BABYSITS` other `babysit-with-review.sh` processes are already running (per `pgrep`), **when** babysit-with-review.sh starts, **then** it exits 0 ("skipping") regardless of `BABYSIT_NONINTERACTIVE` — reaching the cap is back-pressure, not a failure.
 4. **Given** stop file is removed mid-run, **when** next iteration checks, **then** loop exits gracefully with log message.
 5. **Given** implementer outputs `STOP` sentinel, **when** iteration completes, **then** loop exits with code 0 and log shows "STOP signal received".
 6. **Given** implementer outputs `HANDOFF_REVIEW 123`, **when** iteration completes, **then** review cycle runs before next iteration.
