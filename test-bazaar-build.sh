@@ -54,7 +54,7 @@ new_case only '{"1":{"labels":["bzr-ready"]},"2":{"labels":[]}}'
 run --issue 1 >/dev/null 2>&1
 assert_eq "--issue N dispatches that issue" "$(labels 1)" "bzr-pr-ready"
 rc=0; run --issue 2 >/dev/null 2>&1 || rc=$?
-assert_eq "AT9 --issue on non-ready without --force → exit 2" "$rc" "2"
+assert_eq "--issue on non-ready without --force → exit 2" "$rc" "2"
 assert_eq "…and touches nothing" "$(labels 2)" ""
 run --issue 2 --force >/dev/null 2>&1
 assert_eq "--issue --force dispatches anyway" "$(labels 2)" "bzr-pr-ready"
