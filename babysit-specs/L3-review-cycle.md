@@ -747,7 +747,7 @@ __REVIEW__
 0b. **Given** Codex pre-flight probe matches `credits_re`, **when** `run_review_cycle` is called, **then** PR is labelled `review-codex-no-credits` and babysitter exits 1 (no cycles run).
 0c. **Given** `fail_review_cycle`'s `gh pr ready --undo` returns non-zero, **when** function executes, **then** babysitter exits 1 (not logs WARNING and continues).
 1. **Given** PR #123 with BLOCKING issues, **when** review cycle runs, **then** Codex produces markdown review with `## BLOCKING` section, Claude addresses findings, cycle repeats.
-2. **Given** reviewer returns 0 BLOCKING findings, **when** cycle completes, **then** wrapper POSTs `codex-review=success` status, calls `gh pr ready` (best-effort), then PR is merged via `gh pr merge --squash --delete-branch [--auto]` and function returns 0.
+2. **Given** reviewer returns 0 BLOCKING findings, **when** cycle completes, **then** wrapper POSTs `codex-review=success` status, calls `gh pr ready` (best-effort), then PR is merged via `gh pr merge --squash --delete-branch --match-head-commit <reviewed-sha>` and function returns 0.
 2b. **Given** `codex-review` status POST fails, **when** BLOCKING=0, **then** wrapper logs WARNING and returns 0 without merging (PR stays open).
 2c. **Given** BLOCKING=0 and the PR is still marked draft (e.g. opened via `gh pr create --draft`, or drafted by an earlier bail with no undraft retry sweep), **when** the status POST succeeds, **then** `merge_reviewed_pr` calls `gh pr ready` before attempting `gh pr merge`; a `gh pr ready` failure is logged but does not prevent the merge attempt.
 3. **Given** cycle 3 starts, **when** Codex prompt is assembled, **then** prescriptive template is used (requires "Suggested fix:" for BLOCKING).
