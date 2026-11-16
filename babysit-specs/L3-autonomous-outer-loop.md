@@ -77,7 +77,7 @@ Developer invoking babysit-with-review.sh from project root directory.
 
 ## What we know
 From implementation (babysit-with-review.sh):
-- Script version: `VERSION="1.4.0"` (accessible via `--version`)
+- Script version: `VERSION="1.5.0"` (accessible via `--version`)
 - Loop runs from iter=1 to MAX_ITER (default 50)
 - Each iteration: MCP-outage retry check → `git worktree add` → collect_state() → `run_implementer` → worktree teardown → detect sentinel → stuck check → sleep
 - `run_implementer` dispatches to `run_claude` (default) or `run_codex_implementer` based on `$IMPLEMENTER`
