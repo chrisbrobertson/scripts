@@ -10,18 +10,31 @@ Security review of babysit-with-review.sh autonomous development system across L
 
 ## Review Areas
 
-### 1. Lock File Race Conditions (L3-autonomous-outer-loop)
+### 1. Lock File Race Conditions (L3-autonomous-outer-loop) — **RESOLVED**
 
 **Risk:** Two processes start simultaneously before lock file created, both run until collision detected.
 
-**Review checklist:**
-- [ ] Analyze lock file creation timing (line 243: `touch "$LOG" "$STOP_FILE"`)
-- [ ] Verify PID-based log filename prevents most collisions
-- [ ] Check trap handler cleanup (line 244: removes lock file on EXIT)
-- [ ] Assess blast radius: Both processes halt gracefully when collision detected
-- [ ] Determine if TOCTOU (time-of-check-to-time-of-use) window is acceptable for single-user tool
+**Status: Resolved.** The TOCTOU window this section flagged is closed. The
+stale-check-and-claim now runs as one transaction serialized by a persistent
+`fcntl.flock(LOCK_EX)` on a sibling `<project>.stop.guard` file (lines
+290-346): the kernel grants the lock to exactly one holder atomically, so
+there's no unprotected gap between reading the old PID and writing the new
+one. Shipped in v1.5.0 (#122); see CLAUDE.md's "Locking & scheduled runs"
+section for the full design rationale.
 
-**Recommendation:** Accept as-is for single-user scenario. If multi-user deployment needed, implement atomic lock file creation (e.g., `set -o noclobber` or `flock`).
+**Review checklist:**
+- [x] Lock claim is atomic, not a bare `touch` (lines 290-346: `flock`-guarded
+      read-decide-write of `$STOP_FILE`, guarded by `$STOP_FILE.guard`)
+- [x] Verify PID-based log filename prevents most collisions
+- [x] Check trap handler cleanup (line 346: `trap 'rm -f "$STOP_FILE"' EXIT`,
+      extended at line 374 to also clean up temp files once they exist)
+- [x] Assess blast radius: Both processes halt gracefully when collision detected
+- [x] Determine if TOCTOU window is acceptable for single-user tool — moot;
+      the window is closed by `flock`, not merely accepted
+
+**Recommendation:** No action needed — atomic `flock`-based claiming already
+shipped (v1.5.0, #122), which is what the original recommendation's fallback
+("if multi-user deployment needed, implement... flock") asked for.
 
 ---
 
@@ -64,7 +77,7 @@ Security review of babysit-with-review.sh autonomous development system across L
 **Risk:** Attacker-controlled input in Codex output could manipulate telltale regex detection.
 
 **Review checklist:**
-- [ ] Confirm telltale regex patterns (line 1143) are fixed strings, not user input
+- [ ] Confirm telltale regex patterns (line 1450) are fixed strings, not user input
 - [ ] Verify Codex output is captured from stdout/stderr, not constructed from variables
 - [ ] Check if regex patterns could match benign error messages (false positive risk)
 - [ ] Assess whether false positives cause wasteful retries or security issues (Answer: wasteful retries, not security)
@@ -95,10 +108,10 @@ local mcp_re='Transport send error:|...'
 **Risk:** User-controlled input (PR numbers, commit messages) passed to shell commands.
 
 **Review checklist:**
-- [ ] Verify PR_NUMBER validation (line 1572: `[[ "$pr_num" =~ ^[0-9]+$ ]]` — numeric only)
+- [ ] Verify PR_NUMBER validation (line 1971: `[[ "$pr_num" =~ ^[0-9]+$ ]]` — numeric only)
 - [ ] Check git/gh command construction for proper quoting
 - [ ] Audit Claude/Codex prompt assembly for command injection via `--append-system-prompt`
-- [ ] Confirm temp files use mktemp (line 239-242: secure temp file creation)
+- [ ] Confirm temp files use mktemp (lines 369-372: secure temp file creation)
 
 **Recommendation:** Accept as-is. PR numbers are validated as numeric; temp files use mktemp; prompts are passed via stdin or --flag (not shell eval).
 
@@ -146,7 +159,7 @@ local mcp_re='Transport send error:|...'
 
 | Finding | Severity | Status |
 |---|---|---|
-| Lock file race condition | Low | Accepted (rare, single-user scenario) |
+| Lock file race condition | Low | **Resolved** — atomic `flock`-based claim (shipped in v1.5.0, #122) |
 | PR label race condition | Low | **Resolved** — fail-closed (`exit 1`), not warnings |
 | Auto-merge approval | Medium | **Resolved** — `codex-review` status gate + `setup-branch-protection.sh` shipped in v1.1.0 |
 | Telltale regex injection | Low | **Resolved** — maintenance comment added to source |
