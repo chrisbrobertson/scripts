@@ -63,6 +63,7 @@ empirical tests (`test-*`). No formal test suite, no build step, no CI.
 | `skills/test-coverage-validation/` | Claude Skill package (`SKILL.md` + `references/`): assesses whether a project has sufficient test coverage across unit, integration, contract, E2E, UX, performance, security, and accessibility levels, then prioritizes and optionally remediates gaps. Unrelated to the babysit/Bazaar loop family — a standalone skill versioned in this repo. |
 | `launchd/com.chrisrobertson.babysit.PROJECT.plist.template` | launchd LaunchAgent template for scheduling `babysit-with-review.sh`; `__PROJECT__`/`__PROJECT_PATH__` placeholders. See **Locking & scheduled runs** below. |
 | `launchd/install-babysit-agent.sh` | Fills the plist template for `<project_basename> <project_absolute_path>`, writes it to `~/Library/LaunchAgents/`, and bootstraps it via `launchctl` |
+| `deprecated/babysit.sh` | Deprecated 2026-04-30, superseded by `babysit-with-review.sh` (commit `f7b5cab`); kept only for git history, not run or tested |
 
 ## babysit-with-review.sh — locking & scheduled runs
 
