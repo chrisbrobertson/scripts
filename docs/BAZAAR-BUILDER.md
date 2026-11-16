@@ -218,8 +218,9 @@ worker's log file. `BZR_NO_STREAM=1` turns the relay off (cron jobs, for instanc
 | Worktrees (removed after each run) | `~/.bazaar/<owner>-<repo>/wt/` |
 | Lock and stop files | `~/.bazaar/<owner>-<repo>/issues.lock`, `issues.stop`, `build.lock`, `build.stop` |
 
-Readable lines in a worker log start with two spaces (`  [tool] …`, `  [text] …`,
-`  [review:spec] …`); the JSON lines are the raw model stream. This works well:
+Readable lines in a worker log mostly start with two spaces (`  [tool] …`, `  [text] …`);
+the per-cycle `[review:spec]`/`[review:code]` summary line (`PR #N → cycle C: …`, as shown
+above) is unindented. The JSON lines are the raw model stream. This works well:
 
 ```bash
 grep -v '^{"type"' ~/.bazaar/<owner>-<repo>/logs/issues-123-*.log | tail -40
