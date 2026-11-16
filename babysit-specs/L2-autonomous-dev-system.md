@@ -123,10 +123,10 @@ From the existing implementation:
 
 ### Orchestrator → Codex CLI (implementation role, optional)
 
-- **Protocol:** Subprocess invocation with autonomous sandbox
+- **Protocol:** Subprocess invocation with autonomous sandbox and output file
 - **Request shape:**
   ```bash
-  codex exec --dangerously-bypass-approvals-and-sandbox \
+  codex exec --output-last-message "$out_file" --dangerously-bypass-approvals-and-sandbox \
     [--model MODEL] [-c "model_reasoning_effort=\"LEVEL\""] "<prompt>"
   ```
 - **Sentinel contract (outer loop/review):** Same as Claude implementation role
