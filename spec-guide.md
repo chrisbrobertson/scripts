@@ -207,7 +207,7 @@ L4 has no `Composes with / replaces`, no `Analog`, no `Reader & next action`, an
 
 **Complexity scoring.** Every spec carries `total` / `band` / `drivers` / `scored_on`. This repo's specs use free-form driver names (`novelty`, `time_estimate`, `scope`, `external_integration`, `surface_span`) rather than a fixed dimension list, and only two totals appear (`2` → `trivial`, `3` → `moderate`) — **not enough examples here to pin down exact band thresholds or the full driver vocabulary.** Don't invent precise math; pick 2-4 drivers that plausibly explain the spec's difficulty, assign a total that's low for genuinely small/well-understood work, and ask the owner to confirm the band name if it matters for a `ready` gate decision.
 
-**Status lifecycle.** Observed values: `review` (awaiting owner approval) and `ready` (approved, safe to build against). `draft` and `deprecated` aren't used yet in this repo but are reasonable to introduce if needed — confirm with the owner before treating a spec as `ready` without an explicit status change.
+**Status lifecycle.** Observed values: `review` (awaiting owner approval) and `ready` (approved, safe to build against). `draft` and `deprecated` aren't used yet in this repo but are reasonable to introduce if needed — confirm with the owner before treating a spec as `ready` without an explicit status change. The grandfathered `babysit-specs/` corpus (see below) predates this two-value lifecycle and uses `status: approved` as its own synonym for `ready` instead — six of its eight specs carry it. Don't introduce `approved` into new, non-grandfathered specs; use `ready`.
 
 **Amending vs. new spec.** When a companion capability extends an existing product/system rather than standing alone, prefer amending the existing L1/L2 file's relevant prose (e.g. add a paragraph to `## What we know`, a new bullet to `## Composes with / replaces`) over creating a new L1/L2 or a separate amendments file. Record *why* in the index's Status section (see `babysit-specs/README.md`'s "Coordination note" style).
 
@@ -257,7 +257,7 @@ Lint **reports findings to the owner** — it doesn't silently fix content quest
 
 Two special files sit beside the spec pages. They serve different purposes: `index.md` is content-oriented (what exists), `log.md` is chronological (what happened).
 
-> **Grandfathered corpus:** `babysit-specs/` predates these conventions — its `README.md` plays the index role, it has no `log.md`, and its spec-ID references are unlinked plain text. It stays that way until next migrated. Agents working in it fall back accordingly: treat `README.md` as the index, and git history as the log.
+> **Grandfathered corpus:** `babysit-specs/` predates these conventions — its `README.md` plays the index role, it has no `log.md`, its spec-ID references are unlinked plain text, and it uses `status: approved` in place of `status: ready` (see "Status lifecycle" above). It stays that way until next migrated. Agents working in it fall back accordingly: treat `README.md` as the index, git history as the log, and `approved` as equivalent to `ready`.
 
 ### index.md
 
