@@ -940,7 +940,7 @@ correct action depends on whether a babysitter is currently running:
      ```
   2. **Then `rm` the stop-file.** The running babysitter created and owns
      this file itself as its run-lock, claimed atomically under a kernel
-     flock guard (`babysit-with-review.sh:337`); its
+     flock guard (`babysit-with-review.sh:317`); its
      `EXIT` trap deletes it on exit. `touch`-ing it is a no-op — the file
      already exists, and the loop only checks for *absence* to detect a stop
      request. Removing it makes the loop notice on its next check
