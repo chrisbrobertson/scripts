@@ -633,6 +633,38 @@ grep -q 'previous PID 999999 no longer running' "$TMP/lockfile/race/a.err" 2>/de
 grep -q 'previous PID 999999 no longer running' "$TMP/lockfile/race/b.err" 2>/dev/null && clear_count=$((clear_count + 1))
 [ "$clear_count" -eq 1 ] && pass 'lock mutex: the original stale PID is cleared exactly once, not by both racers' || fail 'lock mutex: the original stale PID is cleared exactly once, not by both racers'
 
+# Deterministic live-holder barrier (PR #122 review). The concurrent race above
+# can, in principle, flake: if one invocation claims, runs pre-flight, and exits
+# (its EXIT trap removing the lock) before the other even reads the lock, both
+# legitimately succeed and no collision is observed. This companion test removes
+# the timing dependency by using a real process we control as the held "winner":
+# a background `sleep` whose PID is pre-seeded into the lock stays alive across
+# the whole contender attempt (the barrier), so the collision is guaranteed; we
+# then release the winner (kill it) and prove a fresh start clears the now-stale
+# lock and proceeds. No reliance on process scheduling order.
+mkdir -p "$TMP/lockfile/barrier/home/sisyphus-logs"
+make_preflight_repo "$TMP/lockfile/barrier" >/dev/null 2>&1
+sleep 300 &
+holder_pid=$!
+echo "$holder_pid" > "$TMP/lockfile/barrier/home/sisyphus-logs/work.stop"
+rc=0
+( cd "$TMP/lockfile/barrier/work" && HOME="$TMP/lockfile/barrier/home" PATH="$TMP/bin:/usr/bin:/bin" \
+    MAX_CONCURRENT_BABYSITS=1000000 BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
+  >"$TMP/lockfile/barrier/contend.out" 2>"$TMP/lockfile/barrier/contend.err" || rc=$?
+[ "$rc" -eq 1 ] && pass 'lock barrier: contender exits 1 while a live holder owns the lock (PR #122)' || { echo "  rc=$rc"; fail 'lock barrier: contender exits 1 while a live holder owns the lock (PR #122)'; }
+if grep -Eq "held by live PID $holder_pid for 'work'" "$TMP/lockfile/barrier/contend.err"; then pass 'lock barrier: contender reports the live-holder collision (PR #122)'; else cat "$TMP/lockfile/barrier/contend.err" >&2; fail 'lock barrier: contender reports the live-holder collision (PR #122)'; fi
+if [ "$(cat "$TMP/lockfile/barrier/home/sisyphus-logs/work.stop" 2>/dev/null)" = "$holder_pid" ]; then pass 'lock barrier: a live holder is never cleared or overwritten by the contender (PR #122)'; else fail 'lock barrier: a live holder is never cleared or overwritten by the contender (PR #122)'; fi
+# Release the barrier: once the holder exits its PID is stale, so a fresh start
+# must clear it and reach pre-flight.
+kill "$holder_pid" 2>/dev/null
+wait "$holder_pid" 2>/dev/null || true
+rc=0
+( cd "$TMP/lockfile/barrier/work" && HOME="$TMP/lockfile/barrier/home" PATH="$TMP/bin:/usr/bin:/bin" \
+    MAX_CONCURRENT_BABYSITS=1000000 BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
+  >"$TMP/lockfile/barrier/released.out" 2>"$TMP/lockfile/barrier/released.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'lock barrier: a fresh start after the holder exits clears the stale lock and proceeds (PR #122)' || { echo "  rc=$rc"; fail 'lock barrier: a fresh start after the holder exits clears the stale lock and proceeds (PR #122)'; }
+if grep -q 'PREFLIGHT_OK branch=main' "$TMP/lockfile/barrier/released.out"; then pass 'lock barrier: released fresh start reaches pre-flight (PR #122)'; else fail 'lock barrier: released fresh start reaches pre-flight (PR #122)'; fi
+
 # MAX_CONCURRENT_BABYSITS global cap: stub `pgrep` (ahead of the real one on
 # PATH) to simulate other babysit-with-review.sh processes already running,
 # since spinning up real concurrent processes would be flaky. The real script
