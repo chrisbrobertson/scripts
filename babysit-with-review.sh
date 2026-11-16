@@ -299,8 +299,10 @@ if [ -f "$STOP_FILE" ]; then
 fi
 
 # --- global concurrency cap ---
-# pgrep -cf matches argv, so it includes our own bash invocation. Subtract 1.
-RUNNING="$(pgrep -cf 'babysit-with-review\.sh' 2>/dev/null || echo 1)"
+# pgrep -f lists matching PIDs (one per line); macOS pgrep has no -c flag, so
+# count lines ourselves. The list includes our own bash invocation — subtract 1.
+RUNNING="$(pgrep -f 'babysit-with-review\.sh' 2>/dev/null | wc -l | tr -d ' ')"
+RUNNING="${RUNNING:-1}"
 OTHERS=$(( RUNNING > 0 ? RUNNING - 1 : 0 ))
 if [ "$OTHERS" -ge "$MAX_CONCURRENT_BABYSITS" ]; then
   soft_exit 0 "$OTHERS babysit(s) running; MAX_CONCURRENT_BABYSITS=$MAX_CONCURRENT_BABYSITS — skipping"

@@ -590,11 +590,13 @@ assert_contains "$TMP/lockfile/legacy.out" 'PREFLIGHT_OK branch=main' 'lock file
 
 # MAX_CONCURRENT_BABYSITS global cap: stub `pgrep` (ahead of the real one on
 # PATH) to simulate other babysit-with-review.sh processes already running,
-# since spinning up real concurrent processes would be flaky.
+# since spinning up real concurrent processes would be flaky. The real script
+# counts matched PIDs via `pgrep -f ... | wc -l` (macOS pgrep has no -c flag),
+# so the stub lists one fake PID per line rather than printing a count.
 mkdir -p "$TMP/lockfile/capbin" "$TMP/lockfile/capproj" "$TMP/lockfile/caphome"
 cat > "$TMP/lockfile/capbin/pgrep" <<'STUB'
 #!/bin/bash
-echo 3
+printf '11111\n22222\n33333\n'
 STUB
 chmod +x "$TMP/lockfile/capbin/pgrep"
 rc=0
