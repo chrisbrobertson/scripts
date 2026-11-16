@@ -758,6 +758,10 @@ for the live-PR path.
 **When:** Function sleeps  
 **Then:** Log message "waiting 60s before retry (attempt 2 of 3)" appears
 
+**Status: automated.** `test-babysit-review-retry-log-format.sh` (recording-stub
+harness, codex/sleep stubbed on PATH, no network) drives `codex_review_with_retry()`
+via `BABYSIT_TEST_MODE=reviewer` and asserts the exact log line.
+
 **Test steps:**
 1. Trigger retry scenario (TC-3.2)
 2. Verify: `grep "waiting 60s before retry (attempt 2 of 3)" ~/sisyphus-logs/*.log`
@@ -769,6 +773,9 @@ for the live-PR path.
 **When:** Function returns  
 **Then:** Log message shows "MCP transport failure on attempt 3 of 3 (rc=N, review=empty)"
 
+**Status: automated.** `test-babysit-review-retry-log-format.sh` covers this
+alongside TC-3.7 — same harness, three failing attempts in a row.
+
 **Test steps:**
 1. Trigger 3-attempt failure scenario (TC-3.4)
 2. Verify: `grep "MCP transport failure on attempt 3 of 3" ~/sisyphus-logs/*.log`
@@ -778,16 +785,18 @@ for the live-PR path.
 **Status note (TC-3.9 through TC-3.15 below):** these cover acceptance tests 9-15
 in L3-mcp-resilience.md (`compat_re`/`credits_re` priority, structural-validation
 edge cases, and the false-positive telltale regression), added to the spec after
-TC-3.1-3.8 were originally drafted. Unlike the rest of this suite, they are already
-automated — `test-bazaar-review-lib.sh` (recording-stub harness, no live
-Claude/Codex/gh calls) asserts each one by its TC ID against `review_with_retry()`
-in `lib/bazaar-review.sh`, the library `babysit-with-review.sh` keeps its own copy
-of (see CLAUDE.md). That harness covers the shared retry/telltale logic; it does
-not exercise `babysit-with-review.sh`'s own `codex_review_with_retry()` copy
-directly — open PR #45 (`BABYSIT_TEST_MODE=reviewer` coverage) aims to close that
-gap for TC-3.1-3.6/3.9-3.14, but explicitly excludes TC-3.15 by number (see its own
-commit text). `test-babysit-review-false-positive.sh` closes the TC-3.15 half of
-the gap standalone, independently of #45, so the two can land in either order.
+TC-3.1-3.8 were originally drafted. They are automated — `test-bazaar-review-lib.sh`
+(recording-stub harness, no live Claude/Codex/gh calls) asserts each one by its TC ID
+against `review_with_retry()` in `lib/bazaar-review.sh`, the library
+`babysit-with-review.sh` keeps its own copy of (see CLAUDE.md). That harness covers
+the shared retry/telltale logic; it does not exercise `babysit-with-review.sh`'s own
+`codex_review_with_retry()` copy directly — open PR #45 (`BABYSIT_TEST_MODE=reviewer`
+coverage) aims to close that gap for TC-3.1-3.6/3.9-3.14, but explicitly excludes
+TC-3.15 by number (see its own commit text). `test-babysit-review-false-positive.sh`
+closes the TC-3.15 half of the gap standalone, independently of #45, so the two can
+land in either order. `test-babysit-review-retry-log-format.sh` closes the remaining
+TC-3.7/TC-3.8 half the same way — also standalone, also independent of #45 (see the
+status notes under TC-3.7/TC-3.8 above).
 
 ### TC-3.9: Compat Telltale Alone
 **Given:** Codex exits non-zero with output containing `requires a newer version of Codex` (`compat_re` match) and no valid review  
@@ -993,12 +1002,15 @@ yet for those.
 machine, MCP resilience): those cases still require live Claude/Codex/gh calls or
 manual network interference (blocking `chatgpt.com` to simulate MCP failures)
 because no `BABYSIT_TEST_MODE`-style stub exists yet for `run_review_cycle`'s cycle
-loop or for `babysit-with-review.sh`'s own `codex_review_with_retry()` copy.
-Extending `BABYSIT_TEST_MODE` (or a sibling stub mode) to cover those two surfaces
-would let the rest of Suite 2 and TC-3.1-3.8 collapse into the same fast,
-deterministic run as Suite 4 and Suite 1's/Suite 2's automated cases. TC-3.9-3.15
-are the exception: they're already covered this way, just against the `lib/bazaar-review.sh`
-copy of the same retry/telltale logic (`test-bazaar-review-lib.sh`) rather than
+loop. Extending `BABYSIT_TEST_MODE` (or a sibling stub mode) to cover that surface
+would let the rest of Suite 2 collapse into the same fast, deterministic run as
+Suite 4 and Suite 1's/Suite 2's automated cases. TC-3.1-3.8 are a partial
+exception: `codex_review_with_retry()`'s own `BABYSIT_TEST_MODE=reviewer` hook
+already exists, so TC-3.7/TC-3.8 (the log-message-format checks) are automated —
+`test-babysit-review-retry-log-format.sh` — independently of open PR #45; TC-3.1-3.6
+remain pending #45's merge (see the status note above TC-3.9). TC-3.9-3.15 are
+automated a third way, against the `lib/bazaar-review.sh` copy of the same
+retry/telltale logic (`test-bazaar-review-lib.sh`) rather than
 `babysit-with-review.sh`'s copy — see Test Suite 3 above.
 
 ### Short-term (Manual Testing, Suites 1-3 only)
