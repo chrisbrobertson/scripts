@@ -288,51 +288,61 @@ soft_exit() {
 }
 
 # --- per-project lock: stale-vs-live, claimed atomically ---
-# Every claim attempt — fresh or stale-clearing — serializes through one
-# mkdir-based mutex, $LOCK_DIR. mkdir is atomic on any POSIX filesystem, so
-# only one process is ever inside the check-and-write sequence below at a
-# time. Without this, a fresh claimant's `set -C` write and the stale-
-# clearing path's unprotected rewrite raced directly against each other: a
-# fresh claim could land in the window between the clearing path's
-# `rm -f "$STOP_FILE"` and its own `echo "$$" >`, then get silently
-# overwritten by that rewrite, leaving two processes both believing they
-# hold the lock.
+# The stop-file stale-check-and-replace is a single read-decide-write
+# transaction: read the old PID, decide whether that process is still
+# alive, and — only if not — replace the file with our own PID. A bash-
+# level mkdir/rmdir mutex can't guard that transaction: the window between
+# a waiter's mkdir succeeding and it publishing its own PID into the mutex
+# directory is itself unprotected, so a second waiter reading an
+# as-yet-unpublished PID sees "abandoned" and deletes the first waiter's
+# live mutex out from under it — and recovering a mutex whose owner died
+# mid-claim has the identical race in the other direction (a second
+# waiter's delayed abandonment-cleanup can delete a third waiter's
+# already-reclaimed, legitimate ownership). Either way, two processes can
+# end up believing they both hold the mutex and race directly on the
+# unprotected stale-clear-and-rewrite below.
 #
-# The mutex records its own holder's PID in $LOCK_DIR/pid so it can't jam
-# every future startup if its holder dies mid-claim (e.g. kill -9 between
-# mkdir and the eventual rmdir): a waiter whose mkdir fails checks whether
-# the recorded PID is still alive, and forcibly reclaims an abandoned mutex
-# instead of sleep-looping on it forever. Reclaiming is best-effort — if
-# two waiters both see the same dead owner and race, mkdir on the next
-# iteration still arbitrates atomically, so only one of them proceeds.
-LOCK_DIR="$STOP_FILE.lock"
-while :; do
-  if mkdir "$LOCK_DIR" 2>/dev/null; then
-    echo "$$" > "$LOCK_DIR/pid"
-    break
-  fi
-  LOCK_PID="$(cat "$LOCK_DIR/pid" 2>/dev/null)"
-  if [ -n "$LOCK_PID" ] && kill -0 "$LOCK_PID" 2>/dev/null; then
-    sleep 0.2
-    continue
-  fi
-  rm -rf "$LOCK_DIR" 2>/dev/null
-  sleep 0.2
-done
-trap 'rm -rf "$LOCK_DIR" 2>/dev/null' EXIT
+# flock(2) has no such gap: the kernel grants the lock to exactly one
+# holder atomically, there's no separate "publish ownership" step to race,
+# and the lock releases itself the instant the holding process's fd closes
+# — including on kill -9 — with nothing left behind to misinterpret as
+# abandoned. The guard file is never removed; only the lock on it is held
+# for the duration of the claim.
+CLAIM_OUT=$(python3 - "$STOP_FILE" "$$" <<'PY'
+import fcntl, os, sys
 
-if ( set -C; echo "$$" > "$STOP_FILE" ) 2>/dev/null; then
-  : # fresh claim
-else
-  OLD_PID="$(cat "$STOP_FILE" 2>/dev/null)"
-  if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
-    soft_exit 1 "babysit lock $STOP_FILE held by live PID $OLD_PID for '$PROJECT'"
-  fi
-  echo "[lock] clearing stale lock $STOP_FILE (previous PID ${OLD_PID:-empty} no longer running)" >&2
-  rm -f "$STOP_FILE"
-  echo "$$" > "$STOP_FILE"
-fi
-rm -rf "$LOCK_DIR" 2>/dev/null
+stop_path, owner_pid = sys.argv[1], sys.argv[2]
+guard_path = stop_path + ".guard"
+with open(guard_path, "a") as guard:
+    fcntl.flock(guard, fcntl.LOCK_EX)
+    old = ""
+    if os.path.exists(stop_path):
+        with open(stop_path) as f:
+            old = f.read().strip()
+    if old:
+        try:
+            pid = int(old)
+            if pid <= 0:
+                raise ValueError("non-positive pid")
+            os.kill(pid, 0)
+        except (ProcessLookupError, ValueError):
+            pass
+        else:
+            print(old)
+            sys.exit(10)
+    if old:
+        print(f"[lock] clearing stale lock {stop_path} "
+              f"(previous PID {old} no longer running)", file=sys.stderr)
+    with open(stop_path, "w") as f:
+        f.write(owner_pid + "\n")
+PY
+)
+CLAIM_RC=$?
+case "$CLAIM_RC" in
+  0) ;;
+  10) soft_exit 1 "babysit lock $STOP_FILE held by live PID $CLAIM_OUT for '$PROJECT'" ;;
+  *) echo "babysit lock claim failed unexpectedly (rc=$CLAIM_RC) for $STOP_FILE" >&2; exit 1 ;;
+esac
 trap 'rm -f "$STOP_FILE"' EXIT
 
 # --- global concurrency cap ---
