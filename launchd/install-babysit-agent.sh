@@ -39,6 +39,13 @@ sed -e "s|__PROJECT__|$PROJECT|g" -e "s|__PROJECT_PATH__|$PROJECT_PATH|g" "$TEMP
 
 echo "Wrote $DEST"
 
+# launchd opens StandardOutPath/StandardErrorPath (see the template:
+# ~/sisyphus-logs/launchd-<project>.{out,err}) when it spawns the job, before
+# babysit-with-review.sh gets a chance to `mkdir -p` its log dir. On a fresh
+# machine that parent directory may not exist yet, which makes launchd fail to
+# start the job. Create it up front so the very first scheduled run can log.
+mkdir -p "$HOME/sisyphus-logs"
+
 if command -v plutil >/dev/null 2>&1; then
   plutil -lint "$DEST"
 fi
