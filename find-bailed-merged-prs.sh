@@ -74,6 +74,10 @@ BAILED_PHRASES = [
     'marking PR',                # fail_review_cycle log line (post-fix)
     'non-MCP failure',           # codex non-transport fail (pre-compat-fix)
     'requires a newer version of Codex',  # compat_re: CLI too old for model
+    'Your workspace is out of credits',   # credits_re: Codex workspace exhausted
+    'Transport send error:',              # mcp_re telltale 1: MCP transport failure
+    'tool call failed for `codex_apps/',  # mcp_re telltale 2: MCP transport failure
+    'error sending request for url (https://chatgpt.com/',  # mcp_re telltale 3
     'non-zero exit',             # implementation or review-pass claude crash
 ]
 
