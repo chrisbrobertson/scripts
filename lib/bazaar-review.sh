@@ -1007,7 +1007,7 @@ remediation_prompt() {
   esac
 }
 
-# Stage model per cycle (babysit-builder.sh:1245-1251). Spec mode uses the stage default.
+# Stage model per cycle (babysit-builder.sh:1252-1261). Spec mode uses the stage default.
 remediation_model() {
   local mode="$1" cycle="$2"
   case "$mode:$cycle" in
