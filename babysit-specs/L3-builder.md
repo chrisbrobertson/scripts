@@ -114,7 +114,7 @@ one — any ticket (GitHub or Jira) carrying that label is eligible work.
 ## What we know
 Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOUS-DEV
 (owner-approved 2026-08-27), plus mechanics directly inherited from the shipped
-`babysit-with-review.sh` v1.2.0 implementation this script mirrors:
+`babysit-with-review.sh` v1.5.0 implementation this script mirrors:
 
 - **`build-ready` label is the work source, ticket type is not constrained.** The
   build queue is any ticket — GitHub issue or Jira issue, sub-ticket or otherwise —
@@ -140,9 +140,9 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
   `codex-review=success`, so the status can never go green against a SHA the PR does
   not carry. Confirmed against
   the shipped implementation: `babysit-with-review.sh` uses `wip/<project>/iter-<N>`
-  off `HEAD` (`git worktree add -b "$_wt_branch" "$_wt_dir" HEAD`, line ~2530);
+  off `HEAD` (`git worktree add -b "$_wt_branch" "$_wt_dir" HEAD`, line ~2621);
   `babysit-work-prep.sh` uses `work-prep/<slug>-<pid>` off the default branch's SHA
-  (`git worktree add -b "$branch" "$worktree" "$base_sha"`, line ~1258). Neither ever
+  (`git worktree add -b "$branch" "$worktree" "$base_sha"`, line ~1263). Neither ever
   reuses a branch across attempts, so a rebuilt ticket starts from a genuinely clean
   base every time — no state from a prior crashed or abandoned attempt can leak in.
   Builder follows the same pattern (e.g., `build/<slug>-<pid>`).
@@ -259,7 +259,7 @@ sign-off before `babysit-builder.sh` is built against this spec:
   (`build-ready-for-merge` convergence, `build-max-cycles`, and an ordinary `build-incomplete`
   bail) pass the same generic "PR halted for human merge" string — it does not carry the
   bail's real semantics there, so a human must read the PR's own label to tell those three
-  apart. The fourth path, a PR-branch/worktree-branch mismatch (`babysit-builder.sh:1632`,
+  apart. The fourth path, a PR-branch/worktree-branch mismatch (`babysit-builder.sh:1633`,
   also `build-incomplete`-labelled), passes a distinct "PR quarantined — branch mismatch"
   heading instead, so that one case is self-describing in the ticket comment.
   The three resumable quarantine labels (`build-mcp-outage`, `build-codex-outdated`,
