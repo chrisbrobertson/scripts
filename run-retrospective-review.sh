@@ -265,7 +265,21 @@ print(d.get("mergedAt") or "unknown")
     codex_rc=${PIPESTATUS[0]}
     set -e
 
-    # Compat check first — no retry, caller must upgrade CLI.
+    # Structural success first: a clean, valid review always wins, even if the
+    # transcript also contains a telltale substring — Codex's own commentary can
+    # quote back reviewed source/spec text verbatim, which must not be mistaken
+    # for a real backend error (same ordering as babysit-with-review.sh).
+    if [ "$codex_rc" -eq 0 ] && [ -s "$tmp_review" ]; then
+      if grep -qE '^## BLOCKING[[:space:]]*$' "$tmp_review" 2>/dev/null \
+          && grep -qE '^## RECOMMENDED[[:space:]]*$' "$tmp_review" 2>/dev/null \
+          && grep -qE '^## INFORMATION[[:space:]]*$' "$tmp_review" 2>/dev/null; then
+        review_ok=1
+        break
+      fi
+      echo "  [codex] exit 0 but review missing required section headers; treating as failure" >&2
+    fi
+
+    # Compat check — no retry, caller must upgrade CLI.
     if grep -qE "$COMPAT_RE" "$tmp_codex_full" 2>/dev/null; then
       echo "PR #$pr_num: Codex failure (compat) → skipped (upgrade Codex CLI before retrying)" >&2
       compat_failed=1
@@ -277,17 +291,6 @@ print(d.get("mergedAt") or "unknown")
       echo "PR #$pr_num: Codex failure (no credits) → skipped (add credits before retrying)" >&2
       credits_failed=1
       break
-    fi
-
-    # Structural validation: require all three section headers.
-    if [ "$codex_rc" -eq 0 ] && [ -s "$tmp_review" ]; then
-      if grep -qE '^## BLOCKING[[:space:]]*$' "$tmp_review" 2>/dev/null \
-          && grep -qE '^## RECOMMENDED[[:space:]]*$' "$tmp_review" 2>/dev/null \
-          && grep -qE '^## INFORMATION[[:space:]]*$' "$tmp_review" 2>/dev/null; then
-        review_ok=1
-        break
-      fi
-      echo "  [codex] exit 0 but review missing required section headers; treating as failure" >&2
     fi
 
     # MCP transport failure — retry.
