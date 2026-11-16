@@ -107,7 +107,13 @@ Inherits `ASF-FEAT-MCP-RESILIENCE` (0-4) for reviewer calls. `run_review_cycle` 
 A cycle is idempotent per (PR head SHA, cycle number); history file makes re-runs append rather than restart.
 
 ### Versioning policy
-`BZR_REVIEW_LIB_VERSION` string; workers assert a minimum at source time.
+`lib/bazaar-review.sh` carries its own `BZR_REVIEW_LIB_VERSION` string (`lib/bazaar-review.sh:31`,
+currently `0.1.2`) for diagnostic identification. Neither worker checks it: both
+`bazaar-issue-worker.sh` and `bazaar-build-worker.sh` `source` the lib unconditionally,
+with no reference to `BZR_REVIEW_LIB_VERSION` anywhere in either script — there is no
+minimum-version assertion today, despite the original draft's intent that workers
+assert one at source time. A breaking change to the lib's contract currently requires
+auditing both worker call sites by hand rather than failing loudly at source time.
 
 ## Performance budget
 Unchanged from the sources: reviewer 1-7 min per call, implementer 5-30 min per remediation.
