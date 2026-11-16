@@ -30,12 +30,12 @@ Implementing agent: extract per the function map below, port the recording-stub 
 ```bash
 source "$SCRIPTS_DIR/lib/bazaar-review.sh"
 
-# Implementer side (from babysit-builder.sh:650-716)
+# Implementer side (from babysit-builder.sh:650-711)
 run_implementer  <prompt> <out_file> <run_dir> [stage_model]      # dispatches run_claude | run_codex_implementer
 run_claude       <prompt> <out_file> <run_dir> [stage_model]      # honours IMPLEMENTER_MODEL / IMPLEMENTER_EFFORT
 run_codex_implementer <prompt> <out_file> <run_dir>
 
-# Reviewer side (from babysit-builder.sh:717-901)
+# Reviewer side (from babysit-builder.sh:717-904)
 review_with_retry <prompt>                                          # dispatches codex_review_with_retry | claude_review; rc 0-4 as ASF-FEAT-MCP-RESILIENCE
 codex_review_with_retry <prompt>
 claude_review     <prompt>
