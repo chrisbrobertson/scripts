@@ -51,8 +51,11 @@ STOP                      # terminates outer loop
 ~/sisyphus-logs/<project>.stop  # holds the owning PID; absent = allow run
 # A pre-existing stop file is a collision only while its PID is alive: exit 1
 # (or exit 0 under BABYSIT_NONINTERACTIVE). A dead-PID or empty (legacy) stop
-# file is stale and is cleared automatically. Script claims the file itself
-# with `set -C` (atomic, no-clobber). MAX_CONCURRENT_BABYSITS (default 1)
+# file is stale and is cleared automatically. The stale-check-and-claim runs
+# as one transaction serialized by a persistent `fcntl.flock(LOCK_EX)` on a
+# sibling `<project>.stop.guard` file, so the check/claim TOCTOU window is
+# closed by the kernel and the lock releases itself the instant the holder's
+# fd closes (including on kill -9). MAX_CONCURRENT_BABYSITS (default 1)
 # additionally caps simultaneous processes across all projects via `pgrep`,
 # exit 0 ("skipping") when at capacity. Removing the file mid-run is the
 # graceful stop mechanism. See launchd/com.chrisrobertson.babysit.PROJECT.plist.template
@@ -121,7 +124,7 @@ REPO_BASE=<path>        # override helper-script base path (also via --repo-base
 - **Exit via stop file removal:** Graceful — lock file absent at next iteration check
 
 ### Invariants
-1. **Lock file semantics:** Stop file *absent* (or just deleted) → halt at next iteration check. A *pre-existing* stop file at start-up holds the PID that claimed it; if that PID is still alive, it's a collision → `exit 1` (or, under `BABYSIT_NONINTERACTIVE`, a silent `exit 0` so a launchd/cron job isn't marked failed). If the PID is dead (or the file is empty — the pre-scheduling-feature `touch`-only format), the lock is stale and is cleared automatically before the new run claims it. A separate global cap, `MAX_CONCURRENT_BABYSITS` (default 1, counted via `pgrep` across all projects), also `exit 0`s ("skipping") when already at capacity, interactive or not — this is intended back-pressure, not an error. The script claims the lock itself with `set -C` (no-clobber) to close the stale-check/claim TOCTOU window, and removes it via EXIT trap. See `launchd/com.chrisrobertson.babysit.PROJECT.plist.template` for scheduled-run usage.
+1. **Lock file semantics:** Stop file *absent* (or just deleted) → halt at next iteration check. A *pre-existing* stop file at start-up holds the PID that claimed it; if that PID is still alive, it's a collision → `exit 1` (or, under `BABYSIT_NONINTERACTIVE`, a silent `exit 0` so a launchd/cron job isn't marked failed). If the PID is dead (or the file is empty — the pre-scheduling-feature `touch`-only format), the lock is stale and is cleared automatically before the new run claims it. A separate global cap, `MAX_CONCURRENT_BABYSITS` (default 1, counted via `pgrep` across all projects), also `exit 0`s ("skipping") when already at capacity, interactive or not — this is intended back-pressure, not an error. The script runs the whole stale-check-and-claim as one transaction serialized by a persistent `fcntl.flock(LOCK_EX)` on a sibling `<project>.stop.guard` file, closing the stale-check/claim TOCTOU window at the kernel level; it removes the stop file via EXIT trap (the guard file persists, only the lock on it is held for the claim). See `launchd/com.chrisrobertson.babysit.PROJECT.plist.template` for scheduled-run usage.
 2. **Iteration ordering:** Iterations execute sequentially (i=1, 2, ..., N)
 3. **Worktree-before-collect:** `git worktree add` runs before `collect_state()`, which in turn runs before the implementer invocation
 4. **Worktree-before-sentinel:** Worktree teardown completes *before* sentinel handling (so `gh pr checkout` in `run_review_cycle` finds no conflicting checkout)
@@ -175,14 +178,14 @@ Script version: `1.5.0` (semver, `--version` flag). Breaking changes (env var re
 ## Verifiers
 - Tech lead: Chris Robertson
 - API council / platform review: N/A (internal tool, no public API)
-- Security: lock file race condition accepted for single-user scenario; the stale-check/claim TOCTOU window is now closed by an atomic `set -C` claim rather than a plain `touch` (blast radius if still raced: both processes halt gracefully). See SECURITY-REVIEW-PLAN.md §1.
+- Security: lock file race condition accepted for single-user scenario; the stale-check/claim TOCTOU window is now closed by a kernel-serialized `fcntl.flock(LOCK_EX)`-guarded transaction rather than a plain `touch` (blast radius if still raced: both processes halt gracefully). See SECURITY-REVIEW-PLAN.md §1.
 - QA: Test cases documented in QA-TEST-PLAN.md (TC-1.*). Test harness exists: `BABYSIT_TEST_MODE` + `test-babysit-with-review-cli.sh`.
 
 ## Failure modes & blast radius
 - **Contract violation (malformed sentinel):** Sentinel not detected, loop continues to next iteration. Blast: wasted iteration, developer notices in log.
 - **Perf regression (iteration latency spike):** Loop slows but does not halt. Blast: developer waits longer for completion.
 - **Telemetry loss (log write failure):** Logged output lost, but iteration continues. Blast: debugging harder if issue occurs.
-- **Lock file race condition:** Two processes start simultaneously before lock file created. Blast: the `set -C` atomic claim lets at most one win; the loser exits via "another babysit grabbed the lock between checks" rather than corrupting the lock file. Rare in practice due to PID in log filename.
+- **Lock file race condition:** Two processes start simultaneously before lock file created. Blast: the `fcntl.flock(LOCK_EX)`-guarded claim transaction lets at most one win; the loser exits via "another babysit grabbed the lock between checks" rather than corrupting the lock file. Rare in practice due to PID in log filename.
 
 # Bounds
 
