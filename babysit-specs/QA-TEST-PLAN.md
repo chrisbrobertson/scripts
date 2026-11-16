@@ -381,8 +381,8 @@ the ticket queue for new work, per the scenario table above
 `count_blocking()` (the function whose output branches `run_review_cycle`
 between "addressing findings" and auto-merge) over review markdown on stdin —
 covering a single real finding and multiple findings with an indented
-continuation line, counted once each. The `[claude] addressing findings...`
-log line and the cycle-repeats behavior are not exercised by this harness (no
+continuation line, counted once each. The `[claude implementer] addressing
+findings...` log line and the cycle-repeats behavior are not exercised by this harness (no
 Claude/Codex/gh involved); the manual steps below remain the acceptance
 reference for those.
 
@@ -397,8 +397,8 @@ reference for those.
 1. Create test PR with intentional bug (e.g., undefined variable)
 2. Checkout PR branch: `gh pr checkout 123`
 3. Run: `MAX_REVIEW_CYCLES=3 ~/repo/scripts/babysit-with-review.sh` (invoke outer loop, trigger review)
-4. Verify: Log shows `[codex] N blocking finding(s)` with N > 0
-5. Verify: Log shows `[claude] addressing findings...`
+4. Verify: Log shows `[codex reviewer] N blocking finding(s)` with N > 0
+5. Verify: Log shows `[claude implementer] addressing findings...`
 6. Verify: Commit created after Claude pass
 
 ---
@@ -454,7 +454,7 @@ best-effort `gh pr ready` call before the merge attempt in
 1. Create test PR with clean code (no issues)
 2. Run review cycle (via outer loop or direct function call)
 3. Verify: Log shows "zero blocking findings; PR #N cleared after M cycle(s)"
-4. Verify: Log shows "PR #N queued for auto-merge" or "PR #N merged"
+4. Verify: Log shows `[review] PR #N merged.` (the "queued for auto-merge" path was removed when `gh pr merge --auto` was dropped for a synchronous `--match-head-commit` merge; see PR #107)
 5. Verify: `gh pr view N --json state -q .state` returns "MERGED"
 
 ---
@@ -467,7 +467,7 @@ best-effort `gh pr ready` call before the merge attempt in
 **Test steps:**
 1. Create test PR that requires 3+ cycles (complex issues)
 2. Run: `MAX_REVIEW_CYCLES=6 ~/repo/scripts/babysit-with-review.sh`
-3. Verify: Log shows `[codex] template=prescriptive has_history=yes cycle=3/6`
+3. Verify: Log shows `[codex reviewer] template=prescriptive-detailed has_history=yes cycle=3/6`
 4. Verify: Codex review output contains "Suggested fix:" lines under BLOCKING
 
 **Note:** Requires PR with enough issues to trigger 3 cycles. May need to create intentionally buggy code.
@@ -545,7 +545,7 @@ remain the acceptance reference for that.
 **Test steps:**
 1. Create test PR that requires 2+ cycles
 2. Run: `MAX_REVIEW_CYCLES=6 ~/repo/scripts/babysit-with-review.sh`
-3. Verify: Log shows `[codex] template=descriptive has_history=yes cycle=2/6`
+3. Verify: Log shows `[codex reviewer] template=descriptive-convergence has_history=yes cycle=2/6`
 4. Inspect Codex prompt (logged to file): contains "--- prior review cycles ---" section
 
 **Note:** Requires inspecting prompt content, which may not be logged by default. Add debug logging if needed.
@@ -669,7 +669,7 @@ for the live-PR path.
 **Test steps:**
 1. Create test PR
 2. Run review cycle with functional Codex
-3. Verify: Log shows `[codex] reviewing PR #N...` (once)
+3. Verify: Log shows `[codex reviewer] reviewing PR #N...` (once)
 4. Verify: No retry messages in log
 5. Verify: Review cycle completes successfully
 
