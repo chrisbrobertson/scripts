@@ -83,7 +83,12 @@ Design decisions:
 - **Codex compat failure skips the PR.** If Codex returns the `compat_re` pattern, the
   PR is logged to stderr as skipped. The operator must first upgrade Codex before
   retrospective review can run.
-- **No `credits_re` check.** The script only checks `COMPAT_RE` and `MCP_RE`; Codex credit exhaustion falls through to a generic failure (PR skipped as a Codex failure, without the specific `review-codex-no-credits` signal from the forward-path).
+- **`credits_re` check mirrors the forward-path.** If Codex returns the `credits_re`
+  pattern, the PR is logged to stderr as skipped (distinct from the compat-failure
+  message) and the operator must add credits before retrospective review can run for
+  that PR. As with `compat_re`, structural success is checked first — a clean review
+  whose transcript happens to quote either telltale string verbatim (e.g. from reviewed
+  source or documentation) is never discarded.
 - **`find-bailed-merged-prs.sh` is the source of truth for detection.** The retrospective
   script does not re-scan logs; it accepts PR numbers from stdin (TSV, second column) or
   as CLI arguments.
