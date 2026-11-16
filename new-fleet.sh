@@ -922,7 +922,7 @@ FLEET_NAME="${1:-FLEET_PLACEHOLDER}"
 FLEET_DIR="$HOME/staff-fleet/${FLEET_NAME}"
 REPO_PATH="$HOME/repos/${FLEET_NAME}"
 GH_REPO_SLUG="${GH_REPO_SLUG:-}"
-HLAB_MONITOR_URL="${HLAB_MONITOR_URL:-http://192.168.1.129:8888}"
+HLAB_MONITOR_URL="${HLAB_MONITOR_URL:-http://mac-mini.local:8888}"
 export PATH="$HOME/.local/bin:$HOME/.hermes/hermes-agent/venv/bin:/usr/local/bin:/usr/bin:/bin"
 export HERMES_HOME="${FLEET_DIR}/.hermes"
 ENV_FILE="${FLEET_DIR}/.hermes/profiles/staff-pm/.env"
@@ -1230,7 +1230,7 @@ fi
 # The dispatcher uses GET /api/babysit to prevent two hosts running the
 # same fleet's babysit simultaneously. If this host isn't visible to the
 # monitor, the dispatcher falls back to local-only locking.
-HLAB_URL="\${HLAB_MONITOR_URL:-http://192.168.1.129:8888}"
+HLAB_URL="\${HLAB_MONITOR_URL:-http://mac-mini.local:8888}"
 HLAB_HOSTS=\$(curl -s -m 3 "\${HLAB_URL}/api/hosts" 2>/dev/null || echo "")
 if [[ -n "\$HLAB_HOSTS" ]]; then
   THIS_HOST=\$(hostname -s)
@@ -1309,7 +1309,7 @@ echo "    WORK:    → labels GitHub issue priority/p2 (queues for babysitter)"
 echo "  Log: ${FLEET_DIR}/logs/orchestrator.log"
 echo ""
 echo "Continuous autonomous dev (every 5 min):"
-echo "  team-dispatcher checks home-lab-monitor (\${HLAB_MONITOR_URL:-http://192.168.1.129:8888})"
+echo "  team-dispatcher checks home-lab-monitor (\${HLAB_MONITOR_URL:-http://mac-mini.local:8888})"
 echo "  for a distributed lock — any host running babysit on this project?"
 echo "  If clear AND open-PRs-by-me OR p1/p2-issues: spawns babysit-driver.sh"
 echo "  Driver runs ${HOME}/repos/scripts/babysit-with-review.sh on ${REPO_PATH}"
