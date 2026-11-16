@@ -346,11 +346,22 @@ esac
 trap 'rm -f "$STOP_FILE"' EXIT
 
 # --- global concurrency cap ---
-# pgrep -f lists matching PIDs (one per line); macOS pgrep has no -c flag, so
-# count lines ourselves. The list includes our own bash invocation — subtract 1.
-RUNNING="$(pgrep -f 'babysit-with-review\.sh' 2>/dev/null | wc -l | tr -d ' ')"
-RUNNING="${RUNNING:-1}"
-OTHERS=$(( RUNNING > 0 ? RUNNING - 1 : 0 ))
+# pgrep -f lists matching PIDs (one per line); macOS pgrep has no -c flag, so we
+# count them ourselves. Two subtleties the obvious `pgrep | wc -l` version gets
+# wrong:
+#   * `exec pgrep` replaces the command-substitution subshell in place. Without
+#     `exec`, that transient subshell is itself a bash process still carrying
+#     this script's command line, so pgrep matches it as a *second* babysitter
+#     and a solitary run over-counts by one (see PR #122 review).
+#   * We exclude our own PID ($$) by an explicit match rather than blindly
+#     subtracting 1, so a solitary invocation yields OTHERS=0 and is never
+#     capped. ($$ is the one PID pgrep is guaranteed to return for us; the
+#     exec'd pgrep neither matches the regex nor lists its own pid.)
+PIDS="$(exec pgrep -f 'babysit-with-review\.sh' 2>/dev/null)"
+OTHERS=0
+for pid in $PIDS; do
+  [ "$pid" = "$$" ] || OTHERS=$((OTHERS + 1))
+done
 if [ "$OTHERS" -ge "$MAX_CONCURRENT_BABYSITS" ]; then
   soft_exit 0 "$OTHERS babysit(s) running; MAX_CONCURRENT_BABYSITS=$MAX_CONCURRENT_BABYSITS — skipping"
 fi

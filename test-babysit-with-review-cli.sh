@@ -636,8 +636,9 @@ grep -q 'previous PID 999999 no longer running' "$TMP/lockfile/race/b.err" 2>/de
 # MAX_CONCURRENT_BABYSITS global cap: stub `pgrep` (ahead of the real one on
 # PATH) to simulate other babysit-with-review.sh processes already running,
 # since spinning up real concurrent processes would be flaky. The real script
-# counts matched PIDs via `pgrep -f ... | wc -l` (macOS pgrep has no -c flag),
-# so the stub lists one fake PID per line rather than printing a count.
+# lists matched PIDs via `pgrep -f ...` (macOS pgrep has no -c flag) and counts
+# every PID that isn't its own $$, so the stub lists one fake PID per line. None
+# of these three equal the wrapper's $$, so all three count as "others".
 mkdir -p "$TMP/lockfile/capbin" "$TMP/lockfile/capproj" "$TMP/lockfile/caphome"
 cat > "$TMP/lockfile/capbin/pgrep" <<'STUB'
 #!/bin/bash
@@ -649,14 +650,36 @@ rc=0
     BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
   >"$TMP/lockfile/cap.out" 2>"$TMP/lockfile/cap.err" || rc=$?
 [ "$rc" -eq 0 ] && pass 'lock file: MAX_CONCURRENT_BABYSITS cap skips with exit 0, not an error (TC-1.3 AT3e)' || fail 'lock file: MAX_CONCURRENT_BABYSITS cap skips with exit 0, not an error (TC-1.3 AT3e)'
-assert_contains "$TMP/lockfile/cap.err" '2 babysit(s) running; MAX_CONCURRENT_BABYSITS=1 — skipping' 'lock file: cap-skip message reports other-process count and the configured cap (TC-1.3 AT3e)'
+assert_contains "$TMP/lockfile/cap.err" '3 babysit(s) running; MAX_CONCURRENT_BABYSITS=1 — skipping' 'lock file: cap-skip message reports other-process count and the configured cap (TC-1.3 AT3e)'
 
 rc=0
 ( cd "$TMP/lockfile/capproj" && HOME="$TMP/lockfile/caphome" PATH="$TMP/lockfile/capbin:/usr/bin:/bin" \
     BABYSIT_NONINTERACTIVE=1 BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
   >"$TMP/lockfile/cap-ni.out" 2>"$TMP/lockfile/cap-ni.err" || rc=$?
 [ "$rc" -eq 0 ] && pass 'lock file: MAX_CONCURRENT_BABYSITS cap skip is exit 0 under BABYSIT_NONINTERACTIVE too (TC-1.3 AT3e)' || fail 'lock file: MAX_CONCURRENT_BABYSITS cap skip is exit 0 under BABYSIT_NONINTERACTIVE too (TC-1.3 AT3e)'
-assert_contains "$TMP/lockfile/cap-ni.err" '[skip] 2 babysit(s) running; MAX_CONCURRENT_BABYSITS=1 — skipping' 'lock file: BABYSIT_NONINTERACTIVE prefixes the cap-skip message with [skip] (TC-1.3 AT3e)'
+assert_contains "$TMP/lockfile/cap-ni.err" '[skip] 3 babysit(s) running; MAX_CONCURRENT_BABYSITS=1 — skipping' 'lock file: BABYSIT_NONINTERACTIVE prefixes the cap-skip message with [skip] (TC-1.3 AT3e)'
+
+# Solitary-invocation regression (PR #122 review): when pgrep returns ONLY the
+# wrapper's own PID, the default cap of 1 must NOT trip — OTHERS must be 0, not
+# 1. The pre-fix code subtracted a blind 1 from the match count AND its own
+# command-substitution pipeline left an extra matching bash process, so a lone
+# wrapper saw OTHERS>=1 and skipped real work. The script now reads PIDs via
+# `$(exec pgrep ...)`, which makes the stub's parent (PPID) the wrapper's $$, so
+# a stub that echoes $PPID faithfully simulates "pgrep found exactly us".
+mkdir -p "$TMP/lockfile/solobin"
+make_preflight_repo "$TMP/lockfile/soloproj" >/dev/null 2>&1
+cat > "$TMP/lockfile/solobin/pgrep" <<'STUB'
+#!/bin/bash
+echo "$PPID"
+STUB
+chmod +x "$TMP/lockfile/solobin/pgrep"
+rc=0
+( cd "$TMP/lockfile/soloproj/work" && HOME="$TMP/lockfile/caphome" PATH="$TMP/lockfile/solobin:$TMP/bin:/usr/bin:/bin" \
+    BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
+  >"$TMP/lockfile/solo.out" 2>"$TMP/lockfile/solo.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'lock file: a solitary wrapper (pgrep finds only its own PID) is not capped (PR #122)' || { echo "  rc=$rc"; cat "$TMP/lockfile/solo.err" >&2; fail 'lock file: a solitary wrapper (pgrep finds only its own PID) is not capped (PR #122)'; }
+if grep -q 'PREFLIGHT_OK branch=main' "$TMP/lockfile/solo.out"; then pass 'lock file: solitary wrapper proceeds past the cap to pre-flight (PR #122)'; else fail 'lock file: solitary wrapper proceeds past the cap to pre-flight (PR #122)'; fi
+if grep -q 'babysit(s) running' "$TMP/lockfile/solo.err"; then fail 'lock file: solitary wrapper must not emit a cap-skip message (PR #122)'; else pass 'lock file: solitary wrapper must not emit a cap-skip message (PR #122)'; fi
 
 # Sentinel detection: converts QA-TEST-PLAN.md Suite 1 TC-1.5 (STOP halts the
 # loop) and TC-1.6 (HANDOFF_REVIEW <PR> triggers a review cycle) into
