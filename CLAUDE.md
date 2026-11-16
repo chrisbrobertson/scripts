@@ -66,10 +66,16 @@ empirical tests (`test-*`). No formal test suite, no build step, no CI.
 ## babysit-with-review.sh — locking & scheduled runs
 
 `babysit-with-review.sh` claims a per-project lock at `~/sisyphus-logs/<project>.stop`
-containing its own PID (atomically, via `set -C`/no-clobber, closing the stale-check/
-claim TOCTOU window). On startup it detects a stale (orphaned) lock — a PID that
-`kill -0` reports as no-longer-running, or an empty pre-upgrade `touch`-only file —
-and clears it automatically; a lock whose PID is still alive is a real collision.
+containing its own PID. The whole stale-check-and-claim runs as one transaction
+serialized by a persistent `fcntl.flock(LOCK_EX)` on a sibling `<project>.stop.guard`
+file, so the stale-read / claim-write TOCTOU window is closed by the kernel: exactly
+one holder is granted the guard at a time, and the lock releases itself the instant
+the holder's fd closes — including on `kill -9` — with nothing left behind to
+misinterpret as abandoned (the guard file itself is never removed, only the lock on
+it is held for the duration of the claim). Within that guarded transaction the
+script detects a stale (orphaned) lock — a PID that `os.kill(pid, 0)` reports as
+no-longer-running, or an empty pre-upgrade `touch`-only file — and clears it
+automatically; a lock whose PID is still alive is a real collision.
 
 Set `BABYSIT_NONINTERACTIVE=1` to make both the live-lock collision and the
 concurrency-cap paths below exit 0 ("[skip] ...") instead of erroring — used by
