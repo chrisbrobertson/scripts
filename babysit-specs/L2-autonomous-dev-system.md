@@ -31,7 +31,7 @@ Engineering leads implementing autonomous development tools — understand compo
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│ babysit-with-review.sh v1.4.0 (orchestrator, 2655 lines)            │
+│ babysit-with-review.sh v1.5.0 (orchestrator, 2746 lines)            │
 │  - Outer loop: git worktree → collect_state → run_implementer        │
 │  - Review cycle: review_with_retry → run_implementer → convergence   │
 │  - Pre-flight: working tree + git worktree prune (reviewer probe     │
