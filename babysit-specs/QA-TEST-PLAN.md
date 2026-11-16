@@ -784,7 +784,10 @@ Claude/Codex/gh calls) asserts each one by its TC ID against `review_with_retry(
 in `lib/bazaar-review.sh`, the library `babysit-with-review.sh` keeps its own copy
 of (see CLAUDE.md). That harness covers the shared retry/telltale logic; it does
 not exercise `babysit-with-review.sh`'s own `codex_review_with_retry()` copy
-directly — that is the gap PRs #45/#91 (`BABYSIT_TEST_MODE` coverage) aim to close.
+directly — open PR #45 (`BABYSIT_TEST_MODE=reviewer` coverage) aims to close that
+gap for TC-3.1-3.6/3.9-3.14, but explicitly excludes TC-3.15 by number (see its own
+commit text). `test-babysit-review-false-positive.sh` closes the TC-3.15 half of
+the gap standalone, independently of #45, so the two can land in either order.
 
 ### TC-3.9: Compat Telltale Alone
 **Given:** Codex exits non-zero with output containing `requires a newer version of Codex` (`compat_re` match) and no valid review  
@@ -857,8 +860,11 @@ quoting reviewed source verbatim)
 **Then:** The structural success check fires first and returns 0 — the telltale match
 is never reached
 
-**Automated:** `test-bazaar-review-lib.sh` cases `tc_fp_compat`/`tc_fp_credits` — the
-2026-09-27 regression (see L3-mcp-resilience.md's "Flipped" assumption note and
+**Automated:** `test-bazaar-review-lib.sh` cases `tc_fp_compat`/`tc_fp_credits` for the
+`lib/bazaar-review.sh` copy, and `test-babysit-review-false-positive.sh` cases
+`tc315_compat`/`tc315_credits` for `babysit-with-review.sh`'s own
+`codex_review_with_retry()` copy — the 2026-09-27 regression (see
+L3-mcp-resilience.md's "Flipped" assumption note and
 `review-codex-outdated`/`review-codex-no-credits` false-positive history above).
 
 ---
