@@ -259,7 +259,7 @@ sign-off before `babysit-builder.sh` is built against this spec:
   (`build-ready-for-merge` convergence, `build-max-cycles`, and an ordinary `build-incomplete`
   bail) pass the same generic "PR halted for human merge" string — it does not carry the
   bail's real semantics there, so a human must read the PR's own label to tell those three
-  apart. The fourth path, a PR-branch/worktree-branch mismatch (`babysit-builder.sh:1633`,
+  apart. The fourth path, a PR-branch/worktree-branch mismatch (`babysit-builder.sh:1632`,
   also `build-incomplete`-labelled), passes a distinct "PR quarantined — branch mismatch"
   heading instead, so that one case is self-describing in the ticket comment.
   The three resumable quarantine labels (`build-mcp-outage`, `build-codex-outdated`,
