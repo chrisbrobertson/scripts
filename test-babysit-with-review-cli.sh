@@ -529,21 +529,37 @@ run_preflight "$TMP/preflight/diverged/work" "$TMP/preflight/home" \
 [ "$rc" -eq 1 ] && pass 'preflight: diverged from origin exits 1' || fail 'preflight: diverged from origin exits 1'
 if grep -q 'diverged from origin/main' "$TMP/preflight/diverged.err"; then pass 'preflight: diverged error names the cause'; else fail 'preflight: diverged error names the cause'; fi
 
-# Lock file collision: converts QA-TEST-PLAN.md TC-1.3 (lock file semantics)
-# into deterministic coverage. The STOP_FILE collision check runs unconditionally
-# before argument-mode dispatch and before any git/pre-flight work, so it needs
-# neither a git repo nor claude/codex/gh stubs — a bare cwd is enough. Covers
-# both AT3 (pre-existing stop file is a collision, exit 1) and AT3b (no
-# pre-existing stop file lets startup proceed) from
-# L3-autonomous-outer-loop.md.
+# Lock file semantics: converts QA-TEST-PLAN.md TC-1.3 (lock file semantics)
+# into deterministic coverage. The STOP_FILE stale-vs-live check runs
+# unconditionally before argument-mode dispatch and before any git/pre-flight
+# work. Since babysit-scheduling-plan.md's lock rework, the file holds the
+# owning PID instead of being an empty touch(1) marker, so a pre-existing
+# stop file is only a collision (AT3) when that PID is still alive; a dead
+# or empty PID is now a stale lock that gets cleared automatically (AT3c),
+# and BABYSIT_NONINTERACTIVE / MAX_CONCURRENT_BABYSITS (AT3d/AT3e) make the
+# same checks launchd/cron-friendly. No git repo or claude/codex/gh stubs
+# needed for the live/stale cases — a bare cwd is enough; AT3c reuses
+# make_preflight_repo so the post-clear startup path (git pre-flight) is
+# exercised too, matching the old AT3b "no pre-existing lock" case.
 mkdir -p "$TMP/lockfile/proj" "$TMP/lockfile/home/sisyphus-logs"
-touch "$TMP/lockfile/home/sisyphus-logs/proj.stop"
+sleep 30 &
+live_pid=$!
+echo "$live_pid" > "$TMP/lockfile/home/sisyphus-logs/proj.stop"
 rc=0
 ( cd "$TMP/lockfile/proj" && HOME="$TMP/lockfile/home" PATH="$TMP/bin:/usr/bin:/bin" \
     BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
   >"$TMP/lockfile/collision.out" 2>"$TMP/lockfile/collision.err" || rc=$?
-[ "$rc" -eq 1 ] && pass 'lock file: pre-existing stop file is a collision, exits 1 (TC-1.3 AT3)' || fail 'lock file: pre-existing stop file is a collision, exits 1 (TC-1.3 AT3)'
-assert_contains "$TMP/lockfile/collision.err" "ERROR: $TMP/lockfile/home/sisyphus-logs/proj.stop already exists." 'lock file: collision error names the existing lock path (TC-1.3 AT3)'
+[ "$rc" -eq 1 ] && pass 'lock file: live-PID lock is a collision, exits 1 (TC-1.3 AT3)' || fail 'lock file: live-PID lock is a collision, exits 1 (TC-1.3 AT3)'
+assert_contains "$TMP/lockfile/collision.err" "babysit lock $TMP/lockfile/home/sisyphus-logs/proj.stop held by live PID $live_pid for 'proj'" 'lock file: collision error names the lock path and live PID (TC-1.3 AT3)'
+
+rc=0
+( cd "$TMP/lockfile/proj" && HOME="$TMP/lockfile/home" PATH="$TMP/bin:/usr/bin:/bin" \
+    BABYSIT_NONINTERACTIVE=1 BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
+  >"$TMP/lockfile/collision-ni.out" 2>"$TMP/lockfile/collision-ni.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'lock file: BABYSIT_NONINTERACTIVE turns a live-PID collision into exit 0 (TC-1.3 AT3d)' || fail 'lock file: BABYSIT_NONINTERACTIVE turns a live-PID collision into exit 0 (TC-1.3 AT3d)'
+assert_contains "$TMP/lockfile/collision-ni.err" "[skip] babysit lock $TMP/lockfile/home/sisyphus-logs/proj.stop held by live PID $live_pid for 'proj'" 'lock file: BABYSIT_NONINTERACTIVE skip message names the live PID (TC-1.3 AT3d)'
+kill "$live_pid" 2>/dev/null || true
+wait "$live_pid" 2>/dev/null || true
 
 mkdir -p "$TMP/lockfile/nocollision" "$TMP/lockfile/home2"
 make_preflight_repo "$TMP/lockfile/nocollision" >/dev/null 2>&1
@@ -552,6 +568,186 @@ run_preflight "$TMP/lockfile/nocollision/work" "$TMP/lockfile/home2" \
   "$TMP/lockfile/nocollision.out" "$TMP/lockfile/nocollision.err" || rc=$?
 [ "$rc" -eq 0 ] && pass 'lock file: no pre-existing stop file lets startup proceed (TC-1.3 AT3b)' || fail 'lock file: no pre-existing stop file lets startup proceed (TC-1.3 AT3b)'
 assert_contains "$TMP/lockfile/nocollision.out" 'PREFLIGHT_OK branch=main' 'lock file: first iteration setup reaches pre-flight (TC-1.3 AT3b)'
+
+mkdir -p "$TMP/lockfile/stale/home/sisyphus-logs"
+make_preflight_repo "$TMP/lockfile/stale" >/dev/null 2>&1
+echo 999999 > "$TMP/lockfile/stale/home/sisyphus-logs/work.stop"
+rc=0
+run_preflight "$TMP/lockfile/stale/work" "$TMP/lockfile/stale/home" \
+  "$TMP/lockfile/stale.out" "$TMP/lockfile/stale.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'lock file: dead-PID lock is cleared and startup proceeds (TC-1.3 AT3c)' || fail 'lock file: dead-PID lock is cleared and startup proceeds (TC-1.3 AT3c)'
+assert_contains "$TMP/lockfile/stale.err" "[lock] clearing stale lock $TMP/lockfile/stale/home/sisyphus-logs/work.stop (previous PID 999999 no longer running)" 'lock file: stale-lock clearing is logged (TC-1.3 AT3c)'
+assert_contains "$TMP/lockfile/stale.out" 'PREFLIGHT_OK branch=main' 'lock file: startup reaches pre-flight after clearing a dead-PID lock (TC-1.3 AT3c)'
+
+mkdir -p "$TMP/lockfile/legacy/home/sisyphus-logs"
+make_preflight_repo "$TMP/lockfile/legacy" >/dev/null 2>&1
+touch "$TMP/lockfile/legacy/home/sisyphus-logs/work.stop"
+rc=0
+run_preflight "$TMP/lockfile/legacy/work" "$TMP/lockfile/legacy/home" \
+  "$TMP/lockfile/legacy.out" "$TMP/lockfile/legacy.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'lock file: an empty (pre-upgrade touch(1)) lock is treated as stale too (TC-1.3 AT3c)' || fail 'lock file: an empty (pre-upgrade touch(1)) lock is treated as stale too (TC-1.3 AT3c)'
+assert_contains "$TMP/lockfile/legacy.out" 'PREFLIGHT_OK branch=main' 'lock file: startup reaches pre-flight after clearing an empty legacy lock (TC-1.3 AT3c)'
+
+# Concurrent stale-lock claim: two startups racing the same stale
+# ($STOP_FILE holds a dead PID) lock must not both believe they hold it —
+# the regression this guards is a fresh claimant's write landing in the gap
+# between the clearing path's `rm -f` and its own rewrite and getting
+# silently overwritten. The claim is now a single fcntl.flock-guarded
+# transaction (no mkdir-based mutex directory to abandon or reclaim), so
+# there's no separate "abandoned mutex" failure mode left to test — a
+# flock releases itself automatically when its holder's process exits for
+# any reason, including kill -9.
+#
+# The overlap is made DETERMINISTIC with a barrier rather than left to
+# scheduling luck (PR #122 review). Two bare background launches could
+# finish sequentially with exit 0 — if the first claimed, ran pre-flight,
+# and exited (its EXIT trap removing the lock) before the second even read
+# it, both legitimately won and the "exactly one winner" assertion flaked
+# on valid execution. The concurrency cap's `pgrep` call runs *after* the
+# lock claim (babysit-with-review.sh), so we give the first wrapper ("A") a
+# `pgrep` stub ahead of the real one on PATH: when that stub runs, A
+# provably holds the lock. The stub signals us over a fifo and then blocks,
+# keeping A — and the lock — alive across the whole of B's acquisition
+# attempt. B runs with the real pgrep (no stub on its PATH) and must see
+# A's live PID and lose. Then we release A and prove it reaches pre-flight.
+# Two independently-cloned repos share one basename ("work") and one HOME so
+# both contend for the exact same $STOP_FILE path without also racing each
+# other's git operations in a single shared working tree.
+# MAX_CONCURRENT_BABYSITS is overridden here (and below) so the global cap
+# (unrelated to the lock race under test) can't trip from any other
+# babysit-with-review.sh process running on the host at the same time.
+race="$TMP/lockfile/race"
+mkdir -p "$race/home/sisyphus-logs" "$race/a" "$race/b" "$race/bin"
+make_preflight_repo "$race/a" >/dev/null 2>&1
+make_preflight_repo "$race/b" >/dev/null 2>&1
+echo 999999 > "$race/home/sisyphus-logs/work.stop"
+mkfifo "$race/ready" "$race/release"
+cat > "$race/bin/pgrep" <<'STUB'
+#!/bin/bash
+# Barrier (PR #122): reached only after A has claimed the lock. Signal the
+# test, then block until released so A — and the lock it holds — stays alive
+# across B's whole acquisition attempt. Emit no PIDs so A's own OTHERS count
+# is 0 and the cap never trips.
+printf 'claimed\n' > "$RACE_DIR/ready"
+read -r _ < "$RACE_DIR/release"
+exit 1
+STUB
+chmod +x "$race/bin/pgrep"
+( cd "$race/a/work" && HOME="$race/home" RACE_DIR="$race" PATH="$race/bin:$TMP/bin:/usr/bin:/bin" \
+    MAX_CONCURRENT_BABYSITS=1000000 BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
+  >"$race/a.out" 2>"$race/a.err" &
+race_pid_a=$!
+# Open the ready fifo read-write so the open() never blocks and `read -t` can
+# time out if A dies before reaching the barrier — a bounded watchdog instead
+# of an unbounded read that could hang the whole harness.
+exec 9<>"$race/ready"
+rc_a=0; rc_b=0; barrier_ok=1
+read -r -t 60 _ <&9 || barrier_ok=0
+exec 9>&-
+if [ "$barrier_ok" -eq 1 ]; then
+  # A holds the lock. B contends with the real pgrep (no barrier bin on PATH).
+  ( cd "$race/b/work" && HOME="$race/home" PATH="$TMP/bin:/usr/bin:/bin" \
+      MAX_CONCURRENT_BABYSITS=1000000 BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
+    >"$race/b.out" 2>"$race/b.err" || rc_b=$?
+  printf 'release\n' > "$race/release"   # unblock A's barrier stub
+  wait "$race_pid_a" 2>/dev/null || rc_a=$?
+else
+  # A never reached the barrier — tear it down and fail loudly, do not hang.
+  kill "$race_pid_a" 2>/dev/null || true
+  wait "$race_pid_a" 2>/dev/null || true
+fi
+if [ "$barrier_ok" -eq 1 ] && [ "$rc_a" -eq 0 ] && [ "$rc_b" -eq 1 ]; then
+  pass 'lock mutex: concurrent stale-lock race has exactly one winner'
+else
+  echo "  barrier_ok=$barrier_ok rc_a=$rc_a rc_b=$rc_b" >&2
+  fail 'lock mutex: concurrent stale-lock race has exactly one winner'
+fi
+if grep -q 'PREFLIGHT_OK branch=main' "$race/a.out"; then pass 'lock mutex: race winner reaches pre-flight'; else fail 'lock mutex: race winner reaches pre-flight'; fi
+if grep -Eq "held by live PID [0-9]+ for 'work'" "$race/b.err"; then pass 'lock mutex: race loser sees a live-PID collision, not a double stale-clear'; else fail 'lock mutex: race loser sees a live-PID collision, not a double stale-clear'; fi
+clear_count=0
+grep -q 'previous PID 999999 no longer running' "$race/a.err" 2>/dev/null && clear_count=$((clear_count + 1))
+grep -q 'previous PID 999999 no longer running' "$race/b.err" 2>/dev/null && clear_count=$((clear_count + 1))
+[ "$clear_count" -eq 1 ] && pass 'lock mutex: the original stale PID is cleared exactly once, not by both racers' || fail 'lock mutex: the original stale PID is cleared exactly once, not by both racers'
+
+# Deterministic live-holder barrier (PR #122 review). The concurrent race above
+# can, in principle, flake: if one invocation claims, runs pre-flight, and exits
+# (its EXIT trap removing the lock) before the other even reads the lock, both
+# legitimately succeed and no collision is observed. This companion test removes
+# the timing dependency by using a real process we control as the held "winner":
+# a background `sleep` whose PID is pre-seeded into the lock stays alive across
+# the whole contender attempt (the barrier), so the collision is guaranteed; we
+# then release the winner (kill it) and prove a fresh start clears the now-stale
+# lock and proceeds. No reliance on process scheduling order.
+mkdir -p "$TMP/lockfile/barrier/home/sisyphus-logs"
+make_preflight_repo "$TMP/lockfile/barrier" >/dev/null 2>&1
+sleep 300 &
+holder_pid=$!
+echo "$holder_pid" > "$TMP/lockfile/barrier/home/sisyphus-logs/work.stop"
+rc=0
+( cd "$TMP/lockfile/barrier/work" && HOME="$TMP/lockfile/barrier/home" PATH="$TMP/bin:/usr/bin:/bin" \
+    MAX_CONCURRENT_BABYSITS=1000000 BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
+  >"$TMP/lockfile/barrier/contend.out" 2>"$TMP/lockfile/barrier/contend.err" || rc=$?
+[ "$rc" -eq 1 ] && pass 'lock barrier: contender exits 1 while a live holder owns the lock (PR #122)' || { echo "  rc=$rc"; fail 'lock barrier: contender exits 1 while a live holder owns the lock (PR #122)'; }
+if grep -Eq "held by live PID $holder_pid for 'work'" "$TMP/lockfile/barrier/contend.err"; then pass 'lock barrier: contender reports the live-holder collision (PR #122)'; else cat "$TMP/lockfile/barrier/contend.err" >&2; fail 'lock barrier: contender reports the live-holder collision (PR #122)'; fi
+if [ "$(cat "$TMP/lockfile/barrier/home/sisyphus-logs/work.stop" 2>/dev/null)" = "$holder_pid" ]; then pass 'lock barrier: a live holder is never cleared or overwritten by the contender (PR #122)'; else fail 'lock barrier: a live holder is never cleared or overwritten by the contender (PR #122)'; fi
+# Release the barrier: once the holder exits its PID is stale, so a fresh start
+# must clear it and reach pre-flight.
+kill "$holder_pid" 2>/dev/null
+wait "$holder_pid" 2>/dev/null || true
+rc=0
+( cd "$TMP/lockfile/barrier/work" && HOME="$TMP/lockfile/barrier/home" PATH="$TMP/bin:/usr/bin:/bin" \
+    MAX_CONCURRENT_BABYSITS=1000000 BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
+  >"$TMP/lockfile/barrier/released.out" 2>"$TMP/lockfile/barrier/released.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'lock barrier: a fresh start after the holder exits clears the stale lock and proceeds (PR #122)' || { echo "  rc=$rc"; fail 'lock barrier: a fresh start after the holder exits clears the stale lock and proceeds (PR #122)'; }
+if grep -q 'PREFLIGHT_OK branch=main' "$TMP/lockfile/barrier/released.out"; then pass 'lock barrier: released fresh start reaches pre-flight (PR #122)'; else fail 'lock barrier: released fresh start reaches pre-flight (PR #122)'; fi
+
+# MAX_CONCURRENT_BABYSITS global cap: stub `pgrep` (ahead of the real one on
+# PATH) to simulate other babysit-with-review.sh processes already running,
+# since spinning up real concurrent processes would be flaky. The real script
+# lists matched PIDs via `pgrep -f ...` (macOS pgrep has no -c flag) and counts
+# every PID that isn't its own $$, so the stub lists one fake PID per line. None
+# of these three equal the wrapper's $$, so all three count as "others".
+mkdir -p "$TMP/lockfile/capbin" "$TMP/lockfile/capproj" "$TMP/lockfile/caphome"
+cat > "$TMP/lockfile/capbin/pgrep" <<'STUB'
+#!/bin/bash
+printf '11111\n22222\n33333\n'
+STUB
+chmod +x "$TMP/lockfile/capbin/pgrep"
+rc=0
+( cd "$TMP/lockfile/capproj" && HOME="$TMP/lockfile/caphome" PATH="$TMP/lockfile/capbin:/usr/bin:/bin" \
+    BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
+  >"$TMP/lockfile/cap.out" 2>"$TMP/lockfile/cap.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'lock file: MAX_CONCURRENT_BABYSITS cap skips with exit 0, not an error (TC-1.3 AT3e)' || fail 'lock file: MAX_CONCURRENT_BABYSITS cap skips with exit 0, not an error (TC-1.3 AT3e)'
+assert_contains "$TMP/lockfile/cap.err" '3 babysit(s) running; MAX_CONCURRENT_BABYSITS=1 — skipping' 'lock file: cap-skip message reports other-process count and the configured cap (TC-1.3 AT3e)'
+
+rc=0
+( cd "$TMP/lockfile/capproj" && HOME="$TMP/lockfile/caphome" PATH="$TMP/lockfile/capbin:/usr/bin:/bin" \
+    BABYSIT_NONINTERACTIVE=1 BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
+  >"$TMP/lockfile/cap-ni.out" 2>"$TMP/lockfile/cap-ni.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'lock file: MAX_CONCURRENT_BABYSITS cap skip is exit 0 under BABYSIT_NONINTERACTIVE too (TC-1.3 AT3e)' || fail 'lock file: MAX_CONCURRENT_BABYSITS cap skip is exit 0 under BABYSIT_NONINTERACTIVE too (TC-1.3 AT3e)'
+assert_contains "$TMP/lockfile/cap-ni.err" '[skip] 3 babysit(s) running; MAX_CONCURRENT_BABYSITS=1 — skipping' 'lock file: BABYSIT_NONINTERACTIVE prefixes the cap-skip message with [skip] (TC-1.3 AT3e)'
+
+# Solitary-invocation regression (PR #122 review): when pgrep returns ONLY the
+# wrapper's own PID, the default cap of 1 must NOT trip — OTHERS must be 0, not
+# 1. The pre-fix code subtracted a blind 1 from the match count AND its own
+# command-substitution pipeline left an extra matching bash process, so a lone
+# wrapper saw OTHERS>=1 and skipped real work. The script now reads PIDs via
+# `$(exec pgrep ...)`, which makes the stub's parent (PPID) the wrapper's $$, so
+# a stub that echoes $PPID faithfully simulates "pgrep found exactly us".
+mkdir -p "$TMP/lockfile/solobin"
+make_preflight_repo "$TMP/lockfile/soloproj" >/dev/null 2>&1
+cat > "$TMP/lockfile/solobin/pgrep" <<'STUB'
+#!/bin/bash
+echo "$PPID"
+STUB
+chmod +x "$TMP/lockfile/solobin/pgrep"
+rc=0
+( cd "$TMP/lockfile/soloproj/work" && HOME="$TMP/lockfile/caphome" PATH="$TMP/lockfile/solobin:$TMP/bin:/usr/bin:/bin" \
+    BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
+  >"$TMP/lockfile/solo.out" 2>"$TMP/lockfile/solo.err" || rc=$?
+[ "$rc" -eq 0 ] && pass 'lock file: a solitary wrapper (pgrep finds only its own PID) is not capped (PR #122)' || { echo "  rc=$rc"; cat "$TMP/lockfile/solo.err" >&2; fail 'lock file: a solitary wrapper (pgrep finds only its own PID) is not capped (PR #122)'; }
+if grep -q 'PREFLIGHT_OK branch=main' "$TMP/lockfile/solo.out"; then pass 'lock file: solitary wrapper proceeds past the cap to pre-flight (PR #122)'; else fail 'lock file: solitary wrapper proceeds past the cap to pre-flight (PR #122)'; fi
+if grep -q 'babysit(s) running' "$TMP/lockfile/solo.err"; then fail 'lock file: solitary wrapper must not emit a cap-skip message (PR #122)'; else pass 'lock file: solitary wrapper must not emit a cap-skip message (PR #122)'; fi
 
 # Sentinel detection: converts QA-TEST-PLAN.md Suite 1 TC-1.5 (STOP halts the
 # loop) and TC-1.6 (HANDOFF_REVIEW <PR> triggers a review cycle) into

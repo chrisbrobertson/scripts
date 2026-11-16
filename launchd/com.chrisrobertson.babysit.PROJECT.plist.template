@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Replace __PROJECT__ with the project basename. -->
+  <key>Label</key>
+  <string>com.chrisrobertson.babysit.__PROJECT__</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/chrisrobertson/repos/scripts/babysit-with-review.sh</string>
+  </array>
+
+  <!-- Replace __PROJECT_PATH__ with absolute path to the repo to babysit. -->
+  <key>WorkingDirectory</key>
+  <string>__PROJECT_PATH__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>BABYSIT_NONINTERACTIVE</key>
+    <string>1</string>
+    <key>MAX_CONCURRENT_BABYSITS</key>
+    <string>1</string>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>/Users/chrisrobertson</string>
+  </dict>
+
+  <!-- Edit the schedule. Example: 09:00 and 17:00 daily. -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict>
+      <key>Hour</key>    <integer>9</integer>
+      <key>Minute</key>  <integer>0</integer>
+    </dict>
+    <dict>
+      <key>Hour</key>    <integer>17</integer>
+      <key>Minute</key>  <integer>0</integer>
+    </dict>
+  </array>
+
+  <!--
+    Intentional choices:
+    - No KeepAlive: avoids a crash-loop pattern seen on the Mac Mini's colima
+      daemon. StartCalendarInterval fires at the wall-clock moment and that's it.
+    - No ThrottleInterval: only matters for KeepAlive-driven respawns.
+    - RunAtLoad = false: loading the plist with `launchctl load`/`bootstrap`
+      shouldn't immediately fire a babysit run.
+  -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/chrisrobertson/sisyphus-logs/launchd-__PROJECT__.out</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/chrisrobertson/sisyphus-logs/launchd-__PROJECT__.err</string>
+</dict>
+</plist>
