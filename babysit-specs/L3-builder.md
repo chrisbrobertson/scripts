@@ -91,10 +91,16 @@ build-codex-no-credits      # Codex workspace out of credits; ticket KEEPS build
 # Exit codes
 0   # Completed normally, including a run that builds zero tickets and a run that
     # halts early on a reviewer-backend outage — a quarantined PR plus an automatic
-    # retry next run is a completed run, not a failed one.
+    # retry next run is a completed run, not a failed one. This also covers every
+    # stalled-PR-sweep fail-closed halt (HALT_RC 5-11; see "Stalled-PR sweep" above
+    # and "Failure modes & blast radius" below) — each leaves its PR's resumable
+    # label and ticket state untouched for the next run's sweep to retry, so none of
+    # them are treated as a failed run either.
 1   # Fatal: pre-flight failure (including the startup reviewer probe), gh/git auth
-    # failure, lock file collision, or
-    # missing/malformed Jira env vars when --source jira|both is requested.
+    # failure, lock file collision, missing/malformed Jira env vars when
+    # --source jira|both is requested, or a failed `gh issue list` in
+    # fetch_github_queue (babysit-builder.sh:1980) when --source github|both is
+    # requested.
     # A live but unreachable Jira endpoint at query time is NOT fatal — it degrades
     # (skips Jira-sourced tickets, continues with GitHub) and exits 0.
 2   # Bad arguments
@@ -179,6 +185,25 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
     Codex-CLI/credits problem halts before the sweep is ever reached. Ordering matters:
     each of these PRs' tickets is still `build-ready`, so reading the queue first would
     rebuild any of them into the duplicate PR the sweep exists to avoid.
+  - **The sweep itself is fail-closed end to end (`HALT_RC` 5-11, issue #106).** Every
+    step between listing the resumable-label PRs and clearing a PR's label(s) has a
+    halt path rather than a best-effort skip, because any step failing silently would
+    either strand a still-`build-ready` ticket with no label pointing back to its PR,
+    or risk a duplicate PR: a failed/truncated/unparseable label lookup halts before
+    the queue is ever read (`HALT_RC=5`); a record with no PR number or head branch,
+    or no builder marker to resolve `mark_ticket_done` against, halts with the label
+    left in place (`HALT_RC=9`, `HALT_RC=8`); a failed branch fetch/checkout halts
+    before any ticket state changes (`HALT_RC=6`); a resumed Jira-sourced ticket with
+    incomplete `JIRA_BASE_URL`/`JIRA_TOKEN`/`JIRA_PROJECT` (reachable under
+    `--source github`, which never validates Jira credentials at startup) halts before
+    `mark_ticket_done` is attempted (`HALT_RC=10`); a failed `mark_ticket_done` call
+    halts with the label still in place, since the ticket cannot yet be proven done
+    (`HALT_RC=11`); and a failed label-removal call after the ticket is already marked
+    done halts so the sweep retries only the removal next run (`HALT_RC=7`) — the
+    ticket itself is safe at that point, since it's already off the queue. All seven
+    exit the run via the generic `HALT_RC`-dispatch at `babysit-builder.sh:1956-1971`,
+    which maps each code to an operator-facing message and exits 0 (see "Exit codes"
+    above).
   - **Reviewer pre-flight is a run-level fatal, not a per-PR bail.** The Codex
     compatibility/credits probe runs once at startup and exits 1 on failure, before any
     implementer time is spent. `babysit-with-review.sh` probes per review cycle because
@@ -444,6 +469,15 @@ Events emitted to stderr:
 - `[build] ticket <id> (<source>): no sentinel on last line → left in queue`
 - `[jira] Jira API unavailable → skipping Jira-sourced tickets this run`
 - `[jira] Jira returned an invalid response → skipping Jira-sourced tickets this run`
+- Stalled-PR sweep fail-closed halts (`HALT_RC` 5-11, see "Stalled-PR sweep" above):
+  each condition first logs a `[build] ERROR: ...` line naming the specific failure
+  (e.g. `could not list build-mcp-outage PRs`, `PR #<n> carries no builder marker`,
+  `could not fetch origin/<branch> for PR #<n>`), then the top-level `HALT_RC`
+  dispatch (`babysit-builder.sh:1957-1968`) emits one summary line per code, e.g.
+  `Halting: stalled-PR sweep could not fetch or check out a resumed PR's branch;
+  its ticket is still build-ready. Fix the reported condition, then re-run — the
+  sweep will find the same PR again. See $LOG`, followed by
+  `Builder halted during stalled-PR sweep.` on stdout.
 
 ## Verifiers
 - Tech lead: Chris Robertson
@@ -480,6 +514,15 @@ Events emitted to stderr:
   different path (e.g., manually via `gh pr merge` outside this pipeline), the status
   gate's only remaining protection is human judgment at merge time — same residual
   risk `babysit-with-review.sh` already accepts for its own status writes.
+- **Stalled-PR sweep hits any of its seven fail-closed conditions (`HALT_RC` 5-11,
+  issue #106):** the whole run halts (exit 0) before the ticket queue is read, with
+  the triggering PR's resumable label and its ticket's `build-ready` label untouched.
+  Blast: that one run builds nothing new (every other queued ticket waits too, since
+  the sweep runs before queue read), but no duplicate PR and no stranded
+  `build-ready` ticket with no label pointing back to it — the next run's sweep finds
+  the same PR again once the reported condition (lookup/fetch/credentials/API
+  failure) is fixed. See "Stalled-PR sweep" above for the condition-by-condition
+  breakdown.
 
 # Bounds
 
