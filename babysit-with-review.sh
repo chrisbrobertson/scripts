@@ -297,14 +297,29 @@ soft_exit() {
 # `rm -f "$STOP_FILE"` and its own `echo "$$" >`, then get silently
 # overwritten by that rewrite, leaving two processes both believing they
 # hold the lock.
+#
+# The mutex records its own holder's PID in $LOCK_DIR/pid so it can't jam
+# every future startup if its holder dies mid-claim (e.g. kill -9 between
+# mkdir and the eventual rmdir): a waiter whose mkdir fails checks whether
+# the recorded PID is still alive, and forcibly reclaims an abandoned mutex
+# instead of sleep-looping on it forever. Reclaiming is best-effort — if
+# two waiters both see the same dead owner and race, mkdir on the next
+# iteration still arbitrates atomically, so only one of them proceeds.
 LOCK_DIR="$STOP_FILE.lock"
 while :; do
   if mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "$$" > "$LOCK_DIR/pid"
     break
   fi
+  LOCK_PID="$(cat "$LOCK_DIR/pid" 2>/dev/null)"
+  if [ -n "$LOCK_PID" ] && kill -0 "$LOCK_PID" 2>/dev/null; then
+    sleep 0.2
+    continue
+  fi
+  rm -rf "$LOCK_DIR" 2>/dev/null
   sleep 0.2
 done
-trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+trap 'rm -rf "$LOCK_DIR" 2>/dev/null' EXIT
 
 if ( set -C; echo "$$" > "$STOP_FILE" ) 2>/dev/null; then
   : # fresh claim
@@ -317,7 +332,7 @@ else
   rm -f "$STOP_FILE"
   echo "$$" > "$STOP_FILE"
 fi
-rmdir "$LOCK_DIR" 2>/dev/null
+rm -rf "$LOCK_DIR" 2>/dev/null
 trap 'rm -f "$STOP_FILE"' EXIT
 
 # --- global concurrency cap ---
