@@ -588,7 +588,7 @@ run_preflight "$TMP/lockfile/legacy/work" "$TMP/lockfile/legacy/home" \
 [ "$rc" -eq 0 ] && pass 'lock file: an empty (pre-upgrade touch(1)) lock is treated as stale too (TC-1.3 AT3c)' || fail 'lock file: an empty (pre-upgrade touch(1)) lock is treated as stale too (TC-1.3 AT3c)'
 assert_contains "$TMP/lockfile/legacy.out" 'PREFLIGHT_OK branch=main' 'lock file: startup reaches pre-flight after clearing an empty legacy lock (TC-1.3 AT3c)'
 
-# Concurrent stale-lock clearing: two startups racing the same stale
+# Concurrent stale-lock claim: two startups racing the same stale
 # ($STOP_FILE holds a dead PID) lock must not both believe they hold it —
 # the regression this guards is a fresh claimant's write landing in the gap
 # between the clearing path's `rm -f` and its own rewrite and getting
@@ -596,41 +596,77 @@ assert_contains "$TMP/lockfile/legacy.out" 'PREFLIGHT_OK branch=main' 'lock file
 # transaction (no mkdir-based mutex directory to abandon or reclaim), so
 # there's no separate "abandoned mutex" failure mode left to test — a
 # flock releases itself automatically when its holder's process exits for
-# any reason, including kill -9. Use two independently-cloned repos
-# sharing one basename ("work") and one HOME so both processes contend for
-# the exact same $STOP_FILE path without also racing each other's git
-# operations in a single shared working tree. MAX_CONCURRENT_BABYSITS is
-# overridden here (and below) because these tests invoke the real script
-# with a real, unstubbed `pgrep` on PATH — unrelated to the global
-# concurrency cap this test exercises, this avoids a false trip from any
-# other babysit-with-review.sh process that happens to be running on the
-# host at the same time.
-mkdir -p "$TMP/lockfile/race/home/sisyphus-logs" "$TMP/lockfile/race/a" "$TMP/lockfile/race/b"
-make_preflight_repo "$TMP/lockfile/race/a" >/dev/null 2>&1
-make_preflight_repo "$TMP/lockfile/race/b" >/dev/null 2>&1
-echo 999999 > "$TMP/lockfile/race/home/sisyphus-logs/work.stop"
-( cd "$TMP/lockfile/race/a/work" && HOME="$TMP/lockfile/race/home" PATH="$TMP/bin:/usr/bin:/bin" \
-    MAX_CONCURRENT_BABYSITS=1000000 BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) >"$TMP/lockfile/race/a.out" 2>"$TMP/lockfile/race/a.err" &
+# any reason, including kill -9.
+#
+# The overlap is made DETERMINISTIC with a barrier rather than left to
+# scheduling luck (PR #122 review). Two bare background launches could
+# finish sequentially with exit 0 — if the first claimed, ran pre-flight,
+# and exited (its EXIT trap removing the lock) before the second even read
+# it, both legitimately won and the "exactly one winner" assertion flaked
+# on valid execution. The concurrency cap's `pgrep` call runs *after* the
+# lock claim (babysit-with-review.sh), so we give the first wrapper ("A") a
+# `pgrep` stub ahead of the real one on PATH: when that stub runs, A
+# provably holds the lock. The stub signals us over a fifo and then blocks,
+# keeping A — and the lock — alive across the whole of B's acquisition
+# attempt. B runs with the real pgrep (no stub on its PATH) and must see
+# A's live PID and lose. Then we release A and prove it reaches pre-flight.
+# Two independently-cloned repos share one basename ("work") and one HOME so
+# both contend for the exact same $STOP_FILE path without also racing each
+# other's git operations in a single shared working tree.
+# MAX_CONCURRENT_BABYSITS is overridden here (and below) so the global cap
+# (unrelated to the lock race under test) can't trip from any other
+# babysit-with-review.sh process running on the host at the same time.
+race="$TMP/lockfile/race"
+mkdir -p "$race/home/sisyphus-logs" "$race/a" "$race/b" "$race/bin"
+make_preflight_repo "$race/a" >/dev/null 2>&1
+make_preflight_repo "$race/b" >/dev/null 2>&1
+echo 999999 > "$race/home/sisyphus-logs/work.stop"
+mkfifo "$race/ready" "$race/release"
+cat > "$race/bin/pgrep" <<'STUB'
+#!/bin/bash
+# Barrier (PR #122): reached only after A has claimed the lock. Signal the
+# test, then block until released so A — and the lock it holds — stays alive
+# across B's whole acquisition attempt. Emit no PIDs so A's own OTHERS count
+# is 0 and the cap never trips.
+printf 'claimed\n' > "$RACE_DIR/ready"
+read -r _ < "$RACE_DIR/release"
+exit 1
+STUB
+chmod +x "$race/bin/pgrep"
+( cd "$race/a/work" && HOME="$race/home" RACE_DIR="$race" PATH="$race/bin:$TMP/bin:/usr/bin:/bin" \
+    MAX_CONCURRENT_BABYSITS=1000000 BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
+  >"$race/a.out" 2>"$race/a.err" &
 race_pid_a=$!
-( cd "$TMP/lockfile/race/b/work" && HOME="$TMP/lockfile/race/home" PATH="$TMP/bin:/usr/bin:/bin" \
-    MAX_CONCURRENT_BABYSITS=1000000 BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) >"$TMP/lockfile/race/b.out" 2>"$TMP/lockfile/race/b.err" &
-race_pid_b=$!
-rc_a=0; rc_b=0
-wait "$race_pid_a" 2>/dev/null || rc_a=$?
-wait "$race_pid_b" 2>/dev/null || rc_b=$?
-if { [ "$rc_a" -eq 0 ] && [ "$rc_b" -eq 1 ]; } || { [ "$rc_a" -eq 1 ] && [ "$rc_b" -eq 0 ]; }; then
+# Open the ready fifo read-write so the open() never blocks and `read -t` can
+# time out if A dies before reaching the barrier — a bounded watchdog instead
+# of an unbounded read that could hang the whole harness.
+exec 9<>"$race/ready"
+rc_a=0; rc_b=0; barrier_ok=1
+read -r -t 60 _ <&9 || barrier_ok=0
+exec 9>&-
+if [ "$barrier_ok" -eq 1 ]; then
+  # A holds the lock. B contends with the real pgrep (no barrier bin on PATH).
+  ( cd "$race/b/work" && HOME="$race/home" PATH="$TMP/bin:/usr/bin:/bin" \
+      MAX_CONCURRENT_BABYSITS=1000000 BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) \
+    >"$race/b.out" 2>"$race/b.err" || rc_b=$?
+  printf 'release\n' > "$race/release"   # unblock A's barrier stub
+  wait "$race_pid_a" 2>/dev/null || rc_a=$?
+else
+  # A never reached the barrier — tear it down and fail loudly, do not hang.
+  kill "$race_pid_a" 2>/dev/null || true
+  wait "$race_pid_a" 2>/dev/null || true
+fi
+if [ "$barrier_ok" -eq 1 ] && [ "$rc_a" -eq 0 ] && [ "$rc_b" -eq 1 ]; then
   pass 'lock mutex: concurrent stale-lock race has exactly one winner'
 else
-  echo "  rc_a=$rc_a rc_b=$rc_b" >&2
+  echo "  barrier_ok=$barrier_ok rc_a=$rc_a rc_b=$rc_b" >&2
   fail 'lock mutex: concurrent stale-lock race has exactly one winner'
 fi
-winner_out="$TMP/lockfile/race/a.out"; loser_err="$TMP/lockfile/race/b.err"
-[ "$rc_a" -eq 1 ] && { winner_out="$TMP/lockfile/race/b.out"; loser_err="$TMP/lockfile/race/a.err"; }
-if grep -q 'PREFLIGHT_OK branch=main' "$winner_out"; then pass 'lock mutex: race winner reaches pre-flight'; else fail 'lock mutex: race winner reaches pre-flight'; fi
-if grep -Eq "held by live PID [0-9]+ for 'work'" "$loser_err"; then pass 'lock mutex: race loser sees a live-PID collision, not a double stale-clear'; else fail 'lock mutex: race loser sees a live-PID collision, not a double stale-clear'; fi
+if grep -q 'PREFLIGHT_OK branch=main' "$race/a.out"; then pass 'lock mutex: race winner reaches pre-flight'; else fail 'lock mutex: race winner reaches pre-flight'; fi
+if grep -Eq "held by live PID [0-9]+ for 'work'" "$race/b.err"; then pass 'lock mutex: race loser sees a live-PID collision, not a double stale-clear'; else fail 'lock mutex: race loser sees a live-PID collision, not a double stale-clear'; fi
 clear_count=0
-grep -q 'previous PID 999999 no longer running' "$TMP/lockfile/race/a.err" 2>/dev/null && clear_count=$((clear_count + 1))
-grep -q 'previous PID 999999 no longer running' "$TMP/lockfile/race/b.err" 2>/dev/null && clear_count=$((clear_count + 1))
+grep -q 'previous PID 999999 no longer running' "$race/a.err" 2>/dev/null && clear_count=$((clear_count + 1))
+grep -q 'previous PID 999999 no longer running' "$race/b.err" 2>/dev/null && clear_count=$((clear_count + 1))
 [ "$clear_count" -eq 1 ] && pass 'lock mutex: the original stale PID is cleared exactly once, not by both racers' || fail 'lock mutex: the original stale PID is cleared exactly once, not by both racers'
 
 # Deterministic live-holder barrier (PR #122 review). The concurrent race above
