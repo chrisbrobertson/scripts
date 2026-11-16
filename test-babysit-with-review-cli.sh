@@ -588,6 +588,51 @@ run_preflight "$TMP/lockfile/legacy/work" "$TMP/lockfile/legacy/home" \
 [ "$rc" -eq 0 ] && pass 'lock file: an empty (pre-upgrade touch(1)) lock is treated as stale too (TC-1.3 AT3c)' || fail 'lock file: an empty (pre-upgrade touch(1)) lock is treated as stale too (TC-1.3 AT3c)'
 assert_contains "$TMP/lockfile/legacy.out" 'PREFLIGHT_OK branch=main' 'lock file: startup reaches pre-flight after clearing an empty legacy lock (TC-1.3 AT3c)'
 
+# Concurrent stale-lock clearing: two startups racing the same stale
+# ($STOP_FILE holds a dead PID) lock must not both believe they hold it —
+# the regression this guards is a fresh claimant's write landing in the gap
+# between the clearing path's `rm -f` and its own rewrite and getting
+# silently overwritten. The claim is now a single fcntl.flock-guarded
+# transaction (no mkdir-based mutex directory to abandon or reclaim), so
+# there's no separate "abandoned mutex" failure mode left to test — a
+# flock releases itself automatically when its holder's process exits for
+# any reason, including kill -9. Use two independently-cloned repos
+# sharing one basename ("work") and one HOME so both processes contend for
+# the exact same $STOP_FILE path without also racing each other's git
+# operations in a single shared working tree. MAX_CONCURRENT_BABYSITS is
+# overridden here (and below) because these tests invoke the real script
+# with a real, unstubbed `pgrep` on PATH — unrelated to the global
+# concurrency cap this test exercises, this avoids a false trip from any
+# other babysit-with-review.sh process that happens to be running on the
+# host at the same time.
+mkdir -p "$TMP/lockfile/race/home/sisyphus-logs" "$TMP/lockfile/race/a" "$TMP/lockfile/race/b"
+make_preflight_repo "$TMP/lockfile/race/a" >/dev/null 2>&1
+make_preflight_repo "$TMP/lockfile/race/b" >/dev/null 2>&1
+echo 999999 > "$TMP/lockfile/race/home/sisyphus-logs/work.stop"
+( cd "$TMP/lockfile/race/a/work" && HOME="$TMP/lockfile/race/home" PATH="$TMP/bin:/usr/bin:/bin" \
+    MAX_CONCURRENT_BABYSITS=1000000 BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) >"$TMP/lockfile/race/a.out" 2>"$TMP/lockfile/race/a.err" &
+race_pid_a=$!
+( cd "$TMP/lockfile/race/b/work" && HOME="$TMP/lockfile/race/home" PATH="$TMP/bin:/usr/bin:/bin" \
+    MAX_CONCURRENT_BABYSITS=1000000 BABYSIT_TEST_MODE=outer-preflight "$SCRIPT" ) >"$TMP/lockfile/race/b.out" 2>"$TMP/lockfile/race/b.err" &
+race_pid_b=$!
+rc_a=0; rc_b=0
+wait "$race_pid_a" 2>/dev/null || rc_a=$?
+wait "$race_pid_b" 2>/dev/null || rc_b=$?
+if { [ "$rc_a" -eq 0 ] && [ "$rc_b" -eq 1 ]; } || { [ "$rc_a" -eq 1 ] && [ "$rc_b" -eq 0 ]; }; then
+  pass 'lock mutex: concurrent stale-lock race has exactly one winner'
+else
+  echo "  rc_a=$rc_a rc_b=$rc_b" >&2
+  fail 'lock mutex: concurrent stale-lock race has exactly one winner'
+fi
+winner_out="$TMP/lockfile/race/a.out"; loser_err="$TMP/lockfile/race/b.err"
+[ "$rc_a" -eq 1 ] && { winner_out="$TMP/lockfile/race/b.out"; loser_err="$TMP/lockfile/race/a.err"; }
+if grep -q 'PREFLIGHT_OK branch=main' "$winner_out"; then pass 'lock mutex: race winner reaches pre-flight'; else fail 'lock mutex: race winner reaches pre-flight'; fi
+if grep -Eq "held by live PID [0-9]+ for 'work'" "$loser_err"; then pass 'lock mutex: race loser sees a live-PID collision, not a double stale-clear'; else fail 'lock mutex: race loser sees a live-PID collision, not a double stale-clear'; fi
+clear_count=0
+grep -q 'previous PID 999999 no longer running' "$TMP/lockfile/race/a.err" 2>/dev/null && clear_count=$((clear_count + 1))
+grep -q 'previous PID 999999 no longer running' "$TMP/lockfile/race/b.err" 2>/dev/null && clear_count=$((clear_count + 1))
+[ "$clear_count" -eq 1 ] && pass 'lock mutex: the original stale PID is cleared exactly once, not by both racers' || fail 'lock mutex: the original stale PID is cleared exactly once, not by both racers'
+
 # MAX_CONCURRENT_BABYSITS global cap: stub `pgrep` (ahead of the real one on
 # PATH) to simulate other babysit-with-review.sh processes already running,
 # since spinning up real concurrent processes would be flaky. The real script
