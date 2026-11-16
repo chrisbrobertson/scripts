@@ -287,16 +287,31 @@ soft_exit() {
   exit "$code"
 }
 
-# --- per-project lock: stale-vs-live ---
-if [ -f "$STOP_FILE" ]; then
+# --- per-project lock: stale-vs-live, claimed atomically ---
+# set -C (no-clobber) closes the TOCTOU window for a fresh claim. Clearing a
+# stale lock needs its own exclusion too: two startups can observe the same
+# dead PID, and an unconditional `rm -f` by the second one would delete the
+# live lock the first one just claimed. The `mkdir` below is atomic on any
+# POSIX filesystem, so only one process may break+reclaim a given stale lock;
+# the loser retries and then sees the winner's lock as live.
+while :; do
+  if ( set -C; echo "$$" > "$STOP_FILE" ) 2>/dev/null; then
+    break
+  fi
   OLD_PID="$(cat "$STOP_FILE" 2>/dev/null)"
   if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
     soft_exit 1 "babysit lock $STOP_FILE held by live PID $OLD_PID for '$PROJECT'"
-  else
+  fi
+  if mkdir "$STOP_FILE.break" 2>/dev/null; then
     echo "[lock] clearing stale lock $STOP_FILE (previous PID ${OLD_PID:-empty} no longer running)" >&2
     rm -f "$STOP_FILE"
+    echo "$$" > "$STOP_FILE"
+    rmdir "$STOP_FILE.break"
+    break
   fi
-fi
+  sleep 0.2
+done
+trap 'rm -f "$STOP_FILE"' EXIT
 
 # --- global concurrency cap ---
 # pgrep -f lists matching PIDs (one per line); macOS pgrep has no -c flag, so
@@ -313,12 +328,6 @@ TMP_REVIEW=$(mktemp)
 TMP_REVIEW_RESULT=$(mktemp)
 TMP_CODEX_FULL=$(mktemp)
 touch "$LOG"
-
-# --- claim the lock atomically ---
-# set -C (no-clobber) closes the small TOCTOU window between stale-check and lock-claim.
-if ! ( set -C; echo "$$" > "$STOP_FILE" ) 2>/dev/null; then
-  soft_exit 1 "another babysit grabbed $STOP_FILE for '$PROJECT' between checks"
-fi
 trap 'rm -f "$STOP_FILE" "$TMP_RESULT" "$TMP_REVIEW" "$TMP_REVIEW_RESULT" "$TMP_CODEX_FULL"' EXIT
 
 echo "Babysitting $PROJECT v${VERSION} (implementer=$IMPLEMENTER, reviewer=$REVIEWER, max=$MAX_ITER, stuck=$STUCK_N, review_cycles=$MAX_REVIEW_CYCLES) → $LOG"
