@@ -1,7 +1,7 @@
 # QA Test Plan — babysit-with-review.sh
 
 **Owner:** qa-lead  
-**Status:** Test Suite 4 automated and passing (189/189, last run 2026-11-11), now
+**Status:** Test Suite 4 automated and passing (201/201, last run 2026-11-16), now
 including automated pre-flight coverage for TC-1.2, lock-file stale-vs-live/
 concurrency-cap coverage for TC-1.3/TC-1.3b/TC-1.3c/TC-1.3d/TC-1.3e, lock-file-removal
 coverage for TC-1.4, sentinel-detection
@@ -787,7 +787,7 @@ were drafted (2026-06-28). It is deterministic and requires no live Claude/Codex
 calls, so — unlike Suites 1-3 — it runs in CI-suitable time and is expected to pass
 before every commit that touches harness selection or review-structure validation.
 
-**Run:** `./test-babysit-with-review-cli.sh` — last run 2026-09-28, 178 assertions,
+**Run:** `./test-babysit-with-review-cli.sh` — last run 2026-11-16, 201 assertions,
 0 failed. 18 of those are the Suite 1 pre-flight cases (TC-1.2) added 2026-09-27;
 everything else below is selectable-implementer/reviewer and review-structure
 coverage. (The stalled-PR retry sweep and merge-failed-label mechanics are
