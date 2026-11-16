@@ -133,7 +133,9 @@ def find_referenced_files(body):
         token = m.group(1)
         if token.startswith("./"):
             token = token[2:]
-        if Path(token).suffix in SOURCE_EXTENSIONS:
+        # .github/ paths (issue templates, workflows) are deployable config, not
+        # documentation-about-documentation, even when they end in .md/.yml.
+        if Path(token).suffix in SOURCE_EXTENSIONS or token.startswith(".github/"):
             refs.add(token)
     return refs
 
