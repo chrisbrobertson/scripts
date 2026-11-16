@@ -64,9 +64,14 @@ Labels applied to spec PRs that do not converge (`spec-*` namespace, disjoint
 from the builder's `build-*` and babysit-with-review's `review-*`):
   spec-review-max-cycles     Cycle cap hit with BLOCKING findings open.
   spec-review-incomplete     Review bailed; manual attention needed.
-  spec-review-mcp-outage     Reviewer transport failure; retried next run.
-  spec-review-codex-outdated Codex CLI too old; upgrade then remove the label.
+  spec-review-mcp-outage     Reviewer transport failure; no automated retry.
+  spec-review-codex-outdated Codex CLI too old for the configured model.
   spec-review-codex-no-credits  Codex workspace out of credits.
+None of these labels is swept automatically: an existing OPEN/MERGED PR for a
+ticket always blocks drafting a new one, regardless of label, so re-running
+work-prep or removing the label does nothing on its own. To retry, close the
+quarantined PR (after fixing the underlying cause, if any) — the next run
+then finds no open/merged PR for that ticket and drafts a fresh spec.
 A quarantined PR stays draft, so the approval sweep will not act on it.
 
 Exit codes: 0 completed, 1 fatal/pre-flight failure, 2 invalid arguments.
@@ -1115,19 +1120,19 @@ ${_hb}--- end prior review cycles ---
       quarantine_spec_pr "$pr_num" spec-review-codex-outdated \
         "Codex version incompatibility — spec review blocked" \
         "Codex CLI too old for the configured model (cycle $cycle)" \
-        "To resume: upgrade the Codex CLI (\`codex update\`), remove the label, and re-run work-prep."
+        "To resume: upgrade the Codex CLI (\`codex update\`), then close this PR — work-prep drafts a fresh spec for this ticket on its next run. Removing the label or just re-running does not retry this review; the PR being open is what blocks a fresh draft."
       return 3
     elif [ "$REVIEWER" = "codex" ] && [ "$reviewer_rc" -eq 4 ]; then
       quarantine_spec_pr "$pr_num" spec-review-codex-no-credits \
         "Codex workspace out of credits — spec review blocked" \
         "Codex workspace has no credits remaining (cycle $cycle)" \
-        "To resume: add credits to the Codex workspace, remove the label, and re-run work-prep."
+        "To resume: add credits to the Codex workspace, then close this PR — work-prep drafts a fresh spec for this ticket on its next run. Removing the label or just re-running does not retry this review; the PR being open is what blocks a fresh draft."
       return 4
     elif [ "$REVIEWER" = "codex" ] && [ "$reviewer_rc" -eq 2 ]; then
       quarantine_spec_pr "$pr_num" spec-review-mcp-outage \
         "reviewer MCP transport failure — spec review pending" \
         "codex MCP transport failure after 3 retries (cycle $cycle)" \
-        "No spec review took place. Re-run work-prep to retry; remove the label if you review this spec by hand."
+        "No spec review took place. Re-running work-prep does NOT retry this PR — close it to let work-prep draft a fresh spec for this ticket next run, or review it yourself by hand."
       return 2
     elif [ "$reviewer_rc" -ne 0 ]; then
       quarantine_spec_pr "$pr_num" spec-review-incomplete \
@@ -1422,9 +1427,9 @@ while IFS="$RS" read -r -u 3 ticket_source ticket_key title_b64 body_b64 url_b64
   draft_ticket "$ticket_source" "$ticket_key" "$title" "$body" "$ticket_url" || true
   if [ "$SPEC_REVIEW_HALT" -ne 0 ]; then
     case "$SPEC_REVIEW_HALT" in
-      2) echo "Halting: reviewer MCP outage; the spec PR is labelled spec-review-mcp-outage and stays draft. Re-run to retry. See $LOG" >&2 ;;
-      3) echo "Halting: Codex version incompatibility; upgrade the CLI, remove spec-review-codex-outdated, then re-run. See $LOG" >&2 ;;
-      4) echo "Halting: Codex workspace out of credits; add credits, remove spec-review-codex-no-credits, then re-run. See $LOG" >&2 ;;
+      2) echo "Halting: reviewer MCP outage; the spec PR is labelled spec-review-mcp-outage and stays draft. Re-running does not retry it — close the PR so work-prep drafts a fresh spec for this ticket. See $LOG" >&2 ;;
+      3) echo "Halting: Codex version incompatibility; upgrade the CLI, then close the labelled PR so work-prep drafts a fresh spec for this ticket. See $LOG" >&2 ;;
+      4) echo "Halting: Codex workspace out of credits; add credits, then close the labelled PR so work-prep drafts a fresh spec for this ticket. See $LOG" >&2 ;;
     esac
     break
   fi
