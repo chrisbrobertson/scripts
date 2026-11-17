@@ -899,8 +899,9 @@ were drafted (2026-06-28). It is deterministic and requires no live Claude/Codex
 calls, so — unlike Suites 1-3 — it runs in CI-suitable time and is expected to pass
 before every commit that touches harness selection or review-structure validation.
 
-**Run:** `./test-babysit-with-review-cli.sh` — last run 2026-11-16, 201 assertions,
-0 failed. 18 of those are the Suite 1 pre-flight cases (TC-1.2) added 2026-09-27;
+**Run:** `./test-babysit-with-review-cli.sh` — last run 2026-11-16, 204 assertions,
+0 failed. 18 of those are the Suite 1 pre-flight cases (TC-1.2) added 2026-09-27,
+and 3 more are the Suite 1 stuck-loop-detection cases (TC-1.7) added 2026-11-16;
 everything else below is selectable-implementer/reviewer and review-structure
 coverage. (The stalled-PR retry sweep and merge-failed-label mechanics are
 separate harnesses — `test-babysit-review-stalled-retry.sh` (TC-1.9) and
