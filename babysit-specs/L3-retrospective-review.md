@@ -43,7 +43,7 @@ find-bailed-merged-prs.sh --repo OWNER/REPO \
   | run-retrospective-review.sh --repo OWNER/REPO
 
 # Flags
---repo OWNER/REPO   GitHub repo (required unless piped from find-bailed-merged-prs.sh)
+--repo OWNER/REPO   GitHub repo (optional; auto-detected via `gh repo view` when omitted)
 --dry-run           Check PR state/idempotency; print what would happen; skip Codex, worktrees, comments, and issue creation
 --no-issues         Post reviews but do not create follow-up issues
 --label LABEL       Additional label to add to created issues (repeatable)
