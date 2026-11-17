@@ -122,7 +122,14 @@ Unchanged from the sources: reviewer 1-7 min per call, implementer 5-30 min per 
 Inherits. Telltale regexes are fixed strings (see `SECURITY-REVIEW-PLAN.md` in `babysit-specs/` §4).
 
 ## Telemetry contract
-Same `[codex]` / `[review]` log lines as the sources, prefixed by the caller's tag. `run_review_cycle` additionally logs `cycle=<k> blocking=<b> new=<n> recurrence=<r>`.
+Same `[codex]` log lines as the sources (`lib/bazaar-review.sh:214,234,238,242,249`). Unlike
+`bzr_log` in `lib/bazaar-common.sh` (`lib/bazaar-common.sh:43`), which mechanically prepends
+`[$BZR_LOG_TAG]`, the lib's own `_bzr_log` (`lib/bazaar-review.sh:50`) adds no prefix at all —
+every caller embeds its own tag literal in the message string, e.g. `[$REVIEWER reviewer]`,
+`[$IMPLEMENTER implementer]`, or the per-cycle `tag="[review:$mode]"` set once per
+`run_review_cycle` call (`lib/bazaar-review.sh:1066`). That per-cycle summary line is
+`cycle=<k> blocking=<b> recommended=<rec> new=<n> recurrence=<rc>` (`lib/bazaar-review.sh:1146`)
+— the contract previously omitted the `recommended=<rec>` field.
 
 ## Verifiers
 - Tech lead: Chris Robertson
