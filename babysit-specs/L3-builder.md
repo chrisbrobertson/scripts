@@ -92,8 +92,9 @@ build-codex-no-credits      # Codex workspace out of credits; ticket KEEPS build
 0   # Completed normally, including a run that builds zero tickets and a run that
     # halts early on a reviewer-backend outage — a quarantined PR plus an automatic
     # retry next run is a completed run, not a failed one. This also covers every
-    # stalled-PR-sweep fail-closed halt (HALT_RC 5-11; see "Stalled-PR sweep" above
-    # and "Failure modes & blast radius" below) — each leaves its PR's resumable
+    # stalled-PR-sweep fail-closed halt (HALT_RC 5-11; see the "Stalled-PR sweep"
+    # bullet under "What we know" and the "Failure modes & blast radius" section,
+    # both below) — each leaves its PR's resumable
     # label and ticket state untouched for the next run's sweep to retry, so none of
     # them are treated as a failed run either.
 1   # Fatal: pre-flight failure (including the startup reviewer probe), gh/git auth
@@ -469,7 +470,7 @@ Events emitted to stderr:
 - `[build] ticket <id> (<source>): no sentinel on last line → left in queue`
 - `[jira] Jira API unavailable → skipping Jira-sourced tickets this run`
 - `[jira] Jira returned an invalid response → skipping Jira-sourced tickets this run`
-- Stalled-PR sweep fail-closed halts (`HALT_RC` 5-11, see "Stalled-PR sweep" above):
+- Stalled-PR sweep fail-closed halts (`HALT_RC` 5-11, see the "Stalled-PR sweep" bullet under "What we know" above):
   each condition first logs a `[build] ERROR: ...` line naming the specific failure
   (e.g. `could not list build-mcp-outage PRs`, `PR #<n> carries no builder marker`,
   `could not fetch origin/<branch> for PR #<n>`), then the top-level `HALT_RC`
@@ -521,8 +522,8 @@ Events emitted to stderr:
   the sweep runs before queue read), but no duplicate PR and no stranded
   `build-ready` ticket with no label pointing back to it — the next run's sweep finds
   the same PR again once the reported condition (lookup/fetch/credentials/API
-  failure) is fixed. See "Stalled-PR sweep" above for the condition-by-condition
-  breakdown.
+  failure) is fixed. See the "Stalled-PR sweep" bullet under "What we know" above
+  for the condition-by-condition breakdown.
 
 # Bounds
 
