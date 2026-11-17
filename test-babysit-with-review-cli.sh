@@ -811,6 +811,24 @@ rm -f "$lockfile_path"
 printf '%s\n' "$lockfile_path" | run_script outer-lockfile-removed "$TMP/lockfile-removed.record" "$TMP/home" > "$TMP/lockfile-removed.after.out"
 assert_contains "$TMP/lockfile-removed.after.out" "path=$lockfile_path removed=1" 'lock file removal: removing the stop file mid-run is detected (TC-1.4)'
 
+# Stuck-loop detection: converts QA-TEST-PLAN.md Suite 1 TC-1.7 (STUCK_N
+# consecutive identical implementer results halts the loop with a "Stuck"
+# message) into deterministic coverage. outer-stuck feeds a simulated
+# trailing window of result hashes through the real stuck_detected()
+# function extracted from the outer loop's per-iteration guard; no
+# Claude/Codex/gh involved.
+: > "$TMP/stuck-identical.record"
+printf 'aaa aaa aaa\n' | STUCK_N=3 run_script outer-stuck "$TMP/stuck-identical.record" "$TMP/home" > "$TMP/stuck-identical.out"
+assert_contains "$TMP/stuck-identical.out" 'hashes=3 stuck=1' 'stuck detection: STUCK_N identical hashes in a row is detected (TC-1.7)'
+
+: > "$TMP/stuck-differing.record"
+printf 'aaa bbb aaa\n' | STUCK_N=3 run_script outer-stuck "$TMP/stuck-differing.record" "$TMP/home" > "$TMP/stuck-differing.out"
+assert_contains "$TMP/stuck-differing.out" 'hashes=3 stuck=0' 'stuck detection: a differing hash in the window is not flagged as stuck'
+
+: > "$TMP/stuck-short.record"
+printf 'aaa aaa\n' | STUCK_N=3 run_script outer-stuck "$TMP/stuck-short.record" "$TMP/home" > "$TMP/stuck-short.out"
+assert_contains "$TMP/stuck-short.out" 'hashes=2 stuck=0' 'stuck detection: fewer than STUCK_N identical hashes is not yet stuck'
+
 # Stalled-PR retry-sweep priority: converts the pre-iteration scan that picks
 # which resumable label (review-mcp-outage, review-codex-outdated,
 # review-codex-no-credits, review-merge-failed, review-merge-conflict) to

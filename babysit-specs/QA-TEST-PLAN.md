@@ -1,12 +1,13 @@
 # QA Test Plan — babysit-with-review.sh
 
 **Owner:** qa-lead  
-**Status:** Test Suite 4 automated and passing (201/201, last run 2026-11-16), now
+**Status:** Test Suite 4 automated and passing (204/204, last run 2026-11-16), now
 including automated pre-flight coverage for TC-1.2, lock-file stale-vs-live/
 concurrency-cap coverage for TC-1.3/TC-1.3b/TC-1.3c/TC-1.3d/TC-1.3e, lock-file-removal
 coverage for TC-1.4, sentinel-detection
-coverage for TC-1.5/TC-1.6, single-iteration outer-loop coverage for TC-1.1, and
-MAX_ITER-exhaustion coverage for TC-1.8 (see
+coverage for TC-1.5/TC-1.6, single-iteration outer-loop coverage for TC-1.1,
+MAX_ITER-exhaustion coverage for TC-1.8, and stuck-loop-detection coverage for TC-1.7
+(see
 Suite 1), plus blocking-count coverage for TC-2.1/TC-2.2, merge-mechanics and
 merge-failed-label coverage for TC-2.2 via `test-babysit-review-merge-draft.sh`
 (31/31), stalled-PR retry-sweep coverage for TC-1.9 via
@@ -262,6 +263,14 @@ acceptance reference for that end-to-end behavior.
 ---
 
 ### TC-1.7: Stuck Detection
+**Status: automated, not manual (added 2026-11-16).** The stuck-loop guard's
+identical-window check is extracted into `stuck_detected()` and covered
+deterministically in `test-babysit-with-review-cli.sh` via
+`BABYSIT_TEST_MODE=outer-stuck`, which feeds a simulated trailing window of
+result hashes through the real function (no Claude/Codex/gh involved). This
+TC's manual steps below remain as the original acceptance reference; the
+automated cases are the ones that actually run before every commit.
+
 **Given:** Claude outputs identical result for STUCK_N consecutive iterations  
 **When:** Stuck detection runs  
 **Then:** Loop halts with "Stuck" message
@@ -967,19 +976,19 @@ touches flag parsing, harness selection, model/effort forwarding, or
 
 **Partially done, for Suite 1's outer-loop mechanics:** `BABYSIT_TEST_MODE` now has
 sibling stub modes (`outer-preflight`, `outer-sentinel`, `outer-maxiter`,
-`outer-lockfile-removed`) that extract the pre-flight gate, sentinel parsing, MAX_ITER
-exhaustion, and mid-run lock-file removal into pure functions and drive them
-deterministically — no Claude/Codex/gh involved. This covers TC-1.2 through TC-1.6 and
-TC-1.8 (see each TC's own status note above). TC-1.1 (a full single-iteration run,
-including the per-iteration git worktree and branch rename) is covered a different way:
-`run_single_iteration()` runs the real script end to end (no `BABYSIT_TEST_MODE`) against
-a repo fixture with `claude` stubbed, rather than extracting a pure function — the thing
-under test is the worktree/rename mechanics themselves, not a predicate. TC-1.9
-(stalled-PR retry sweep) is covered a third way: its own standalone recording-stub
-harness, `test-babysit-review-stalled-retry.sh`, with `claude`/`codex`/`gh` stubs on
-PATH rather than a `BABYSIT_TEST_MODE` mode. TC-1.7 (stuck-loop detection) has not been
-converted this way as of this writing; check each TC's own status note for the current
-state, since this file is not always updated when a new stub mode ships.
+`outer-lockfile-removed`, `outer-stuck`) that extract the pre-flight gate, sentinel
+parsing, MAX_ITER exhaustion, mid-run lock-file removal, and the stuck-loop guard into
+pure functions and drive them deterministically — no Claude/Codex/gh involved. This
+covers TC-1.2 through TC-1.8 (see each TC's own status note above). TC-1.1 (a full
+single-iteration run, including the per-iteration git worktree and branch rename) is
+covered a different way: `run_single_iteration()` runs the real script end to end (no
+`BABYSIT_TEST_MODE`) against a repo fixture with `claude` stubbed, rather than
+extracting a pure function — the thing under test is the worktree/rename mechanics
+themselves, not a predicate. TC-1.9 (stalled-PR retry sweep) is covered a third way:
+its own standalone recording-stub harness, `test-babysit-review-stalled-retry.sh`,
+with `claude`/`codex`/`gh` stubs on PATH rather than a `BABYSIT_TEST_MODE` mode. Check
+each TC's own status note for the current state, since this file is not always
+updated when a new stub mode ships.
 
 **Partially done, for Suite 2's PR-feedback filter:** `BABYSIT_TEST_MODE=review-feedback`
 drives the real `collect_pr_feedback()` against a stubbed `gh` (`test-babysit-review-feedback.sh`),

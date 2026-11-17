@@ -2000,6 +2000,24 @@ stop_file_removed() {
   [ ! -f "$stop_file" ]
 }
 
+# Stuck-loop predicate: true when the trailing window of implementer-result
+# hashes is exactly stuck_n entries long and every entry is identical.
+# Extracted from the per-iteration stuck-loop guard so
+# BABYSIT_TEST_MODE=outer-stuck can drive it deterministically (QA-TEST-PLAN.md
+# TC-1.7). Callers are still responsible for maintaining the trailing window
+# (trimming to the last stuck_n hashes) before calling this.
+stuck_detected() {
+  local stuck_n="$1"
+  shift
+  local hashes=("$@")
+  [ "${#hashes[@]}" -eq "$stuck_n" ] || return 1
+  local h
+  for h in "${hashes[@]}"; do
+    [ "$h" = "${hashes[0]}" ] || return 1
+  done
+  return 0
+}
+
 # Classify an implementer RESULT's trailing sentinel line during a review
 # cycle. Echoes one of:
 #   STUCK_REVIEW <reason>
@@ -2135,6 +2153,19 @@ if [ -n "${BABYSIT_TEST_MODE:-}" ] && [ "$BABYSIT_TEST_MODE" != "outer-preflight
           echo "path=$_path_line removed=1"
         else
           echo "path=$_path_line removed=0"
+        fi
+      done
+      ;;
+    outer-stuck)
+      # Each stdin line is a space-separated trailing window of result
+      # hashes (what the outer loop's stuck-loop guard maintains). Prints
+      # "hashes=N stuck=0|1" per line using the real stuck_detected()
+      # against $STUCK_N (QA-TEST-PLAN.md TC-1.7).
+      while IFS=' ' read -r -a _hash_line; do
+        if stuck_detected "$STUCK_N" "${_hash_line[@]}"; then
+          echo "hashes=${#_hash_line[@]} stuck=1"
+        else
+          echo "hashes=${#_hash_line[@]} stuck=0"
         fi
       done
       ;;
@@ -2725,15 +2756,9 @@ ${BASE_PROMPT}"
   if [ "${#HASHES[@]}" -gt "$STUCK_N" ]; then
     HASHES=("${HASHES[@]: -$STUCK_N}")
   fi
-  if [ "${#HASHES[@]}" -eq "$STUCK_N" ]; then
-    STUCK=1
-    for h in "${HASHES[@]}"; do
-      [ "$h" = "${HASHES[0]}" ] || { STUCK=0; break; }
-    done
-    if [ "$STUCK" -eq 1 ]; then
-      echo "Stuck: last $STUCK_N results identical. Bailing on iter $iter." | tee -a "$LOG"
-      break
-    fi
+  if stuck_detected "$STUCK_N" "${HASHES[@]}"; then
+    echo "Stuck: last $STUCK_N results identical. Bailing on iter $iter." | tee -a "$LOG"
+    break
   fi
 
   sleep "$SLEEP_SEC"
