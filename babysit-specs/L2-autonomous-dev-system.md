@@ -87,7 +87,7 @@ From the existing implementation:
 - Components run as subprocesses; orchestrator captures stdout/stderr and exit codes
 - Temp files: `TMP_RESULT` (implementer output), `TMP_REVIEW` (reviewer output), `TMP_REVIEW_RESULT` (implementer review response), `TMP_CODEX_FULL` (full Codex output for telltale scanning)
 - Logs written to `$HOME/sisyphus-logs/<project>-<timestamp>-<pid>.log`
-- Lock file at `$HOME/sisyphus-logs/<project>.stop`; a pre-existing file is a collision (`exit 1`); the script creates it on startup
+- Lock file at `$HOME/sisyphus-logs/<project>.stop`, claimed via a flock-guarded stale-vs-live check (`babysit-with-review.sh:290-346`): a pre-existing file whose PID is still alive is a collision (`exit 1`); a stale (dead-PID or empty) file is detected and cleared automatically, no manual removal needed
 - No persistent state beyond git commits and GitHub PR metadata
 - Helper scripts resolved via `SCRIPTS_DIR="$REPO_BASE/scripts"`; `REPO_BASE` autodetects `~/repos` then `~/repo`
 - Two companion scripts share the same REPO_BASE/scripts infrastructure and sisyphus-logs directory: `babysit-work-prep.sh` (ticket → spec) and `babysit-builder.sh` (spec → PR). Each uses its own stop file (`<project>-work-prep.stop` / `<project>-builder.stop`).
@@ -308,7 +308,7 @@ External dependencies (not asf-infra.yaml):
 
 - **Vendor outage (Anthropic API):** Outer loop halts; developer waits or cancels run. Blast: single developer blocked for duration of outage.
 - **Vendor outage (OpenAI ChatGPT for Codex MCP):** Review cycle retries, then labels PR. Blast: PR review delayed but not lost.
-- **Lock file collision:** Second invocation refuses to start. Blast: developer must manually check for running processes and remove stale lock file.
+- **Lock file collision (live PID):** Second invocation refuses to start. Blast: developer waits for the running instance or kills it; a stale lock left by a dead process is cleared automatically on the next run, no manual cleanup required.
 - **Stuck loop (identical iterations):** After STUCK_N iterations, loop halts with log message. Blast: developer must diagnose prompt issue or task complexity.
 - **MAX_ITER exhausted:** Loop halts after MAX_ITER iterations. Blast: developer must increase limit or decompose task.
 - **Pre-flight check failure:** Script refuses to start with corrective instructions. Blast: developer must manually resolve git state (unstaged changes, diverged branch, etc.).
