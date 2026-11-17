@@ -22,7 +22,7 @@ TIF (Trustable, Intuitive, Flexible) specifications documenting the autonomous d
 | Plan | File | Description |
 |---|---|---|
 | **Security** | [SECURITY-REVIEW-PLAN.md](SECURITY-REVIEW-PLAN.md) | Review checklist: lock file races, auto-merge approval, telltale regex |
-| **QA** | [QA-TEST-PLAN.md](QA-TEST-PLAN.md) | 28 manual TCs across outer loop, review cycle, and MCP resilience (Suites 1-3, not yet executed except TC-1.1's single-iteration gate, TC-1.2's pre-flight gate, TC-1.3/TC-1.3b's lock-file-collision gate, TC-1.4's lock-file-removal gate, TC-1.5/TC-1.6's sentinel-detection gate, and TC-1.8's MAX_ITER-exhaustion gate — all automated 2026-09-27 — plus TC-1.7's stuck-loop-detection gate, automated 2026-11-16), plus an automated Suite 4 for the selectable-implementer/reviewer surface and review-structure validation (`BABYSIT_TEST_MODE` + `test-babysit-with-review-cli.sh`, 204/204 passing) |
+| **QA** | [QA-TEST-PLAN.md](QA-TEST-PLAN.md) | 40 TCs across outer loop, review cycle, and MCP resilience (Suites 1-3); 30 automated — all of Suite 1 (TC-1.1 through TC-1.9, including TC-1.3b/c/d/e), TC-2.1/2.2/2.4/2.5/2.9/2.10/2.11, and TC-3.7 through TC-3.15 (including TC-3.12b) — leaving 10 still manual: TC-2.3, TC-2.6, TC-2.7, TC-2.8, and TC-3.1 through TC-3.6 (automation for TC-2.3/2.6/2.7/2.8 is drafted on open PRs #67, #70, #91, not yet merged); plus an automated Suite 4 for the selectable-implementer/reviewer surface and review-structure validation (`BABYSIT_TEST_MODE` + `test-babysit-with-review-cli.sh`, 204/204 passing) |
 
 Note: the work-prep/builder amendment notes were applied directly to
 `L1-babysit-with-review.md` and `L2-autonomous-dev-system.md` (see their "companion
