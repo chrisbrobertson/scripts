@@ -6,7 +6,7 @@ TIF specs for **Bazaar Builder**: a two-controller, two-worker replacement for t
 
 | Layer | File | Status | Description |
 |---|---|---|---|
-| **L1** | [**L1-bazaar-builder.md**](L1-bazaar-builder.md) | review | Product: issue → verified spec → approved → single-branch build with review; owner decisions 1-12 of 2026-09-19 |
+| **L1** | [**L1-bazaar-builder.md**](L1-bazaar-builder.md) | review | Product: issue → verified spec → approved → single-branch build with review; owner decisions 1-13 of 2026-09-19 |
 | **L2** | [**L2-bazaar-system.md**](L2-bazaar-system.md) | review | System: two controllers, two workers, shared review lib, GitHub labels as the only durable state, claim protocol |
 | **L3** | [**L3-controller.md**](L3-controller.md) | review | **Implemented 2026-09-19** (82 harness cases green at the time; `test-bazaar-common.sh` + `test-bazaar-issues.sh` + `test-bazaar-build.sh` = 95 as of 2026-09-26). `bazaar-issues.sh` / `bazaar-build.sh` over `lib/bazaar-common.sh`: intake = no `bzr-*` label, pid-held claims (no TTL), three-attempt escalation, sweeps (dead-pid, bounce, approval, rejected spec, merged PR), optional Haiku tie-break |
 | **L3** | [**L3-issue-worker.md**](L3-issue-worker.md) | review | **Implemented 2026-09-20** (39 cases green at the time; `test-bazaar-issue-worker.sh` = 46 as of 2026-09-26). Verify → ask/normalise → classify → draft specs and draft-time sub-issues → corpus-wide spec review → park for approval; no corpus = not actionable |
