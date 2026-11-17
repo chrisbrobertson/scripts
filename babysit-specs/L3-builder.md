@@ -100,7 +100,7 @@ build-codex-no-credits      # Codex workspace out of credits; ticket KEEPS build
 1   # Fatal: pre-flight failure (including the startup reviewer probe), gh/git auth
     # failure, lock file collision, missing/malformed Jira env vars when
     # --source jira|both is requested, or a failed `gh issue list` in
-    # fetch_github_queue (babysit-builder.sh:1980) when --source github|both is
+    # fetch_github_queue (babysit-builder.sh:1333-1337) when --source github|both is
     # requested.
     # A live but unreachable Jira endpoint at query time is NOT fatal — it degrades
     # (skips Jira-sourced tickets, continues with GitHub) and exits 0.
