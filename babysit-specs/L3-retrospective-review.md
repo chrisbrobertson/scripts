@@ -77,8 +77,11 @@ Design decisions:
 - **Issues for blocking findings only.** RECOMMENDED and INFORMATION findings are captured
   in the PR comment but do not generate issues. Only BLOCKING findings create issues.
 - **One issue per blocking finding** (not one issue per PR). Title format:
-  `[retrospective] <one-line finding> (merged PR #N)`. Deduplication: if an issue with
-  this exact title already exists (open or closed), it is skipped.
+  `[retrospective] <one-line finding> (merged PR #N)`. Deduplication: an issue is
+  skipped if any existing issue (open or closed) has a title starting with
+  `[retrospective] ` followed by the same first 80 characters of the finding text —
+  the `(merged PR #N)` suffix is not part of the match, so the same finding text
+  reported against a different PR also dedupes against it.
 - **Structural validation (weaker than forward-path).** `run-retrospective-review.sh` uses three bare `grep -qE` header checks (`^## BLOCKING`, `^## RECOMMENDED`, `^## INFORMATION`) — it does NOT use the `valid_review_structure` function from ASF-FEAT-MCP-RESILIENCE. As a consequence it accepts some output that the forward-path script rejects (e.g., bare headers with no bullets, `- (none)` mixed with other bullets). This is a known divergence.
 - **Codex compat failure skips the PR.** If Codex returns the `compat_re` pattern, the
   PR is logged to stderr as skipped. The operator must first upgrade Codex before
@@ -253,8 +256,10 @@ Events emitted to stderr:
    review comment is posted but no issues are created.
 9. **Given** the worktree EXIT trap triggers (script killed mid-run), **when** inspection
    runs after, **then** `git worktree list` shows no orphaned entries.
-10. **Given** an issue with title `[retrospective] <same finding> (merged PR #N)` already
-    exists, **when** `gh issue create` would be called, **then** it is skipped (dedup).
+10. **Given** an existing issue whose title starts with `[retrospective] ` followed by
+    the same first 80 characters of the finding text (the `(merged PR #N)` suffix is
+    not matched), **when** `gh issue create` would be called, **then** it is skipped
+    (dedup) — even if the existing issue was filed against a different PR.
 
 ## Telemetry events tied to L1 KPIs
 - **Retrospective findings per PR** → unreviewed-PR quality signal (lower = code was fine)
