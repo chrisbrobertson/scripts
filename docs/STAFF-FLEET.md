@@ -539,7 +539,7 @@ staff-swe: My SOUL.md instructs me not to post PR comments without your
 - Production incident diagnosis → staff-sre ("Why did the deploy fail?" — defer)
 - Anything requiring human sign-off → surface and stop, do not act
 
-**Source:** `new-fleet.sh:207-255` (`write_soul_swe`)
+**Source:** `new-fleet.sh:207-256` (`write_soul_swe`)
 
 ### 4.2 staff-sre — Staff Site Reliability Engineer
 
@@ -589,7 +589,7 @@ staff-sre: [runs gh run view 2340]
 - Product priorities / ticket status → staff-pm
 - Write actions on infrastructure → requires human sign-off; staff-sre stops and asks
 
-**Source:** `new-fleet.sh:258-305` (`write_soul_sre`)
+**Source:** `new-fleet.sh:258-306` (`write_soul_sre`)
 
 ### 4.3 staff-pm — Staff Product Manager
 
@@ -636,7 +636,7 @@ staff-pm: I don't have write access to reassign issues (by design — changes
 - Deploy / incident status → staff-sre
 - Committing to timelines → requires human confirmation; staff-pm stops and says so
 
-**Source:** `new-fleet.sh:308-355` (`write_soul_pm`)
+**Source:** `new-fleet.sh:308-356` (`write_soul_pm`)
 
 ---
 
