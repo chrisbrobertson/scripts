@@ -18,6 +18,7 @@
 #   REVIEWER            claude|codex                  (reviewer, cycle)
 #   IMPLEMENTER_MODEL IMPLEMENTER_EFFORT REVIEWER_MODEL REVIEWER_EFFORT  (optional)
 #   BABYSIT_TEST_MODE   when non-empty, retry sleeps are skipped (stubs on PATH)
+#   SCRIPTS_DIR         required by citation_check_block() (--mode spec only)
 #
 # --validate-cmd runs through `eval` in the CALLER's cwd, not the worktree; bake
 # the worktree path into the command (e.g. 'validate_spec_change "$wt" ...').
@@ -28,7 +29,7 @@
 #   REVIEW_CYCLES_RUN   number of cycles executed
 #   REVIEW_FAIL_REASON  one-line reason on rc 10/20/2/3/4
 
-BZR_REVIEW_LIB_VERSION="0.1.2"
+BZR_REVIEW_LIB_VERSION="0.1.3"
 
 # ---------- guards ----------
 
@@ -381,6 +382,44 @@ post_codex_review_status() {
     -f description="$desc" \
     -f target_url="https://github.com/${REPO}/pull/${pr_num}" \
     >> "$LOG" 2>&1
+}
+
+# ---------- spec-mode citation pre-check ----------
+
+# Deterministic pre-check for the "dangling references" criterion's file:line
+# citation sub-case, ported from babysit-work-prep.sh's citation_check_block().
+# lint-spec-citations catches a stale citation (missing file, line past
+# end-of-file) mechanically, so the reviewer doesn't have to manually open
+# every cited file to confirm the line still exists. It cannot tell whether an
+# in-range citation still describes what the prose claims — that judgment call
+# stays with the LLM reviewer. Unlike the work-prep original, spec_path here
+# may be a space-separated list (a Bazaar issue can draft several specs — e.g.
+# L1+L2+L3 — reviewed together in one cycle), so findings are scoped to the
+# union of those paths rather than just one.
+citation_check_block() {
+  _bzr_require SCRIPTS_DIR REVIEW_WORKDIR
+  local spec_path="$1" raw out rc err err_file
+  err_file=$(mktemp)
+  raw=$(cd "$REVIEW_WORKDIR" && "$SCRIPTS_DIR/lint-spec-citations" 2>"$err_file")
+  rc=$?
+  err=$(cat "$err_file" 2>/dev/null)
+  rm -f "$err_file"
+  # Exit 0 (clean) and exit 1 (findings present) are both a completed run;
+  # anything else, or output on stderr, means the linter itself never
+  # produced a verdict (missing binary, crash, bad interpreter, etc.).
+  if { [ "$rc" -ne 0 ] && [ "$rc" -ne 1 ]; } || [ -n "$err" ]; then
+    printf 'lint-spec-citations: execution failed (exit %s) running %s against %s — pre-check skipped, reviewer must manually verify file:line citations.\n%s' \
+      "$rc" "$SCRIPTS_DIR/lint-spec-citations" "$spec_path" "$err"
+    return
+  fi
+  out=$(printf '%s\n' "$raw" | awk -F: -v paths="$spec_path" '
+    BEGIN { n = split(paths, want, " ") }
+    { for (i = 1; i <= n; i++) if ($1 == want[i]) { print; next } }')
+  if [ -z "$out" ]; then
+    printf 'lint-spec-citations: no stale file:line citations found in %s.' "$spec_path"
+  else
+    printf 'lint-spec-citations flagged these file:line citations in %s as stale (cited file missing, or cited line past end-of-file):\n%s' "$spec_path" "$out"
+  fi
 }
 
 # ---------- prompt registry ----------
@@ -809,6 +848,9 @@ Judge the spec on these criteria. A finding is BLOCKING if it would make the spe
 - **Claims about decided, unbuilt behavior that contradict the record.** The spec states a target value or behavior that the ticket, its comments, a linked decision, or a constraint the spec itself carries forward (a test floor, an invariant) rules out. Verify against the record and the carried-forward constraint, NOT against the code: the code does not have it yet, and "the code does not do this" is not a finding against a target. BLOCKING when the contradiction is with a recorded decision or a carried-forward constraint; otherwise it is an invented decision (above).
 - **Hand-counted inventories.** When the spec maps shipped consumers onto new behavior, judge the CLASSIFICATION RULE, not the list. A rule is acceptable when every consumer you sample lands in exactly one class and the spec names the command that generates the inventory at build time (the L4 `## Validation steps` slot). A literal count ("exactly three", "73 consumers"), a closed list, or a negative-existence claim ("there is no fourth case") is itself ONE BLOCKING finding whose fix is: delete the count, keep the rule, name the generator. Do NOT search for the missing member and do NOT ask the spec to append it. One finding per rule or list; a second counterexample to the same list is the same finding, marked [RECURRENCE], never [NEW].
 
+Mechanical citation check (already run against this spec — verify it, don't re-derive it by hand; it can only tell you a citation is stale, not whether an in-range one describes the wrong thing):
+__CITATION_CHECK__
+
 Output your review using EXACTLY this format:
 
 ## BLOCKING
@@ -859,6 +901,9 @@ Judge the spec on the same criteria as before. A finding is BLOCKING if it would
 - **Hand-counted inventories.** When the spec maps shipped consumers onto new behavior, judge the CLASSIFICATION RULE, not the list. A rule is acceptable when every consumer you sample lands in exactly one class and the spec names the command that generates the inventory at build time (the L4 `## Validation steps` slot). A literal count ("exactly three", "73 consumers"), a closed list, or a negative-existence claim ("there is no fourth case") is itself ONE BLOCKING finding whose fix is: delete the count, keep the rule, name the generator. Do NOT search for the missing member and do NOT ask the spec to append it. One finding per rule or list; a second counterexample to the same list is the same finding, marked [RECURRENCE], never [NEW].
 
 Watch specifically for regressions: a fix for one finding that introduced a new contradiction, or a requirement quietly deleted rather than resolved.
+
+Mechanical citation check (already run against this spec — verify it, don't re-derive it by hand; it can only tell you a citation is stale, not whether an in-range one describes the wrong thing):
+__CITATION_CHECK__
 
 Output your review using EXACTLY this format:
 
@@ -911,6 +956,9 @@ Same criteria as previous cycles (contradiction, undeclared duplication, danglin
 **Prescriptive requirement:** every BLOCKING finding MUST carry a concrete `Suggested wording:` line — the actual replacement text or frontmatter change the spec should carry. If you cannot write the replacement yourself, you do not understand the finding well enough to block on it: downgrade it to RECOMMENDED. For a hand-counted-inventory finding the suggested wording is the classification rule and the generating command, never the missing member.
 
 **A note on convergence:** if a finding recurs because the underlying question is a design decision nobody has made, the correct resolution is NOT to keep demanding a different answer. It is to require the spec to flag it `[ASSUMPTION]` with a "Flips if:" clause and move on. Specs are allowed to have open questions; they are not allowed to hide them.
+
+Mechanical citation check (already run against this spec — verify it, don't re-derive it by hand; it can only tell you a citation is stale, not whether an in-range one describes the wrong thing):
+__CITATION_CHECK__
 
 Output your review using EXACTLY this format:
 
@@ -1106,6 +1154,11 @@ ${_hb}--- end prior review cycles ---
     review_prompt="${review_prompt//__TICKET_URL__/$ticket_url}"
     review_prompt="${review_prompt//__TICKET_TITLE__/$ticket_title}"
     review_prompt="${review_prompt//__TICKET_BODY__/$ticket_body}"
+    if [ "$mode" = spec ]; then
+      local citation_block
+      citation_block=$(citation_check_block "$spec_path")
+      review_prompt="${review_prompt//__CITATION_CHECK__/$citation_block}"
+    fi
     _bzr_log "  [$REVIEWER reviewer] template=$(review_prompt_name "$mode" "$cycle") cycle=${cycle}/${max_cycles}"
 
     local reviewer_rc=0

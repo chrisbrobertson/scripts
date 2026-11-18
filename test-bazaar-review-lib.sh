@@ -122,7 +122,7 @@ new_case() {  # <name> ; sets STUB_DIR RECORD LOG TMP_* and a repo with origin
   git init -q "$CASE/wt"; git -C "$CASE/wt" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
   git -C "$CASE/wt" remote add origin "$CASE/origin.git"; git -C "$CASE/wt" push -q origin HEAD:refs/heads/feat 2>/dev/null
   git -C "$CASE/wt" config user.name t; git -C "$CASE/wt" config user.email t@t
-  export REVIEW_WORKDIR="$CASE/wt" BABYSIT_TEST_MODE=1
+  export REVIEW_WORKDIR="$CASE/wt" BABYSIT_TEST_MODE=1 SCRIPTS_DIR="$ROOT"
 }
 stub() { printf '%s\n' "$2" > "$STUB_DIR/$1"; }   # stub codex.1 "$BODY"
 
@@ -303,6 +303,40 @@ assert_not_grep "spec mode does not collect PR feedback" "--json reviews" "$RECO
 new_case specval; stub codex.1 "$ONE_BLOCKING"; printf '@@COMMIT\nDONE_REVIEW\n' > "$STUB_DIR/claude.1"
 rc=0; run_cycle --mode spec --pr 9 --worktree "$CASE/wt" --branch feat --validate-cmd 'false' >/dev/null 2>&1 || rc=$?
 assert_eq "spec mode validate-cmd failure → rc 20" "$rc" "20"
+
+# ---------- citation_check_block: deterministic lint-spec-citations pre-check ----------
+run_citation_check() { ( source "$LIB"; citation_check_block "$@" ); }
+
+new_case citclean
+printf 'line one\nline two\n' > "$CASE/wt/existing.sh"
+printf 'cites existing.sh:1 which exists.\n' > "$CASE/wt/good.md"
+out=$(run_citation_check good.md)
+assert_grep "citation check: clean spec reports no stale citations" "no stale file:line citations found in good.md" <(printf '%s' "$out")
+
+new_case citstale; printf 'see nonexistent-file.sh:5 for details.\n' > "$CASE/wt/bad.md"
+out=$(run_citation_check bad.md)
+assert_grep "citation check: flags citation to a missing file" "bad.md:1: nonexistent-file.sh:5" <(printf '%s' "$out")
+
+new_case citmulti
+printf 'line one\nline two\n' > "$CASE/wt/existing.sh"
+printf 'see nonexistent-file.sh:5 for details.\n' > "$CASE/wt/bad.md"
+printf 'cites existing.sh:1 which exists.\n' > "$CASE/wt/good.md"
+printf 'see another-missing.sh:9 too.\n' > "$CASE/wt/unrelated.md"
+out=$(run_citation_check "bad.md good.md")
+assert_grep "citation check: scoped union flags bad.md" "bad.md:1:" <(printf '%s' "$out")
+assert_not_grep "citation check: scoped union excludes a path not in the list" "unrelated.md" <(printf '%s' "$out")
+
+new_case citfail; printf 'cites test-bazaar-review-lib.sh:1 which exists.\n' > "$CASE/wt/good.md"
+SCRIPTS_DIR="$CASE/no-such-dir" out=$(run_citation_check good.md)
+assert_grep "citation check: execution failure surfaced, not masked as clean" "execution failed" <(printf '%s' "$out")
+
+new_case citwired
+mkdir -p "$CASE/wt/specs"; printf 'see nonexistent-file.sh:5 for details.\n' > "$CASE/wt/specs/L3-x.md"
+stub codex.1 "$CLEAN"
+rc=0; run_cycle --mode spec --pr 9 --worktree "$CASE/wt" --branch feat --spec-path specs/L3-x.md --spec-dir specs --spec-guide /g.md \
+  --ticket 42 --ticket-url u --ticket-title T --ticket-body B --validate-cmd 'true' >/dev/null 2>&1 || rc=$?
+assert_eq "citation check wiring: cycle still converges" "$rc" "0"
+assert_grep "citation check wiring: stale citation reaches the reviewer prompt" "specs/L3-x.md:1: nonexistent-file.sh:5" "$RECORD"
 
 rc=0; ( source "$LIB"; LOG=/dev/null TMP_REVIEW=x TMP_REVIEW_RESULT=x REPO=o/r IMPLEMENTER=claude REVIEWER=claude run_review_cycle --mode nope --pr 1 --worktree . --branch b ) >/dev/null 2>&1 || rc=$?
 assert_eq "bad --mode → rc 2" "$rc" "2"

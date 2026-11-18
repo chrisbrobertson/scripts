@@ -26,7 +26,7 @@ Like pulling a copy-pasted retry-and-review routine out of three scripts into on
 Implementing agent: extract per the function map below, port the recording-stub harness first, and diff behaviour against the builder. Chris Robertson: confirm that the builder copy is the source of truth where copies differ.
 
 ## API surface fragment
-*Implemented 2026-09-19 in `lib/bazaar-review.sh` v0.1.0 (1,188 lines at the time; 1,194 as of 2026-09-26; 1,210 as of 2026-11-17; `BZR_REVIEW_LIB_VERSION` is now `0.1.2` — see Versioning policy below). Harness `test-bazaar-review-lib.sh`, 59 cases green at the time; 62 as of 2026-09-26; 66 as of 2026-11-17 (harness totals are point-in-time snapshots, not a live figure — see `index.md`).*
+*Implemented 2026-09-19 in `lib/bazaar-review.sh` v0.1.0 (1,188 lines at the time; 1,194 as of 2026-09-26; 1,210 as of 2026-11-17; 1,263 as of 2026-11-18; `BZR_REVIEW_LIB_VERSION` is now `0.1.3` — see Versioning policy below). Harness `test-bazaar-review-lib.sh`, 59 cases green at the time; 62 as of 2026-09-26; 66 as of 2026-11-17; 73 as of 2026-11-18 (harness totals are point-in-time snapshots, not a live figure — see `index.md`).*
 ```bash
 source "$SCRIPTS_DIR/lib/bazaar-review.sh"
 
@@ -49,6 +49,11 @@ reviewer_preflight                                                  # startup fa
 # post_reviewer_review)
 collect_pr_feedback <pr_num>                                        # existing PR reviews/comments minus this pipeline's own, for the history block
 post_reviewer_review <pr_num> <cycle> <max> <review_file>           # posts one cycle's reviewer output as a PR comment
+
+# Spec-mode citation pre-check (lib/bazaar-review.sh:399-423, ported from
+# babysit-work-prep.sh:834 citation_check_block() — see CLAUDE.md's
+# lint-spec-citations row)
+citation_check_block <spec_path>                                    # <spec_path> may be space-separated (multi-spec drafts); requires SCRIPTS_DIR
 
 # Cycle (from babysit-builder.sh:1102 run_build_cycle and babysit-work-prep.sh:1086 run_spec_review_cycle)
 run_review_cycle --mode code|spec --pr <n> --worktree <dir> --branch <name> [--max-cycles N] [--validate-cmd CMD]
@@ -94,14 +99,14 @@ BABYSIT_TEST_MODE=1  → retry sleeps are skipped; the harness puts claude/codex
 ## Contract
 
 ### Request shape
-See the surface fragment. All functions take explicit arguments plus the documented globals (`IMPLEMENTER`, `REVIEWER`, `*_MODEL`, `*_EFFORT`, `LOG`, `TMP_REVIEW`, `TMP_CODEX_FULL`).
+See the surface fragment. All functions take explicit arguments plus the documented globals (`IMPLEMENTER`, `REVIEWER`, `*_MODEL`, `*_EFFORT`, `LOG`, `TMP_REVIEW`, `TMP_CODEX_FULL`). `--mode spec` additionally requires `SCRIPTS_DIR` (for `citation_check_block()`'s `lint-spec-citations` invocation).
 
 ### Response shape
 Return codes as listed. `run_review_cycle` writes the final reviewer output path to `REVIEW_LAST_FILE` for the caller's summary comment.
 
 ### Invariants
 1. Sourcing the lib has no side effects (no `set -e` changes, no traps, no temp files until a function is called).
-2. `valid_review_structure` and the telltale regexes are byte-identical to `babysit-builder.sh` at extraction time; any later change is a logged spec amendment. **Amended 2026-09-20:** the spec-mode remediation prompt now permits edits to the corpus `index.md` and `log.md` and requires a log entry per cycle; the first pilot hit the cycle cap because the work-prep wording confined the implementer to one file while the reviewer (correctly, per spec-guide) blocked on a stale log.
+2. `valid_review_structure` and the telltale regexes are byte-identical to `babysit-builder.sh` at extraction time; any later change is a logged spec amendment. **Amended 2026-09-20:** the spec-mode remediation prompt now permits edits to the corpus `index.md` and `log.md` and requires a log entry per cycle; the first pilot hit the cycle cap because the work-prep wording confined the implementer to one file while the reviewer (correctly, per spec-guide) blocked on a stale log. **Amended 2026-11-18:** ported `babysit-work-prep.sh`'s `citation_check_block()` deterministic `lint-spec-citations` pre-check (added there in #200) into `BZR_SPEC_REVIEW_C1`/`C2`/`C3` and `run_review_cycle`, restoring the byte-parity with the work-prep source that `test-bazaar-review-lib.sh`'s prompt-parity check had caught as broken (the work-prep source gained the `__CITATION_CHECK__` paragraph in #200; this lib's copy hadn't). This lib's `citation_check_block()` accepts a space-separated list of spec paths rather than one, since a Bazaar issue can draft several specs (e.g. L1+L2+L3) reviewed together in a single cycle — the work-prep original only ever drafts one spec per ticket.
 3. The lib never adds or removes labels, never marks a PR draft/ready, never merges, never posts the commit status on its own.
 4. `--mode spec` never enters adjudication.
 5. Prompt text is stored once and referenced by key; no worker holds its own copy of a review prompt.
@@ -114,8 +119,8 @@ Inherits `ASF-FEAT-MCP-RESILIENCE` (0-4) for reviewer calls. `run_review_cycle` 
 A cycle is idempotent per (PR head SHA, cycle number); history file makes re-runs append rather than restart.
 
 ### Versioning policy
-`lib/bazaar-review.sh` carries its own `BZR_REVIEW_LIB_VERSION` string (`lib/bazaar-review.sh:31`,
-currently `0.1.2`) for diagnostic identification. Neither worker checks it: both
+`lib/bazaar-review.sh` carries its own `BZR_REVIEW_LIB_VERSION` string (`lib/bazaar-review.sh:32`,
+currently `0.1.3`) for diagnostic identification. Neither worker checks it: both
 `bazaar-issue-worker.sh` and `bazaar-build-worker.sh` `source` the lib unconditionally,
 with no reference to `BZR_REVIEW_LIB_VERSION` anywhere in either script — there is no
 minimum-version assertion today, despite the original draft's intent that workers
