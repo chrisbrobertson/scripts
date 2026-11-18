@@ -33,7 +33,7 @@ TIF specs for **Bazaar Builder**: a two-controller, two-worker replacement for t
 
 ### Decisions taken 2026-09-19 (second round)
 
-All eleven open decisions from the first draft were answered the same day and folded into the specs; see `log.md`. Remaining `[ASSUMPTION]` items the owner may still want to look at before phase 2:
+All eleven open decisions from the first draft were answered the same day and folded into the specs; see `log.md`. Remaining `[ASSUMPTION]` items the owner may still want to look at before moving any spec to `ready` (phases 1-4 all landed 2026-09-19/20 and phase 5 pilot is in progress — see Status above; these were never gated on phase 2 specifically):
 
 1. **Attempt counter** as `bzr-attempt` marker comments, reset by the `bzr-escalated` marker (controller L3).
 2. **Rejected spec PR** escalates to `bzr-blocked` rather than redrafting (L1).
