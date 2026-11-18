@@ -832,8 +832,19 @@ quarantine_spec_pr() {
 # that judgment call stays with the LLM reviewer. Scoped to the spec under
 # review only; pre-existing drift elsewhere in the corpus is out of scope here.
 citation_check_block() {
-  local spec_path="$1" out
-  out=$(cd "$REVIEW_DIR" && ./lint-spec-citations 2>/dev/null | awk -F: -v p="$spec_path" '$1==p')
+  local spec_path="$1" raw out rc err err_file="$TMP_ROOT/lint-spec-citations.err"
+  raw=$(cd "$REVIEW_DIR" && "$SCRIPTS_DIR/lint-spec-citations" 2>"$err_file")
+  rc=$?
+  err=$(cat "$err_file" 2>/dev/null)
+  # Exit 0 (clean) and exit 1 (findings present) are both a completed run;
+  # anything else, or output on stderr, means the linter itself never
+  # produced a verdict (missing binary, crash, bad interpreter, etc.).
+  if { [ "$rc" -ne 0 ] && [ "$rc" -ne 1 ]; } || [ -n "$err" ]; then
+    printf 'lint-spec-citations: execution failed (exit %s) running %s against %s — pre-check skipped, reviewer must manually verify file:line citations.\n%s' \
+      "$rc" "$SCRIPTS_DIR/lint-spec-citations" "$spec_path" "$err"
+    return
+  fi
+  out=$(printf '%s\n' "$raw" | awk -F: -v p="$spec_path" '$1==p')
   if [ -z "$out" ]; then
     printf 'lint-spec-citations: no stale file:line citations found in %s.' "$spec_path"
   else
