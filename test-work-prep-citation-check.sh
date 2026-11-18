@@ -40,13 +40,16 @@ run_citation_check() {
   ( PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
       WORK_PREP_TEST_MODE=citation-check \
       TEST_REVIEW_DIR="$review_dir" TEST_SPEC_PATH="$spec_path" \
-      "$SCRIPT" --repo o/r --dry-run ) > "$out" 2>/dev/null
+      "$SCRIPT" --repo o/r --repo-base "$(dirname "$ROOT")" --dry-run ) > "$out" 2>/dev/null
 }
 
 # ---------- fixture tree ----------
+# Deliberately does NOT contain a copy of lint-spec-citations: the target
+# repository citation_check_block() runs against is the ticket's own repo,
+# which has no reason to bundle this script's linter. --repo-base points
+# SCRIPTS_DIR at the real $ROOT so the helper is found there instead.
 REVIEW_DIR="$TMP/review"
 mkdir -p "$REVIEW_DIR/specs"
-cp "$ROOT/lint-spec-citations" "$REVIEW_DIR/"
 printf '#!/bin/bash\necho one\necho two\necho three\n' > "$REVIEW_DIR/target.sh"
 
 # ---------- clean spec: in-range citation ----------
@@ -83,6 +86,19 @@ assert_grep "missing-file citation is flagged" \
 run_citation_check "$REVIEW_DIR" "specs/clean.md" "$TMP/scoped.out"
 assert_not_grep "unrelated stale.md finding does not leak into clean.md's check" \
   "specs/stale.md" "$TMP/scoped.out"
+
+# ---------- missing/broken linter: must report a failure, never a false "clean" ----------
+( PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
+    WORK_PREP_TEST_MODE=citation-check \
+    TEST_REVIEW_DIR="$REVIEW_DIR" TEST_SPEC_PATH="specs/clean.md" \
+    "$SCRIPT" --repo o/r --repo-base "$TMP/no-such-repo-base" --dry-run \
+) > "$TMP/no-linter.out" 2>/dev/null
+assert_grep "missing lint-spec-citations binary is reported as a failure, not clean" \
+  "lint-spec-citations: execution failed" \
+  "$TMP/no-linter.out"
+assert_not_grep "missing-linter failure is never misreported as a clean verdict" \
+  "no stale file:line citations found" \
+  "$TMP/no-linter.out"
 
 echo "--- $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]
