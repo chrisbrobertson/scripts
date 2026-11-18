@@ -43,6 +43,10 @@ valid_review_structure <file>                                       # unchanged 
 count_blocking    <file>
 reviewer_preflight                                                  # startup fatal on outdated/no-credits
 
+# GitHub helpers used by the cycle (lib/bazaar-review.sh:321-370, no prior babysit-builder.sh equivalent)
+collect_pr_feedback <pr_num>                                        # existing PR reviews/comments minus this pipeline's own, for the history block
+post_reviewer_review <pr_num> <cycle> <max> <review_file>           # posts one cycle's reviewer output as a PR comment
+
 # Cycle (from babysit-builder.sh:1102 run_build_cycle and babysit-work-prep.sh:1060 run_spec_review_cycle)
 run_review_cycle --mode code|spec --pr <n> --worktree <dir> --branch <name> [--max-cycles N] [--validate-cmd CMD]
 #                 [--spec-path P --spec-dir D --spec-guide G --ticket T --ticket-url U --ticket-title S --ticket-body B]
