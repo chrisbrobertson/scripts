@@ -92,7 +92,7 @@ scripts" sections) rather than kept in a separate amendments file — no
 ## Next Steps
 
 1. **Review specs** — verify accuracy against implementation
-2. **Security review** — execute SECURITY-REVIEW-PLAN.md checklist (~2-4 hours)
+2. ~~**Security review** — execute SECURITY-REVIEW-PLAN.md checklist~~ — done 2026-11-17; two owner decisions remain open (see that file's Summary & Prioritization)
 3. **QA smoke tests** — run Phase 1 + Phase 2 from QA-TEST-PLAN.md (~3 hours)
 4. **Resolve [OPEN] items** — or accept as deferred with owners assigned
 5. **Update status to `ready`** — after blockers resolved
