@@ -50,7 +50,7 @@ reviewer_preflight                                                  # startup fa
 collect_pr_feedback <pr_num>                                        # existing PR reviews/comments minus this pipeline's own, for the history block
 post_reviewer_review <pr_num> <cycle> <max> <review_file>           # posts one cycle's reviewer output as a PR comment
 
-# Cycle (from babysit-builder.sh:1102 run_build_cycle and babysit-work-prep.sh:1060 run_spec_review_cycle)
+# Cycle (from babysit-builder.sh:1102 run_build_cycle and babysit-work-prep.sh:1086 run_spec_review_cycle)
 run_review_cycle --mode code|spec --pr <n> --worktree <dir> --branch <name> [--max-cycles N] [--validate-cmd CMD]
 #                 [--spec-path P --spec-dir D --spec-guide G --ticket T --ticket-url U --ticket-title S --ticket-body B]
 #   returns: 0 converged (BLOCKING=0)   10 cap hit   20 bail (reviewer rc 1 / implementer failed /
