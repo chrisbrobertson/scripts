@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+"""Verify `<file>:<line>` / `<file>:<line>-<line>` citations in Markdown docs.
+
+This repo's specs and docs cite shipped source lines heavily (e.g.
+`babysit-builder.sh:1333-1337`, `new-fleet.sh:836,923`) and that drift has been
+the single most common class of spec-maintenance fix in this repo's history —
+dozens of "docs: fix stale line ref" PRs. This tool catches the mechanical
+subset of that drift automatically: a cited file that no longer exists, or a
+cited line/line-range past the end of the file. It cannot verify that a
+citation's line range still describes what the prose claims — that still needs
+a human or LLM read of the diff.
+
+Usage:
+  lint-spec-citations            scan every *.md file in the repo
+  lint-spec-citations --json     machine-readable output
+  lint-spec-citations --help
+"""
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+
+CITATION_RE = re.compile(
+    r"([A-Za-z0-9_./-]+\.(?:sh|py)):(\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)"
+)
+SKIP_DIRS = {".git", "node_modules"}
+
+
+def find_markdown_files(root):
+    for path in sorted(root.rglob("*.md")):
+        if any(part in SKIP_DIRS for part in path.parts):
+            continue
+        yield path
+
+
+def parse_segments(nums):
+    """'1333-1337,1346' -> [(1333, 1337), (1346, 1346)]. Raises ValueError if malformed."""
+    segments = []
+    for part in nums.split(","):
+        if "-" in part:
+            start_s, end_s = part.split("-", 1)
+            start, end = int(start_s), int(end_s)
+        else:
+            start = end = int(part)
+        segments.append((start, end))
+    return segments
+
+
+def check_citation(root, file_part, nums, md_path, md_line):
+    findings = []
+    try:
+        segments = parse_segments(nums)
+    except ValueError:
+        findings.append(
+            {
+                "doc": str(md_path),
+                "line": md_line,
+                "citation": f"{file_part}:{nums}",
+                "issue": "malformed-citation",
+                "detail": f"could not parse line numbers '{nums}'",
+            }
+        )
+        return findings
+
+    target = root / file_part
+    if not target.is_file():
+        findings.append(
+            {
+                "doc": str(md_path),
+                "line": md_line,
+                "citation": f"{file_part}:{nums}",
+                "issue": "missing-file",
+                "detail": f"'{file_part}' does not exist",
+            }
+        )
+        return findings
+
+    line_count = sum(1 for _ in target.open(encoding="utf-8", errors="replace"))
+    for start, end in segments:
+        if start < 1 or end < start:
+            findings.append(
+                {
+                    "doc": str(md_path),
+                    "line": md_line,
+                    "citation": f"{file_part}:{nums}",
+                    "issue": "malformed-citation",
+                    "detail": f"invalid range {start}-{end}",
+                }
+            )
+        elif end > line_count:
+            findings.append(
+                {
+                    "doc": str(md_path),
+                    "line": md_line,
+                    "citation": f"{file_part}:{nums}",
+                    "issue": "line-out-of-range",
+                    "detail": f"cites line {end} but '{file_part}' has {line_count} lines",
+                }
+            )
+    return findings
+
+
+def lint(root):
+    findings = []
+    for md_path in find_markdown_files(root):
+        text = md_path.read_text(encoding="utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            for m in CITATION_RE.finditer(line):
+                file_part, nums = m.group(1), m.group(2)
+                findings.extend(
+                    check_citation(root, file_part, nums, md_path.relative_to(root), i)
+                )
+    return findings
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Verify file:line citations in Markdown docs against the files they cite.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ap.add_argument("--json", action="store_true", dest="as_json", help="JSON output")
+    args = ap.parse_args()
+
+    root = Path.cwd()
+    findings = lint(root)
+
+    if args.as_json:
+        print(json.dumps(findings, indent=2))
+    elif not findings:
+        print("All citations valid.")
+    else:
+        for f in findings:
+            print(f"{f['doc']}:{f['line']}: {f['citation']} -> {f['detail']}")
+        print(f"\n{len(findings)} stale citation(s) found.")
+
+    sys.exit(1 if findings else 0)
+
+
+if __name__ == "__main__":
+    main()
