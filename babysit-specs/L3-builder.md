@@ -412,6 +412,39 @@ babysit-builder.sh [--repo OWNER/REPO] [--source github|jira|both]
    re-selection. A ticket only re-enters the queue when a human (or work-prep)
    explicitly re-adds `build-ready`.
 
+### Error model
+- **Pre-flight failure, including the startup reviewer probe, `gh`/`git` auth
+  failure, or a lock-file collision:** fatal, exit 1, no tickets processed this run.
+- **Missing/malformed Jira env vars when `--source jira|both` is requested, or a
+  failed `gh issue list` in `fetch_github_queue` (`babysit-builder.sh:1333-1337`) when
+  `--source github|both` is requested:** fatal, exit 1.
+- **Bad arguments:** usage message, exit 2, no tickets processed.
+- **Worktree creation fails, the implementer exits non-zero, or
+  `HANDOFF_REVIEW` names a non-numeric PR:** logged to stderr, ticket not
+  relabelled, retried next run; exit 0.
+- **`STUCK <reason>` or no sentinel on the implementer's last line:** same as
+  above — stderr, ticket left in queue, retried next run; exit 0.
+- **`SPEC_GAP <reason>`:** ticket kicked back — labelled
+  `build-needs-clarification`, `build-ready` removed, gap comment posted, NOT
+  retried as-is; exit 0.
+- **Review cycle exhausts `MAX_REVIEW_CYCLES` with BLOCKING findings still
+  open:** PR labelled `build-max-cycles`, left open and unmerged, ticket swapped
+  `build-ready` → `build-done`; exit 0.
+- **Reviewer-backend failure (`build-mcp-outage`, `build-codex-outdated`,
+  `build-codex-no-credits`):** ticket KEEPS `build-ready`, run halts; the next
+  run's stalled-PR sweep resumes the labelled PR automatically once the
+  underlying cause (transport outage, outdated CLI, or credits) is resolved;
+  exit 0.
+- **Jira endpoint unreachable, or returns an invalid response, at query time
+  (`--source jira|both`):** not fatal — skips Jira-sourced tickets, continues
+  with GitHub-sourced ones; exit 0.
+- **Stalled-PR sweep hits any of its seven fail-closed conditions (`HALT_RC`
+  5-11, issue #106):** whole run halts before the ticket queue is read, with the
+  triggering PR's resumable label and its ticket's `build-ready` left untouched;
+  the top-level `HALT_RC` dispatch (`babysit-builder.sh:1957-1968`) emits one
+  summary line per code naming the specific failure; exit 0. See "Failure modes
+  & blast radius" below for the blast-radius detail per condition.
+
 ### Idempotency
 Idempotent per ticket and per PR: re-running the script against a queue with no new
 `build-ready` tickets produces no new PRs, worktrees, or label transitions — with one
