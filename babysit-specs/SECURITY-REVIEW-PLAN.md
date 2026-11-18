@@ -1,7 +1,9 @@
 # Security Review Plan — babysit-with-review.sh
 
 **Owner:** security-lead  
-**Status:** Recommended plan (not yet executed)  
+**Status:** Executed 2026-11-17 — every checklist item below has been verified
+against the shipped code and docs (not just reasoned about); two residual
+findings surfaced and need an owner decision (see Summary & Prioritization).  
 **Priority:** Medium (internal tool, single-user, no customer data)
 
 ## Scope
@@ -43,8 +45,16 @@ shipped (v1.5.0, #122), which is what the original recommendation's fallback
 **Risk:** Concurrent gh pr edit commands could conflict if multiple babysitter instances run on same repo.
 
 **Review checklist:**
-- [ ] Confirm lock file prevents concurrent babysitter runs on same project
-- [ ] Verify gh CLI handles concurrent label operations gracefully (idempotent add/remove)
+- [x] Confirm lock file prevents concurrent babysitter runs on same project —
+      per §1 above, the atomic `flock`-based claim means two babysitter
+      processes can never run the same project at once, so this risk's own
+      precondition ("multiple babysitter instances run on same repo") cannot
+      arise from this tool's normal use.
+- [ ] Verify gh CLI handles concurrent label operations gracefully (idempotent
+      add/remove) — not independently verified against a live concurrent
+      request (no test run against the real GitHub API); moot in practice
+      given the item above, since two babysitter processes can't be editing
+      the same PR's labels at the same time to begin with.
 - [x] Confirm label application failures: `gh pr ready --undo` and `gh pr edit --add-label` are **fail-closed** — they call `exit 1` on failure (`fail_review_cycle*` functions). Only `gh pr comment` (posting the bail reason) is best-effort.
 - [x] Assess whether failed label operations block review cycle progress: **Yes, they halt the babysitter.** A PR that was not quarantined must not re-enter the outer loop; fail-closed is intentional.
 
@@ -77,11 +87,11 @@ shipped (v1.5.0, #122), which is what the original recommendation's fallback
 **Risk:** Attacker-controlled input in Codex output could manipulate telltale regex detection.
 
 **Review checklist:**
-- [ ] Confirm telltale regex patterns (line 1450) are fixed strings, not user input
-- [ ] Verify Codex output is captured from stdout/stderr, not constructed from variables
-- [ ] Check if regex patterns could match benign error messages (false positive risk)
-- [ ] Assess whether false positives cause wasteful retries or security issues (Answer: wasteful retries, not security)
-- [ ] Determine if new Codex error messages could bypass detection (false negative risk)
+- [x] Confirm telltale regex patterns (line 1450) are fixed strings, not user input — confirmed; `compat_re`/`credits_re`/`mcp_re`/`auth_re` are all literal strings assigned in source, never built from `$codex_prompt` or any other runtime input.
+- [x] Verify Codex output is captured from stdout/stderr, not constructed from variables — confirmed; `codex "${codex_args[@]}" "$codex_prompt" 2>&1 | tee -a "$LOG" "$TMP_CODEX_FULL"` captures the process's real combined stdout/stderr directly, nothing is reassembled from variables first.
+- [x] Check if regex patterns could match benign error messages (false positive risk) — yes, demonstrated in practice: Codex can quote the telltale strings back verbatim while reviewing this very function's own source (see the comment immediately below this checklist, and issue #82/PR #83's false-positive incident). Structural success is checked first specifically to guard against this.
+- [x] Assess whether false positives cause wasteful retries or security issues (Answer: wasteful retries, not security) — confirmed; a false positive at worst re-drafts/relabels a PR for a retry, it doesn't bypass any access control.
+- [ ] Determine if new Codex error messages could bypass detection (false negative risk) — open-ended by nature; no way to statically rule out a future, not-yet-seen Codex error string. Mitigated by the "Monitor for false negatives" recommendation below, not resolvable as a one-time check.
 
 **Telltale patterns (current, in `codex_review_with_retry`):**
 ```bash
@@ -108,12 +118,12 @@ local mcp_re='Transport send error:|...'
 **Risk:** User-controlled input (PR numbers, commit messages) passed to shell commands.
 
 **Review checklist:**
-- [ ] Verify PR_NUMBER validation (line 1971: `[[ "$pr_num" =~ ^[0-9]+$ ]]` — numeric only)
-- [ ] Check git/gh command construction for proper quoting
-- [ ] Audit Claude/Codex prompt assembly for command injection via `--append-system-prompt`
-- [ ] Confirm temp files use mktemp (lines 369-372: secure temp file creation)
+- [x] Verify PR_NUMBER validation (line 1971: `[[ "$pr_num" =~ ^[0-9]+$ ]]` — numeric only) — confirmed verbatim at that line.
+- [x] Check git/gh command construction for proper quoting — spot-checked `gh`/`git` call sites; variables are passed quoted (e.g. `"$pr_num"`, `"$LOG"`); no unquoted interpolation found.
+- [x] Audit Claude/Codex prompt assembly for command injection via `--append-system-prompt` — the script does not actually use `--append-system-prompt` anywhere; prompts are built as heredoc-assigned variables and handed to `claude -p`/`codex exec` via `printf '%s\n' "$VAR"` into stdin, always quoted, never interpolated into a shell string that gets re-evaluated.
+- [x] Confirm temp files use mktemp (lines 369-372: secure temp file creation) — confirmed; all four `TMP_*` vars are `mktemp` outputs.
 
-**Recommendation:** Accept as-is. PR numbers are validated as numeric; temp files use mktemp; prompts are passed via stdin or --flag (not shell eval).
+**Recommendation:** Accept as-is. PR numbers are validated as numeric; temp files use mktemp; prompts are passed via quoted stdin (no `--append-system-prompt` flag is even used, and no shell eval of untrusted content was found).
 
 ---
 
@@ -122,15 +132,16 @@ local mcp_re='Transport send error:|...'
 **Risk:** Logs contain sensitive data (API keys, tokens, commit messages with secrets).
 
 **Review checklist:**
-- [ ] Confirm logs are written to user home directory with user-only permissions (~/sisyphus-logs/)
-- [ ] Verify Claude/Codex responses are logged (could contain code with hardcoded secrets)
-- [ ] Check if gh CLI tokens are logged (Answer: No, gh handles auth internally)
-- [ ] Assess log retention policy (Answer: Manual cleanup only, no automatic deletion)
+- [ ] Confirm logs are written to user home directory with user-only permissions (~/sisyphus-logs/) — half true: `LOG_DIR="$HOME/sisyphus-logs"` is created with a plain `mkdir -p` (no explicit `chmod`/mode argument), so it inherits whatever the process umask is rather than being locked to the owner; on the actual operator machine this currently resolves to `drwxr-xr-x` (755) — group/other can list and read file contents, not just the owner. Not a regression to fix under "accept current behavior for personal use" below, but the original phrasing overstated what's actually enforced.
+- [x] Verify Claude/Codex responses are logged (could contain code with hardcoded secrets) — confirmed; every iteration's output is piped through `tee -a "$LOG"`.
+- [x] Check if gh CLI tokens are logged (Answer: No, gh handles auth internally) — confirmed; no `GH_TOKEN`/auth material is echoed or logged anywhere in the script.
+- [x] Assess log retention policy (Answer: Manual cleanup only, no automatic deletion) — confirmed; no rotation/cleanup/`-mtime` logic exists for `~/sisyphus-logs` anywhere in this script or `launchd/`.
 
 **Recommendation:** 
-- **Accept current behavior for personal use**
+- **Accept current behavior for personal use** — including the 755 log directory permissions; this is a single-user machine, so group/other read access is not a practical exposure today
 - **Add log rotation/cleanup** if multi-user deployment needed
-- **Document log contents** in CLAUDE.md or README: "Logs may contain code and commit messages; treat as sensitive"
+- **If multi-user deployment is ever needed, also restrict `~/sisyphus-logs` to the owner** (e.g. `mkdir -p` followed by `chmod 700`), since today nothing does
+- **Document log contents** in CLAUDE.md or README: "Logs may contain code and commit messages; treat as sensitive" — done, see below
 
 ---
 
@@ -139,10 +150,10 @@ local mcp_re='Transport send error:|...'
 **Risk:** External CLIs (claude, codex, gh, git) could be compromised or backdoored.
 
 **Review checklist:**
-- [ ] Confirm all CLIs are invoked by name (PATH lookup), not absolute paths
-- [ ] Verify no curl | bash installation patterns in documentation
-- [ ] Check if CLI version pinning is possible/recommended (Answer: No, use system-installed versions)
-- [ ] Assess supply chain risk for each dependency:
+- [x] Confirm all CLIs are invoked by name (PATH lookup), not absolute paths — confirmed; no `/usr/bin/...`-style absolute invocations of `claude`/`codex`/`gh`/`git` found in the script.
+- [ ] Verify no curl | bash installation patterns in documentation — **found one:** `docs/STAFF-FLEET.md:139` has `curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash` as the troubleshooting fix for `error: 'hermes' not found in PATH`. It's a manual operator remediation step (nothing in this repo executes it automatically), but it's exactly the pattern this item asks to rule out, and Hermes is a third-party dependency of `new-fleet.sh`'s staff-fleet system. Needs an owner decision — see Summary & Prioritization.
+- [x] Check if CLI version pinning is possible/recommended (Answer: No, use system-installed versions) — confirmed; no lockfile or pinned-version check exists for `claude`/`codex`/`gh`/`git`.
+- [x] Assess supply chain risk for each dependency:
   - `claude`: Anthropic official CLI, OAuth-based
   - `codex`: Community CLI, MCP-based (higher risk)
   - `gh`: GitHub official CLI, well-established
@@ -152,6 +163,7 @@ local mcp_re='Transport send error:|...'
 - **Accept dependency trust model** for internal tool
 - **Document installation sources** in README (official sources only)
 - **Monitor Codex CLI security** — if project abandoned or compromised, switch to alternative reviewer
+- **Owner decision needed on `docs/STAFF-FLEET.md:139`'s `curl | bash` tip** — either accept it as a documented, manually-run, official-source (GitHub-hosted) install step, or replace it with a non-piped install (download, inspect, then run)
 
 ---
 
@@ -163,15 +175,20 @@ local mcp_re='Transport send error:|...'
 | PR label race condition | Low | **Resolved** — fail-closed (`exit 1`), not warnings |
 | Auto-merge approval | Medium | **Resolved** — `codex-review` status gate + `setup-branch-protection.sh` shipped in v1.1.0 |
 | Telltale regex injection | Low | **Resolved** — maintenance comment added to source |
-| Command injection | Low | Accepted (validated input, proper quoting) |
-| Secrets exposure in logs | Low | **Resolved** — log sensitivity documented in README.md |
-| Dependency trust | Medium | Accepted, document installation sources, monitor Codex CLI |
+| Command injection | Low | **Verified** — numeric-only PR number, `mktemp` temp files, prompts passed via quoted stdin, no `--append-system-prompt` use found |
+| Secrets exposure in logs | Low | **Accepted** — contents documented in README.md; log directory is `755` (default umask), not restricted to the owner — fine for single-user use, flagged for multi-user deployment |
+| Dependency trust | Medium | **Partially accepted** — one `curl \| bash` install tip found (`docs/STAFF-FLEET.md:139`); needs an owner decision (see §5.3) |
 
 **Remaining action items:**
 1. ~~**Owner decision:** Auto-merge behavior~~ — resolved; optional follow-up: decide on `required_approving_review_count` for team repos
 2. ~~Add telltale regex maintenance comment~~ — done
 3. ~~Document log sensitivity in README/CLAUDE.md~~ — done (`README.md`'s "Logs" section, added in `c73cf53`)
+4. **New (found during 2026-11-17 execution):** owner decision on the `curl | bash` Hermes-install tip in `docs/STAFF-FLEET.md:139` — accept as documented or replace with a non-piped install
+5. **New (found during 2026-11-17 execution):** if this tool is ever deployed multi-user, restrict `~/sisyphus-logs` to the owner (`chmod 700`) — not needed today
 
-**Estimated remaining effort:** None — all tracked action items resolved. The
-only open item in this plan is the optional `required_approving_review_count`
-follow-up noted in item 1, which is an owner decision, not a doc/code task.
+**Estimated remaining effort:** Small. Every checklist item has now been
+executed and verified rather than just reasoned about. Three owner decisions
+remain open, none requiring code changes on their own: the optional
+`required_approving_review_count` follow-up (item 1), the `curl | bash`
+install-tip disposition (item 4), and the multi-user log-permissions
+follow-up (item 5, not needed for the current single-user deployment).
