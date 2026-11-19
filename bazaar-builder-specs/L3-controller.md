@@ -118,7 +118,7 @@ For each open issue in `bzr-spec-review` whose spec PR (branch `bzr/spec-<issue>
 2. Post commit status `codex-review=success` on the new head (same `gh api` call as `babysit-builder.sh`), since `setup-branch-protection.sh` requires it on main. `babysit-work-prep.sh` merges bare today (line 421) and would fail on a protected repo.
 3. `gh pr merge --merge`. On failure: comment on the issue, stay in `bzr-spec-review`. There is no head-change or comment-dedup gate: as long as the PR stays open, non-draft, and approved, every subsequent tick re-runs steps 1-3 unconditionally and re-posts the same failure comment (`sweep_approvals`, `bazaar-issues.sh:189-204`) — see Failure modes.
 4. Reconcile sub-issues: the worker created them at draft time (see [BZR-FEAT-ISSUE-WORKER](L3-issue-worker.md)); when two or more `spec_type: task` files merge, the sweep verifies one open sub-issue with a `bzr-sub-issue … spec=<L4 ID>` marker exists per file, creates any missing, and closes any whose L4 was dropped from the final PR. When zero or one `spec_type: task` file merges, no sub-issue is wanted for it and none is created (`bzr_reconcile_sub_issues`, `lib/bazaar-common.sh:595`).
-5. Rewrite the parent's `Specs:` line to the merged spec IDs and paths (the build precheck reads this).
+5. Rewrite the parent's `Specs:` line to the merged spec paths (the build precheck reads this; `update_specs_line` in `bazaar-issues.sh` writes bare file paths only, no spec IDs).
 6. `bzr-spec-review` → `bzr-ready`; comment with the merged spec list and sub-issue numbers.
 
 Interrupted after step 3: detected as "PR merged, issue still `bzr-spec-review`", resumes at step 4.
@@ -197,7 +197,7 @@ Composes with both workers, `lib/bazaar-common.sh`, and [BZR-FEAT-REVIEW-LIB](L3
 3. **Given** the same but the pid is alive, **when** a tick runs, **then** nothing changes even after hours.
 4. **Given** a claim naming another host, **when** a tick runs, **then** it is skipped, never released.
 5. **Given** an issue in `bzr-needs-info` with a human comment newer than the last marker, **when** a tick runs, **then** the label is removed and the issue is intake again.
-6. **Given** an approved spec PR with two L4s and two draft-time sub-issues, **when** a tick runs, **then** the PR merges with `codex-review=success` on its head, every merged spec is `status: ready`, sub-issues are unchanged, the parent's `Specs:` line lists the IDs, and the issue is `bzr-ready`.
+6. **Given** an approved spec PR with two L4s and two draft-time sub-issues, **when** a tick runs, **then** the PR merges with `codex-review=success` on its head, every merged spec is `status: ready`, sub-issues are unchanged, the parent's `Specs:` line lists the merged spec paths, and the issue is `bzr-ready`.
 7. **Given** the sweep crashed after merging, **when** the next tick runs, **then** it resumes at reconciliation and creates no duplicates.
 8. **Given** "not approved yet", **when** a tick runs, **then** nothing changes.
 9. **Given** a worker exits `STUCK` for the third time since the last escalation, **when** the controller handles it, **then** `bzr-blocked` is added, `bzr-escalated` posted, and the issue leaves every queue.

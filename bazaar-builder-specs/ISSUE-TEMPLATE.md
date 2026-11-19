@@ -21,7 +21,7 @@ Out: <...>
 bug | feature      <!-- also set the `bug` or `enhancement` label; label wins if they disagree -->
 
 ## Links
-Specs: <spec IDs and paths; "none yet" until the approval sweep fills it>
+Specs: <spec paths (backtick-quoted, comma-separated); "none yet" until the approval sweep fills it>
 Related: #<n> ...
 
 <details><summary>Original report</summary>
