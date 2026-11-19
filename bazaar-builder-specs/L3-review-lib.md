@@ -55,7 +55,7 @@ post_reviewer_review <pr_num> <cycle> <max> <review_file>           # posts one 
 # lint-spec-citations row)
 citation_check_block <spec_path>                                    # <spec_path> may be space-separated (multi-spec drafts); requires SCRIPTS_DIR
 
-# Cycle (from babysit-builder.sh:1102 run_build_cycle and babysit-work-prep.sh:1086 run_spec_review_cycle)
+# Cycle (from babysit-builder.sh:1102 run_build_cycle and babysit-work-prep.sh:1097 run_spec_review_cycle)
 run_review_cycle --mode code|spec --pr <n> --worktree <dir> --branch <name> [--max-cycles N] [--validate-cmd CMD]
 #                 [--spec-path P --spec-dir D --spec-guide G --ticket T --ticket-url U --ticket-title S --ticket-body B]
 #   returns: 0 converged (BLOCKING=0)   10 cap hit   20 bail (reviewer rc 1 / implementer failed /
