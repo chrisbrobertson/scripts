@@ -674,7 +674,8 @@ __REVIEW__
 - `[review] WARNING: failed to set codex-review status for PR #N; leaving PR open rather than merging without the status check`
 - `[review] WARNING: could not resolve repo or head SHA for PR #N; leaving PR open rather than merging without the status check`
 - `[review] WARNING: gh pr ready failed for PR #N; attempting merge anyway` (best-effort undraft failed; merge is still attempted)
-- `[review] PR #N queued for auto-merge (merges when CI passes)` or `[review] PR #N merged.` (merge success)
+- `[review] PR #N merged.` (merge success, via a single immediate `gh pr merge --match-head-commit`; the function never queues `--auto` — see Contract line 89 — so there is no "queued for auto-merge" event)
+- `[review] WARNING: merge failed for PR #N; left open for next iteration. See $LOG.` (merge attempt failed; followed by `review-merge-failed` or `review-merge-conflict` labelling per Contract lines 167-168)
 - `[$REVIEWER reviewer] template=<descriptive-baseline|descriptive-convergence|prescriptive-detailed|prescriptive-adjudication> has_history=<yes|no> cycle=M/N` (mode tracking)
 - `[$IMPLEMENTER implementer] resolution justifications posted to PR #N` (cycle 4+ — logged unconditionally once the PR's last comment is fetched via `gh pr view`; there is no check that the implementer's own `gh pr comment` call actually succeeded)
 
