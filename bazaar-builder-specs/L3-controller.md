@@ -133,7 +133,7 @@ The dead-pid release sweep (Queue definition, row (a)) is not a bare release: it
 ### Invariants
 1. A controller never edits code or PR contents, and never edits spec text except the approval-authorised status flip.
 2. At most `--workers` worker processes per controller.
-3. Claim order: add claim label, remove prior state label if any (`bzr_transition`, reverted and logged on failure — the worker is never spawned). The worker is then spawned in the background and posts its own claim marker after it starts, with failure silently ignored (`bzr_post_claim ... || true`); the marker is not a precondition for spawning.
+3. Claim order: add claim label, remove prior state label if any (`bzr_transition`, reverted and logged on failure — the worker is never spawned). The worker is then spawned in the background; the claim marker is posted by the controller's own spawn subshell (`bzr_spawn`, `lib/bazaar-common.sh:439`) before the worker command runs (`exec`'d in its place) — not by the worker itself. There is no worker-side claim-comment check (see [L2-bazaar-system.md](L2-bazaar-system.md)). Posting failure is silently ignored (`bzr_post_claim ... || true`); the marker is not a precondition for spawning.
 4. Labels are re-read immediately before claiming; a candidate claimed since the queue read is skipped.
 5. No claim is ever released on elapsed time.
 6. The model may only return an issue number from the candidate list; anything else falls back to sort order.
