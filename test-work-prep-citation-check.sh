@@ -35,19 +35,30 @@ exit 0
 STUB
 chmod +x "$TMP/bin/gh"
 
+# citation_check_block() resolves the linter at $REPO_BASE/scripts/lint-spec-citations.
+# Symlink a "scripts" dir to the real $ROOT so that resolution works regardless of
+# this checkout's actual directory name — a worktree checkout (e.g. a babysit
+# outer-loop iteration) is never literally named "scripts", unlike a normal
+# ~/repos/scripts clone, which is what the old "--repo-base $(dirname "$ROOT")"
+# trick silently depended on.
+BASEDIR="$TMP/basedir"
+mkdir -p "$BASEDIR"
+ln -s "$ROOT" "$BASEDIR/scripts"
+
 run_citation_check() {
   local review_dir="$1" spec_path="$2" out="$3"
   ( PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
       WORK_PREP_TEST_MODE=citation-check \
       TEST_REVIEW_DIR="$review_dir" TEST_SPEC_PATH="$spec_path" \
-      "$SCRIPT" --repo o/r --repo-base "$(dirname "$ROOT")" --dry-run ) > "$out" 2>/dev/null
+      "$SCRIPT" --repo o/r --repo-base "$BASEDIR" --dry-run ) > "$out" 2>/dev/null
 }
 
 # ---------- fixture tree ----------
 # Deliberately does NOT contain a copy of lint-spec-citations: the target
 # repository citation_check_block() runs against is the ticket's own repo,
 # which has no reason to bundle this script's linter. --repo-base points
-# SCRIPTS_DIR at the real $ROOT so the helper is found there instead.
+# SCRIPTS_DIR at the real $ROOT (via the symlink above) so the helper is
+# found there instead.
 REVIEW_DIR="$TMP/review"
 mkdir -p "$REVIEW_DIR/specs"
 printf '#!/bin/bash\necho one\necho two\necho three\n' > "$REVIEW_DIR/target.sh"
