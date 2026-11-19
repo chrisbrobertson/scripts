@@ -503,6 +503,18 @@ Events emitted to stderr:
 - `[build] ticket <id> (<source>): no sentinel on last line → left in queue`
 - `[jira] Jira API unavailable → skipping Jira-sourced tickets this run`
 - `[jira] Jira returned an invalid response → skipping Jira-sourced tickets this run`
+- `  [build] marking PR #<n> <label>: <reason>` (two-space indent is intentional —
+  the same convention `babysit-with-review.sh:1039` uses for its own quarantine
+  logging) — emitted by `quarantine_pr` (`babysit-builder.sh:1033`) every time a PR
+  is drafted and labelled `build-mcp-outage`, `build-codex-outdated`,
+  `build-codex-no-credits`, or `build-incomplete`; also mirrored to `$LOG`. A
+  failure inside `quarantine_pr` itself is fatal: `gh pr ready --undo` erroring
+  logs `ERROR: gh pr ready --undo failed for PR #<n> — draft it manually before
+  restarting` (`babysit-builder.sh:1036`, exit 1); `gh pr edit --add-label`
+  erroring logs `ERROR: gh pr edit --add-label failed for PR #<n> — add '<label>'
+  manually before restarting` (`babysit-builder.sh:1040`, exit 1). A failed `gh pr
+  comment` on the quarantine body is non-fatal:
+  `  [build] WARNING: gh pr comment failed for PR #<n>` (`babysit-builder.sh:1051`).
 - Stalled-PR sweep fail-closed halts (`HALT_RC` 5-11, see the "Stalled-PR sweep" bullet under "What we know" above):
   each condition first logs a `[build] ERROR: ...` line naming the specific failure
   (e.g. `could not list build-mcp-outage PRs`, `PR #<n> carries no builder marker`,
