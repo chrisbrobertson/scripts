@@ -82,7 +82,7 @@ One issue number, already labelled `bzr-building`.
 Parent in exactly one of `bzr-pr-ready`, `bzr-blocked`, or back in `bzr-ready`; a PR on `bzr/<issue>-<slug>` (or `-rN`) whose body contains `Closes #<sub>` for every converged sub-issue, `Closes #<issue>` only once every unit has converged and none was skipped (otherwise `Refs #<issue>`), and a `<!-- bzr-build-state {…} -->` marker block recording per sub-issue: pending, converged (SHA range), or skipped (reason).
 
 ### Phases
-0. **precheck** (bash): as in the surface fragment. Also: working tree of the worktree clean, `origin/main` fetched.
+0. **precheck** (bash): as in the surface fragment. `origin/<default branch>` is fetched as part of gathering issue state, before the precheck gap-check runs — there is no worktree yet at this point (the worktree is created afterward, by the round/branch-resume step that follows a passing precheck), so there is no working-tree-cleanliness check at this phase.
 1. **plan** (implementer, short): posts the ordered plan as an issue comment, `PLAN_POSTED`. Skipped whenever there is only one unit to build (no sub-issues, or exactly one).
 2. **implement sub-issue k** (implementer): reads its L4, implements, tests, commits with `Refs #<sub>`, pushes, `UNIT_DONE`. The wrapper (not the implementer) opens the draft PR after the push, on k=1 and every k after.
 3. **review** (lib, `--mode code`): convergent cycle per k. Converged → update marker block, next k. Not converged (cap or bail) → skip per the assumption above, next eligible k.
