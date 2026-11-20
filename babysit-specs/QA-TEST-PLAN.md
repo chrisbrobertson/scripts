@@ -382,7 +382,7 @@ the ticket queue for new work, per the scenario table above
 
 ## Test Suite 2: L3-review-cycle
 
-**Reference:** L3-review-cycle.md Acceptance Tests (lines 744-781)
+**Reference:** L3-review-cycle.md Acceptance Tests (lines 745-782)
 
 ### TC-2.1: Review Cycle with BLOCKING Issues
 **Status: automated (blocking-count only), not manual (added 2026-09-27).**
