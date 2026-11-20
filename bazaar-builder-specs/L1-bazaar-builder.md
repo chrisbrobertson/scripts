@@ -74,7 +74,7 @@ Like a Kanban board with two swim-lanes (Refine, Build) where a dumb dispatcher 
 
 ## Out of scope
 - Jira and any non-GitHub tracker.
-- Auto-merge of any PR.
+- Auto-merge of the build PR — merging it is always a human action (see "Merge" in [L2](L2-bazaar-system.md)). The issue controller's approval sweep does auto-merge the spec PR, but only after a human posts the approval signal (`approve_issue`, [L3-controller](L3-controller.md)); that is in scope, not out of it.
 - Cross-host coordination (the home-lab-monitor `/api/babysit` lock stays with the staff-fleet dispatcher).
 - Time limits on workers or claims.
 - Changes to `babysit-with-review.sh`.
