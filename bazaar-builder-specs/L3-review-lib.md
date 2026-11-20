@@ -41,19 +41,19 @@ codex_review_with_retry <prompt>
 claude_review     <prompt>
 valid_review_structure <file>                                       # unchanged awk contract
 count_blocking    <file>
-reviewer_preflight                                                  # startup fatal on outdated/no-credits
+reviewer_preflight                                                  # startup fatal on outdated/no-credits; defined but not yet called by either worker (dead code — `lib/bazaar-review.sh:304`)
 
 # GitHub helpers used by the cycle (lib/bazaar-review.sh:321-370, ported from
 # babysit-builder.sh:977 collect_pr_feedback and :1012 post_reviewer_review,
 # which predate the extraction — babysit-work-prep.sh:788 also had its own
 # post_reviewer_review)
-collect_pr_feedback <pr_num>                                        # existing PR reviews/comments minus this pipeline's own, for the history block
+collect_pr_feedback <pr_num>                                        # existing PR reviews/comments minus this pipeline's own, substituted into __PR_FEEDBACK__ for remediation prompts (not the history block, which is built separately from REVIEW_HISTORY + git log)
 post_reviewer_review <pr_num> <cycle> <max> <review_file>           # posts one cycle's reviewer output as a PR comment
 
 # Spec-mode citation pre-check (lib/bazaar-review.sh:399-423, ported from
 # babysit-work-prep.sh:834 citation_check_block() — see CLAUDE.md's
 # lint-spec-citations row)
-citation_check_block <spec_path>                                    # <spec_path> may be space-separated (multi-spec drafts); requires SCRIPTS_DIR
+citation_check_block <spec_path>                                    # <spec_path> may be space-separated (multi-spec drafts); requires SCRIPTS_DIR and REVIEW_WORKDIR
 
 # Cycle (from babysit-builder.sh:1102 run_build_cycle and babysit-work-prep.sh:1097 run_spec_review_cycle)
 run_review_cycle --mode code|spec --pr <n> --worktree <dir> --branch <name> [--max-cycles N] [--validate-cmd CMD]
@@ -116,7 +116,7 @@ Return codes as listed. `run_review_cycle` writes the final reviewer output path
 Inherits `ASF-FEAT-MCP-RESILIENCE` (0-4) for reviewer calls. `run_review_cycle` maps: reviewer 2/3/4 → same code; reviewer 1, implementer non-zero, `STUCK_REVIEW`, no new commit, `--validate-cmd` failure, or a `count_blocking` parse error → 20 with `REVIEW_FAIL_REASON` set; cap → 10.
 
 ### Idempotency
-A cycle is idempotent per (PR head SHA, cycle number); history file makes re-runs append rather than restart.
+A cycle is idempotent per (PR head SHA, cycle number) in principle, but there is no history file today: `REVIEW_HISTORY` (`lib/bazaar-review.sh:1115`) is a local array scoped to one `run_review_cycle` call and resets on every invocation. A re-run against an unchanged head duplicates PR comments and implementer work rather than appending to a persisted record.
 
 ### Versioning policy
 `lib/bazaar-review.sh` carries its own `BZR_REVIEW_LIB_VERSION` string (`lib/bazaar-review.sh:32`,
@@ -172,7 +172,7 @@ Composes with `ASF-FEAT-REVIEW-CYCLE` and `ASF-FEAT-MCP-RESILIENCE` (their contr
 4. **Given** `--mode spec` and cycle 5, **when** the prompt is selected, **then** it is the prescriptive spec prompt, not adjudication.
 5. **Given** cap 2 and BLOCKING never reaching 0, **when** the cycle runs, **then** rc 10.
 6. **Given** the extraction PR, **when** `awk` extracts `valid_review_structure` from lib and builder, **then** md5 matches.
-7. **Given** a caller with `LOG` unset, **when** any entry point is called, **then** exit 2 naming `LOG`.
+7. **Given** a caller with `LOG` unset, **when** an entry point that requires `LOG` is called, **then** exit 2 naming `LOG`. (Not every entry point requires `LOG`: `collect_pr_feedback` requires only `REPO`, and `citation_check_block` requires only `SCRIPTS_DIR`/`REVIEW_WORKDIR` — `lib/bazaar-review.sh:326,400`.)
 8. **Given** the QA-TEST-PLAN TC-3.1 to TC-3.8 cases, **when** replayed against the lib, **then** all pass.
 
 ## Telemetry events tied to L1 KPIs
