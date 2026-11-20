@@ -185,7 +185,10 @@ Events emitted to stderr:
 ## Verifiers
 - Tech lead: Chris Robertson
 - Security: ensure worktree paths don't leak sensitive data; Codex prompt contains diff
-- QA: verify idempotency marker, worktree cleanup, issue deduplication
+- QA: verify idempotency marker, worktree cleanup, issue deduplication — automated via
+  `test-run-retrospective-review.sh` (recording-stub harness, `gh`/`codex` stubbed on
+  PATH against a throwaway local git repo; no network), covering acceptance tests
+  AC1-AC10 below
 
 ## Failure modes & blast radius
 - **Codex compat failure (compat_re match):** PR skipped. Blast: no review for that PR;
