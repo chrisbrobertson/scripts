@@ -40,7 +40,8 @@ Chris Robertson: the label state machine and claim protocol below are implemente
    │  sweeps: dead-pid,    │          │  sweeps: dead-pid,    │    + optional Haiku
    │   bounce, approval    │          │   merged-PR           │    tie-break)
    │   sweep, rejected     │          │                       │
-   │   spec                │          │   or --issue N        │
+   │   spec                │          │                       │
+   │   or --issue N        │          │   or --issue N        │
    │  --workers N          │          │  --workers N          │
    └───────────┬───────────┘          └──────────┬────────────┘
                │ spawn per issue                  │ spawn per issue
@@ -141,7 +142,7 @@ Single-user, self-hosted. Code and issue text go to Anthropic and OpenAI per the
 # Bounds
 
 ## Out of scope
-- Cross-host locking, Jira, auto-merge, any change to `babysit-with-review.sh`.
+- Cross-host locking, Jira, auto-merge of the build PR (merging it is always a human action — see the Merge contract above; the issue controller's approval sweep auto-merging the spec PR is in scope), any change to `babysit-with-review.sh`.
 - Priority inference by model. Priority is a label or nothing.
 - Web UI. The GitHub issue page is the UI.
 
