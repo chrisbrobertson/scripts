@@ -41,7 +41,7 @@ All eleven open decisions from the first draft were answered the same day and fo
 4. **Second round** after a merge with skipped sub-issues uses branch suffix `-rN`; invariant is one open PR per issue at a time (build-worker L3).
 5. **Draft-time sub-issues are reconciled on every spec revision** (issue-worker L3).
 
-(A sixth item — the sub-issue POST payload shape — was resolved and dropped 2026-09-27: `L2-bazaar-system.md` line 74 records it as verified against live GitHub 2026-09-20, matching the shipped `bzr_create_sub_issue` in `lib/bazaar-common.sh`.)
+(A sixth item — the sub-issue POST payload shape — was resolved and dropped 2026-09-27: `L2-bazaar-system.md` line 75 records it as verified against live GitHub 2026-09-20, matching the shipped `bzr_create_sub_issue` in `lib/bazaar-common.sh`.)
 
 ## Key Decisions Documented
 
