@@ -169,7 +169,10 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
   mirrors `run_review_cycle` (`ASF-FEAT-REVIEW-CYCLE`): reviewer → implementer fixes →
   convergence tracking → prescriptive mode at cycle 3+ → same `TMP_RESULT`,
   `TMP_REVIEW`, `TMP_REVIEW_RESULT`, `TMP_CODEX_FULL` temp files and
-  `valid_review_structure` validation. Same `MAX_REVIEW_CYCLES` default of 6.
+  `valid_review_structure` validation. Same `MAX_REVIEW_CYCLES` default of 6. The
+  implementer model escalation documented in `L2-autonomous-dev-system.md:117`
+  (`claude-sonnet-5` cycles 1–3, `claude-opus-4-8` cycles 4+) is mirrored too:
+  `_rem_model` is set per cycle at `babysit-builder.sh:1254-1260`.
 - **MCP resilience is reused unchanged.** The same retry-with-backoff (0/60s/300s) and
   telltale detection from `ASF-FEAT-MCP-RESILIENCE` applies when `--reviewer codex`.
   Two run-level additions follow from the queue shape:
@@ -484,6 +487,9 @@ spec-resolution contract require manual migration of any open build PRs.
 
 ## Telemetry contract
 Events emitted to stdout:
+- `[build] ticket <id> (<source>, spec: <path>) → [dry-run] would build and open a PR`
+  under `--dry-run` (`babysit-builder.sh:2001`) — the ticket is logged but
+  `build_ticket` is never called, so no worktree, label, or PR write happens.
 - `[build] ticket <id> (<source>, spec: <path>) → worktree created, implementing` (or
   `spec: none referenced` when the ticket carries no `Spec:`/`Spec path:` line)
 - `[build] ticket <id> (<source>) → PR #M opened, HANDOFF_REVIEW → entering build cycle`
