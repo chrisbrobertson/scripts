@@ -152,9 +152,10 @@ Rules that keep this safe:
   commits are already pushed and the draft PR already exists (`ensure_pr` runs after every
   convergence), so this is not "nothing built": the round halts with real, reviewed work
   sitting in an open draft PR, and just the offending unit is escalated.
-- **Finish:** everything that converged ships in one PR. `Closes #<parent>` appears only if
-  nothing was skipped; otherwise the parent stays open and, after you merge, the sweep requeues
-  it for the remaining sub-issues once you clear their `bzr-blocked`.
+- **Finish:** everything that converged ships in one PR. Each converged sub-issue gets its own
+  `Closes #<sub-issue>` line. The parent gets `Closes #<parent>` only if nothing was skipped;
+  otherwise it gets `Refs #<parent>` and stays open, and after you merge, the sweep requeues it
+  for the remaining sub-issues once you clear their `bzr-blocked`.
 
 ---
 
