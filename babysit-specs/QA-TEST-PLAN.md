@@ -14,9 +14,15 @@ merge-failed-label coverage for TC-2.2 via `test-babysit-review-merge-draft.sh`
 `test-babysit-review-stalled-retry.sh` (50/50), sentinel/HEAD-unchanged coverage
 for TC-2.4/TC-2.5, missing-reviewer graceful-degradation coverage for TC-2.9, and
 a separate `test-babysit-review-feedback.sh` harness covering the
-`collect_pr_feedback()` filter (TC-2.10/TC-2.11, see Suite 2; 16/16); Test Suites
-1-3 otherwise remain manual smoke tests against live Claude/Codex/gh, not yet
-executed  
+`collect_pr_feedback()` filter (TC-2.10/TC-2.11, see Suite 2; 16/16); and, in
+Suite 3, retry/MCP-failure log-format coverage for TC-3.7/TC-3.8 via
+`test-babysit-review-retry-log-format.sh`, telltale-priority and
+structural-validation coverage for TC-3.9/TC-3.10/TC-3.11/TC-3.12/TC-3.12b/
+TC-3.13/TC-3.14 via `test-bazaar-review-lib.sh`, and the false-positive
+regression coverage for TC-3.15 via `test-babysit-review-false-positive.sh`
+(see Suite 3 below for details); only TC-2.3, TC-2.6, TC-2.7, TC-2.8, and
+TC-3.1 through TC-3.6 remain manual smoke tests against live Claude/Codex/gh,
+not yet executed  
 **Priority:** Medium (internal tool, existing implementation to verify)
 
 ## Test Strategy
