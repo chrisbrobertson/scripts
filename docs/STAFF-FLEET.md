@@ -1439,12 +1439,18 @@ re-spawn on the next 5-minute tick if work still looks open — the same
 accepted-duplicate-PR trade-off `babysit-builder.sh` makes (see
 `babysit-specs/L3-builder.md`).
 
-**`gateway.py` patch is version-fragile.** `new-fleet.sh`'s
-`HERMES_FLEET_ENV_INJECTION_PATCH` does a literal string match against two
-anchors in Hermes's installed `gateway.py`. A Hermes upgrade that reformats
-that function breaks the patch silently (it prints "anchors not found" and
-exits 1, so it fails loud, not silently — but only if you're watching
-`new-fleet.sh`'s own output during that run).
+**`gateway.py` patch is version-fragile, and a mismatch aborts the entire run.**
+`new-fleet.sh`'s `HERMES_FLEET_ENV_INJECTION_PATCH` does a literal string match
+against two anchors in Hermes's installed `gateway.py`. A Hermes upgrade that
+reformats that function breaks the patch: the Python heredoc prints "anchors
+not found" and calls `sys.exit(1)` (`new-fleet.sh:110-112`), and because the
+script runs under `set -euo pipefail` (`new-fleet.sh:23`) with no `||` guard
+on that heredoc call, bash aborts immediately — before `mkdir -p
+"$FLEETS_ROOT"` even runs. No fleet directory, `service-context.md`,
+SOUL.md/config.yaml/.env, Hermes profile, orchestrator/dispatcher script, bin
+wrapper, or `start-gateways.sh` gets created; the run leaves nothing behind.
+This is a hard, total failure, not just a line you might miss while watching
+the output.
 
 **Telegram bot tokens are per-agent (3 per fleet).** You can reuse one bot
 token across all three agents in a fleet if you don't need per-agent identity
