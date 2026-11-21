@@ -1532,9 +1532,9 @@ All line numbers reference the current files in `~/repos/scripts/`.
 | 44–62 | Prerequisite checks (`gh`, `hermes`) and `hermes auth status openai-codex` pre-flight |
 | 64–121 | `HERMES_FLEET_ENV_INJECTION_PATCH` — idempotent patch of Hermes's `gateway.py` |
 | 123–199 | Directory structure + `service-context.md` template (only created if missing) |
-| 207–255 | `write_soul_swe()` — staff-swe SOUL.md |
-| 258–305 | `write_soul_sre()` — staff-sre SOUL.md |
-| 308–355 | `write_soul_pm()` — staff-pm SOUL.md |
+| 207–256 | `write_soul_swe()` — staff-swe SOUL.md |
+| 258–306 | `write_soul_sre()` — staff-sre SOUL.md |
+| 308–356 | `write_soul_pm()` — staff-pm SOUL.md |
 | 365–412 | `write_config()` — config.yaml generator (`provider: openai-codex`, `default: gpt-5.5`) |
 | 414–464 | Cron schedule constants and digest/handoff prompt text (7:30 SRE, 8:00 SWE, 8:30 PM) |
 | 477–517 | `.env` templates + cross-fleet auto-populate of shared values |
