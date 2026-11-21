@@ -87,7 +87,7 @@ shipped (v1.5.0, #122), which is what the original recommendation's fallback
 **Risk:** Attacker-controlled input in Codex output could manipulate telltale regex detection.
 
 **Review checklist:**
-- [x] Confirm telltale regex patterns (line 1450) are fixed strings, not user input — confirmed; `compat_re`/`credits_re`/`mcp_re`/`auth_re` are all literal strings assigned in source, never built from `$codex_prompt` or any other runtime input.
+- [x] Confirm telltale regex patterns (line 1450) are fixed strings, not user input — confirmed; `compat_re`/`credits_re`/`mcp_re` are all literal strings assigned in source, never built from `$codex_prompt` or any other runtime input. (A fourth telltale, `auth_re`, is proposed on still-open, unmerged PR #115 — not yet part of shipped `babysit-with-review.sh`; re-check this line once/if that PR merges.)
 - [x] Verify Codex output is captured from stdout/stderr, not constructed from variables — confirmed; `codex "${codex_args[@]}" "$codex_prompt" 2>&1 | tee -a "$LOG" "$TMP_CODEX_FULL"` captures the process's real combined stdout/stderr directly, nothing is reassembled from variables first.
 - [x] Check if regex patterns could match benign error messages (false positive risk) — yes, demonstrated in practice: Codex can quote the telltale strings back verbatim while reviewing this very function's own source (see the comment immediately below this checklist, and issue #82/PR #83's false-positive incident). Structural success is checked first specifically to guard against this.
 - [x] Assess whether false positives cause wasteful retries or security issues (Answer: wasteful retries, not security) — confirmed; a false positive at worst re-drafts/relabels a PR for a retry, it doesn't bypass any access control.
