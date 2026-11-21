@@ -149,7 +149,7 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
   the shipped implementation: `babysit-with-review.sh` uses `wip/<project>/iter-<N>`
   off `HEAD` (`git worktree add -b "$_wt_branch" "$_wt_dir" HEAD`, line ~2652);
   `babysit-work-prep.sh` uses `work-prep/<slug>-<pid>` off the default branch's SHA
-  (`git worktree add -b "$branch" "$worktree" "$base_sha"`, line ~1263). Neither ever
+  (`git worktree add -b "$branch" "$worktree" "$base_sha"`, line ~1304). Neither ever
   reuses a branch across attempts, so a rebuilt ticket starts from a genuinely clean
   base every time — no state from a prior crashed or abandoned attempt can leak in.
   Builder follows the same pattern (e.g., `build/<slug>-<pid>`).
