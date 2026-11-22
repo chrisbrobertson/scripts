@@ -100,6 +100,7 @@ Parent in exactly one of `bzr-pr-ready`, `bzr-blocked`, or back in `bzr-ready`; 
 9. A skipped sub-issue leaves no commits on the branch head (its range is reverted) and carries `bzr-blocked` with the last reviewer findings.
 
 ### Error model
+- Issue closed between claim and dispatch (`gh issue view --json state` is not `OPEN`): `sentinel BLOCKED "issue is not open"`, exit 0, before the spec precheck ever runs (`bazaar-build-worker.sh:56`). Defensive only — the build controller's own queue read already excludes closed issues via GraphQL `states:OPEN` — so this only fires on a narrow dispatch-time race.
 - Precheck fails: `SPEC_GAP`, `bzr-blocked`, comment listing each missing item.
 - Implementer `STUCK`: safety push, back to `bzr-ready`; the controller counts the attempt and escalates on the third.
 - Reviewer unavailable (transport failure after the lib's retries, Codex CLI too old, or Codex workspace out of credits): all three fold into `STUCK reviewer unavailable on unit #<k>: <reason>` (the current sub-issue stays pending in the marker block and resumes next attempt). The controller counts this as an attempt like any other `STUCK`; nothing distinguishes the three causes or exempts them from the attempt counter.

@@ -203,7 +203,7 @@ Composes with both workers, `lib/bazaar-common.sh`, and [BZR-FEAT-REVIEW-LIB](L3
 9. **Given** a worker exits `STUCK` for the third time since the last escalation, **when** the controller handles it, **then** `bzr-blocked` is added, `bzr-escalated` posted, and the issue leaves every queue.
 10. **Given** a human removes `bzr-blocked`, **when** the next failure occurs, **then** the attempt count is 1.
 11. **Given** `--workers 2` and three `bzr-ready` issues, **when** `bazaar-build.sh` ticks, **then** exactly two are claimed.
-12. **Given** a sub-issue with no labels, **when** `bazaar-issues.sh` ticks, **then** it never becomes a candidate — `bzr_candidates` excludes any issue with a non-null `parent` before role/label matching runs, so no `skip` line is logged for it.
+12. **Given** a sub-issue with no labels, **when** `bazaar-issues.sh` ticks, **then** it never becomes a candidate — `bzr_candidates` excludes any issue with a non-null `parent` before role/label matching runs, so no `skip` line is logged for it. A freshly-created sub-issue whose `parent` link hasn't landed yet is caught by `bazaar-issues.sh`'s own `role_candidates` guard instead, which also excludes on the derived `sub_marker` field (see [BZR-SYS-BAZAAR](L2-bazaar-system.md)'s queue-read contract) — the two guards together, not `parent` alone, are what keep a sub-issue off the queue across that race window.
 13. **Given** a `bzr-pr-ready` parent whose PR merged with one sub-issue skipped and later unblocked, **when** the merged sweep runs, **then** the parent becomes `bzr-ready`.
 14. **Given** the stop file exists, **when** a tick runs, **then** no dispatch and exit 0 after workers finish.
 
