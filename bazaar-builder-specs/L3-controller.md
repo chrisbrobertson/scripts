@@ -108,7 +108,7 @@ Per tick, zero or more `dispatch <issue>` and `skip <issue> <reason>` log lines;
 | Script | Queue (in order) | Sweeps before reading |
 |---|---|---|
 | `bazaar-issues.sh` | open issues that are not sub-issues, not PRs, and carry no `bzr-*` label | (a) dead-pid release: `bzr-drafting` → no label, counted as one attempt (below); (b) bounce: `bzr-needs-info` with a human comment newer than the last marker → no label; (c) approval sweep (below); (d) rejected spec: `bzr-spec-review` whose spec PR was closed unmerged → `bzr-blocked`, close its draft-time sub-issues |
-| `bazaar-build.sh` | `bzr-ready` | (a) dead-pid release: `bzr-building` → `bzr-ready`, counted as one attempt (below); (b) merged sweep: `bzr-pr-ready` whose PR merged → close parent if every sub-issue is closed, else `bzr-ready` for the remaining unblocked sub-issues |
+| `bazaar-build.sh` | `bzr-ready` | (a) dead-pid release: `bzr-building` → `bzr-ready`, counted as one attempt (below); (b) merged sweep: `bzr-pr-ready` whose PR merged → close parent if every sub-issue is closed; `bzr-ready` if any remaining open sub-issue is unblocked; otherwise (every remaining open sub-issue already `bzr-blocked`) leave the parent `bzr-pr-ready` untouched, waiting for a human to clear one (`bazaar-build.sh:80-90`) |
 
 Excluded from every queue: sub-issues (built through their parent), closed issues, issues carrying `bzr-blocked`, issues whose newest claim names a live process.
 
