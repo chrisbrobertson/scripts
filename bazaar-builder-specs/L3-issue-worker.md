@@ -55,7 +55,7 @@ STUCK <reason>                    # environmental, including reviewer unavailabl
 - The EXIT trap safety-pushes the branch, removes the worktree, and writes `STUCK` if no sentinel was reached.
 
 ## Consumer
-[BZR-FEAT-CONTROLLER](L3-controller.md) (role issue). Output consumed by the controller's approval sweep and then by [BZR-FEAT-BUILD-WORKER](L3-build-worker.md).
+[BZR-FEAT-CONTROLLER](L3-controller.md) (role issues). Output consumed by the controller's approval sweep and then by [BZR-FEAT-BUILD-WORKER](L3-build-worker.md).
 
 # Substance
 
