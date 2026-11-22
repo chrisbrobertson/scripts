@@ -110,7 +110,7 @@ One sentinel; the issue in exactly one of `bzr-needs-info`, `bzr-spec-review`, `
 Resume is binary, not phase-granular: re-entry fetches origin; if the `bzr/spec-<issue>` branch exists with an open PR, the worker skips straight to the review cycle (body not rewritten, classification read from the PR marker); otherwise it restarts at phase 1 (verify). No rebase is performed.
 
 ### Versioning policy
-Prompts versioned with `bazaar-issues.sh`; a prompt change bumps the minor version.
+Prompts versioned with `bazaar-issue-worker.sh`; a prompt change bumps the minor version.
 
 ## Performance budget
 Verify + normalise + classify: 3-10 min Sonnet-class. Draft: 10-30 min. Review cycles: 1-7 min reviewer plus 5-15 min revision each, up to 6 (`MAX_SPEC_REVIEW_CYCLES`, raised from 4 on 2026-09-20). Cost per issue: roughly $2-10 depending on cycles.
