@@ -72,7 +72,7 @@ STUCK <reason>              # transient/infra failure; ticket left in queue, ret
 (no sentinel)                # transient/infra failure; ticket left in queue, retried next run
 
 # Halt outcomes (run_build_cycle; no gh pr merge in any path)
-BLOCKING=0 converged        # labels build-ready-for-merge, posts codex-review=success,
+BLOCKING=0 converged        # posts codex-review=success, labels build-ready-for-merge,
                              # posts summary comment, swaps ticket build-ready → build-done
 max cycles exhausted        # labels build-max-cycles, posts summary comment (no status),
                              # swaps ticket build-ready → build-done
@@ -94,9 +94,10 @@ build-codex-no-credits      # Codex workspace out of credits; ticket KEEPS build
     # retry next run is a completed run, not a failed one. This also covers every
     # stalled-PR-sweep fail-closed halt (HALT_RC 5-11; see the "Stalled-PR sweep"
     # bullet under "What we know" and the "Failure modes & blast radius" section,
-    # both below) — each leaves its PR's resumable
-    # label and ticket state untouched for the next run's sweep to retry, so none of
-    # them are treated as a failed run either.
+    # both below) — each leaves its PR's resumable label in place for the next
+    # run's sweep to retry, and the ticket's build-ready state untouched too,
+    # EXCEPT HALT_RC=7 (failed label-removal after the ticket was already marked
+    # build-done) — so none of them are treated as a failed run either.
 1   # Fatal: pre-flight failure (including the startup reviewer probe), gh/git auth
     # failure, lock file collision, missing/malformed Jira env vars when
     # --source jira|both is requested, or a failed `gh issue list` in
@@ -443,10 +444,13 @@ babysit-builder.sh [--repo OWNER/REPO] [--source github|jira|both]
   with GitHub-sourced ones; exit 0.
 - **Stalled-PR sweep hits any of its seven fail-closed conditions (`HALT_RC`
   5-11, issue #106):** whole run halts before the ticket queue is read, with the
-  triggering PR's resumable label and its ticket's `build-ready` left untouched;
-  the top-level `HALT_RC` dispatch (`babysit-builder.sh:1957-1968`) emits one
-  summary line per code naming the specific failure; exit 0. See "Failure modes
-  & blast radius" below for the blast-radius detail per condition.
+  triggering PR's resumable label left untouched, and its ticket's `build-ready`
+  left untouched too — except `HALT_RC=7`, where the ticket was already swapped
+  to `build-done` before the failing label-removal, so it's the label alone that's
+  left for the sweep to retry; the top-level `HALT_RC` dispatch
+  (`babysit-builder.sh:1957-1968`) emits one summary line per code naming the
+  specific failure; exit 0. See "Failure modes & blast radius" below for the
+  blast-radius detail per condition.
 
 ### Idempotency
 Idempotent per ticket and per PR: re-running the script against a queue with no new
@@ -568,13 +572,15 @@ Events emitted to stderr:
   risk `babysit-with-review.sh` already accepts for its own status writes.
 - **Stalled-PR sweep hits any of its seven fail-closed conditions (`HALT_RC` 5-11,
   issue #106):** the whole run halts (exit 0) before the ticket queue is read, with
-  the triggering PR's resumable label and its ticket's `build-ready` label untouched.
-  Blast: that one run builds nothing new (every other queued ticket waits too, since
-  the sweep runs before queue read), but no duplicate PR and no stranded
-  `build-ready` ticket with no label pointing back to it — the next run's sweep finds
-  the same PR again once the reported condition (lookup/fetch/credentials/API
-  failure) is fixed. See the "Stalled-PR sweep" bullet under "What we know" above
-  for the condition-by-condition breakdown.
+  the triggering PR's resumable label left untouched, and its ticket's `build-ready`
+  label untouched too — except `HALT_RC=7`, where the ticket is already off the
+  queue (swapped to `build-done`) before the failing label-removal, so only the
+  label is left for the sweep to retry. Blast: that one run builds nothing new
+  (every other queued ticket waits too, since the sweep runs before queue read),
+  but no duplicate PR and no stranded `build-ready` ticket with no label pointing
+  back to it — the next run's sweep finds the same PR again once the reported
+  condition (lookup/fetch/credentials/API failure) is fixed. See the "Stalled-PR
+  sweep" bullet under "What we know" above for the condition-by-condition breakdown.
 
 # Bounds
 
@@ -647,9 +653,9 @@ Events emitted to stderr:
    referencing a valid spec file, **when** the script runs, **then** a worktree is
    created, the spec is implemented, a PR is opened, and the build cycle begins.
 2. **Given** a build cycle that reaches `BLOCKING=0` on cycle 2, **when** convergence is
-   detected, **then** the PR is labelled `build-ready-for-merge`, a
-   `codex-review=success` status is posted, a summary comment is posted, and no
-   `gh pr merge` call is made.
+   detected, **then** a `codex-review=success` status is posted, the PR is labelled
+   `build-ready-for-merge`, a summary comment is posted, and no `gh pr merge` call
+   is made.
 3. **Given** a build cycle that reaches `MAX_REVIEW_CYCLES` with BLOCKING findings still
    open, **when** the cap is hit, **then** the PR is labelled `build-max-cycles`, a
    summary comment is posted, and no `codex-review` status is posted.
