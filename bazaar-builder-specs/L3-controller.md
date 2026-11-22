@@ -119,7 +119,7 @@ For each open issue in `bzr-spec-review` whose spec PR (branch `bzr/spec-<issue>
 3. `gh pr merge --merge`. On failure: comment on the issue, stay in `bzr-spec-review`. There is no head-change or comment-dedup gate: as long as the PR stays open, non-draft, and approved, every subsequent tick re-runs steps 1-3 unconditionally and re-posts the same failure comment (`sweep_approvals`, `bazaar-issues.sh:189-204`) — see Failure modes.
 4. Reconcile sub-issues: the worker created them at draft time (see [BZR-FEAT-ISSUE-WORKER](L3-issue-worker.md)); when two or more `spec_type: task` files merge, the sweep verifies one open sub-issue with a `bzr-sub-issue … spec=<L4 ID>` marker exists per file, creates any missing, and closes any whose L4 was dropped from the final PR. When zero or one `spec_type: task` file merges, no sub-issue is wanted for it and none is created (`bzr_reconcile_sub_issues`, `lib/bazaar-common.sh:595`).
 5. Rewrite the parent's `Specs:` line to the merged spec paths (the build precheck reads this; `update_specs_line` in `bazaar-issues.sh` writes bare file paths only, no spec IDs).
-6. `bzr-spec-review` → `bzr-ready`; comment with the sub-issue numbers (the merged spec list goes to the parent's `Specs:` line via step 5, not the comment; `approve_issue`, `bazaar-issues.sh:154-158`).
+6. `bzr-spec-review` → `bzr-ready`; comment with the sub-issue numbers (the merged spec list goes to the parent's `Specs:` line via step 5, not the comment; `approve_issue`, `bazaar-issues.sh:155-158`).
 
 Interrupted after step 3: detected as "PR merged, issue still `bzr-spec-review`", resumes at step 4.
 
