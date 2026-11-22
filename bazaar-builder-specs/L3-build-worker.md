@@ -110,7 +110,7 @@ Parent in exactly one of `bzr-pr-ready`, `bzr-blocked`, or back in `bzr-ready`; 
 Resume-safe through the marker block and the branch on origin. A second dispatch on a finished issue finds `bzr-pr-ready` and does nothing (controller never queues it).
 
 ### Versioning policy
-With `bazaar-build.sh`.
+With `bazaar-build-worker.sh`.
 
 ## Performance budget
 Per sub-issue: 10-40 min implement plus 1-7 min per review cycle times up to 6. An issue with 3 sub-issues: 1-4 h wall-clock, roughly $10-40.
