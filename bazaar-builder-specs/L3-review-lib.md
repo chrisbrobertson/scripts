@@ -43,7 +43,7 @@ valid_review_structure <file>                                       # unchanged 
 count_blocking    <file>
 reviewer_preflight                                                  # startup fatal on outdated/no-credits; defined but not yet called by either worker (dead code — `lib/bazaar-review.sh:304`)
 
-# GitHub helpers used by the cycle (lib/bazaar-review.sh:321-370, ported from
+# GitHub helpers used by the cycle (lib/bazaar-review.sh:325-371, ported from
 # babysit-builder.sh:977 collect_pr_feedback and :1012 post_reviewer_review,
 # which predate the extraction — babysit-work-prep.sh:788 also had its own
 # post_reviewer_review)
