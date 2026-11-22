@@ -62,7 +62,7 @@ Gates: revert-on-skip and second-round mechanics (assumed; see the build-worker 
 
 | Phase | New/changed lines (est.) | Notes |
 |---|---|---|
-| 1 | 1,188 lib + 230 harness (actual) | mostly moved code; 12 prompts verbatim |
+| 1 | 1,193 lib + 254 harness (actual) | mostly moved code; 12 prompts verbatim |
 | 2 | 470 common + 90 build + 250 issues + 170 fake-gh + 3 harnesses (actual) | new |
 | 3 | 290 worker + 200 harness (actual) | prompts adapted from work-prep |
 | 4 | 345 worker + 190 harness (actual) | prompts adapted from the builder |
