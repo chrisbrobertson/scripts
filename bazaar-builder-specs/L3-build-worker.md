@@ -17,7 +17,7 @@ complexity:
 # Frame
 
 ## TL;DR
-Given one `bzr-ready` issue, the build worker checks that everything it needs is really there, fetches the issue's native sub-issues, plans their order, and implements them one at a time on a single branch `bzr/<issue>-<slug>` in a dedicated worktree, running the convergent code review cycle after each sub-issue. A sub-issue whose review does not converge is reverted off the branch, labelled `bzr-blocked`, and skipped; the rest continue. When the last one is done it marks the PR ready with whatever converged and labels the parent `bzr-pr-ready`. It never merges.
+Given one `bzr-ready` issue, the build worker checks that everything it needs is really there, fetches the issue's native sub-issues, plans their order, and implements them one at a time on a single branch `bzr/<issue>-<slug>` in a dedicated worktree, running the convergent code review cycle after each sub-issue. A sub-issue whose review does not converge is reverted off the branch, labelled `bzr-blocked`, and skipped; the rest continue. When the last one is done it marks the PR ready with whatever converged and writes the `PR_READY` sentinel; the controller then labels the parent `bzr-pr-ready`. It never merges.
 
 ## Analog
 Like a senior engineer picking up an epic: reads the stories, orders them, ships them one commit-series at a time on one branch, gets each slice reviewed, and asks the lead to merge at the end.
