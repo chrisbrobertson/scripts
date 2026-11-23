@@ -20,9 +20,12 @@ Suite 3, retry/MCP-failure log-format coverage for TC-3.7/TC-3.8 via
 structural-validation coverage for TC-3.9/TC-3.10/TC-3.11/TC-3.12/TC-3.12b/
 TC-3.13/TC-3.14 via `test-bazaar-review-lib.sh`, and the false-positive
 regression coverage for TC-3.15 via `test-babysit-review-false-positive.sh`
-(see Suite 3 below for details); only TC-2.3, TC-2.6, TC-2.7, TC-2.8, and
-TC-3.1 through TC-3.6 remain manual smoke tests against live Claude/Codex/gh,
-not yet executed  
+(see Suite 3 below for details); TC-3.1 through TC-3.6 are also automated,
+against the shared `lib/bazaar-review.sh` copy of the retry/telltale logic via
+`test-bazaar-review-lib.sh` — only their coverage against
+`babysit-with-review.sh`'s own copy of `codex_review_with_retry()` remains
+pending open PR #45; only TC-2.3, TC-2.6, TC-2.7, and TC-2.8 remain manual
+smoke tests against live Claude/Codex/gh, not yet executed  
 **Priority:** Medium (internal tool, existing implementation to verify)
 
 ## Test Strategy
@@ -681,6 +684,11 @@ for the live-PR path.
 **When:** Function called  
 **Then:** Return 0 with no retries
 
+**Status: automated (shared lib copy).** `test-bazaar-review-lib.sh` case
+`tc31` drives this against `review_with_retry()` in `lib/bazaar-review.sh`.
+Coverage against `babysit-with-review.sh`'s own `codex_review_with_retry()`
+copy is pending open PR #45.
+
 **Test steps:**
 1. Create test PR
 2. Run review cycle with functional Codex
@@ -694,6 +702,11 @@ for the live-PR path.
 **Given:** Codex fails on attempt 1 with telltale match, succeeds on attempt 2  
 **When:** Function called  
 **Then:** Return 0 after 60s delay
+
+**Status: automated (shared lib copy).** `test-bazaar-review-lib.sh` case
+`tc32` drives this against `review_with_retry()` in `lib/bazaar-review.sh`.
+Coverage against `babysit-with-review.sh`'s own `codex_review_with_retry()`
+copy is pending open PR #45.
 
 **Test steps:**
 1. Create test PR
@@ -711,6 +724,11 @@ for the live-PR path.
 **When:** Function called  
 **Then:** Return 0 after 60s + 300s delays
 
+**Status: automated (shared lib copy).** `test-bazaar-review-lib.sh` case
+`tc33` drives this against `review_with_retry()` in `lib/bazaar-review.sh`.
+Coverage against `babysit-with-review.sh`'s own `codex_review_with_retry()`
+copy is pending open PR #45.
+
 **Test steps:**
 1. Create test PR
 2. Simulate MCP failure for 2 minutes: block chatgpt.com
@@ -725,6 +743,11 @@ for the live-PR path.
 **Given:** Codex fails on all 3 attempts with telltale match  
 **When:** Function called  
 **Then:** Return 2 (MCP transport failure)
+
+**Status: automated (shared lib copy).** `test-bazaar-review-lib.sh` case
+`at2` ("AT2/TC-3.4") drives this against `review_with_retry()` in
+`lib/bazaar-review.sh`. Coverage against `babysit-with-review.sh`'s own
+`codex_review_with_retry()` copy is pending open PR #45.
 
 **Test steps:**
 1. Create test PR
@@ -742,14 +765,17 @@ for the live-PR path.
 **When:** Function called  
 **Then:** Return 1 (non-transport failure) with no retries
 
+**Status: automated (shared lib copy).** `test-bazaar-review-lib.sh` case
+`tc35` drives this against `review_with_retry()` in `lib/bazaar-review.sh`.
+Coverage against `babysit-with-review.sh`'s own `codex_review_with_retry()`
+copy is pending open PR #45.
+
 **Test steps:**
 1. Create test PR with malformed prompt (if possible to trigger Codex error)
 2. Run review cycle
 3. Verify: Codex exits non-zero, no telltale match in output
 4. Verify: Function returns 1 (no retries)
 5. Verify: PR labeled `review-incomplete` (not `review-mcp-outage`)
-
-**Note:** Difficult to simulate non-transport Codex failure. May verify via code review or mock test.
 
 ---
 
@@ -758,13 +784,16 @@ for the live-PR path.
 **When:** Function called  
 **Then:** Treat as failure, check telltale, potentially retry
 
+**Status: automated (shared lib copy).** `test-bazaar-review-lib.sh` case
+`tc36` drives this against `review_with_retry()` in `lib/bazaar-review.sh`.
+Coverage against `babysit-with-review.sh`'s own `codex_review_with_retry()`
+copy is pending open PR #45.
+
 **Test steps:**
 1. Mock Codex to exit 0 with no output (requires test harness)
 2. Run review cycle
 3. Verify: Function treats as failure, checks telltale regex
 4. If telltale match: retry; else: return 1
-
-**Note:** Requires test harness to mock Codex behavior. May verify via code review instead.
 
 ---
 
@@ -1024,7 +1053,10 @@ Suite 4 and Suite 1's/Suite 2's automated cases. TC-3.1-3.8 are a partial
 exception: `codex_review_with_retry()`'s own `BABYSIT_TEST_MODE=reviewer` hook
 already exists, so TC-3.7/TC-3.8 (the log-message-format checks) are automated —
 `test-babysit-review-retry-log-format.sh` — independently of open PR #45; TC-3.1-3.6
-remain pending #45's merge (see the status note above TC-3.9). TC-3.9-3.15 are
+are automated against the shared `lib/bazaar-review.sh` copy via
+`test-bazaar-review-lib.sh` (see each TC's own status note above) — only their
+coverage against `babysit-with-review.sh`'s own copy remains pending #45's
+merge. TC-3.9-3.15 are
 automated a third way, against the `lib/bazaar-review.sh` copy of the same
 retry/telltale logic (`test-bazaar-review-lib.sh`) rather than
 `babysit-with-review.sh`'s copy — see Test Suite 3 above.
