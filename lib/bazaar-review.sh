@@ -50,7 +50,7 @@ _bzr_sleep() {
 
 _bzr_log() { printf '%s\n' "$*" | tee -a "$LOG" >&2; }
 
-# ---------- implementer harness (babysit-builder.sh:650-716, verbatim) ----------
+# ---------- implementer harness (babysit-builder.sh:650-711, verbatim) ----------
 
 run_claude() {
   _bzr_require LOG
@@ -119,7 +119,7 @@ run_implementer() {
   esac
 }
 
-# ---------- reviewer harness (babysit-builder.sh:717-901) ----------
+# ---------- reviewer harness (babysit-builder.sh:717-904) ----------
 
 # Count BLOCKING findings in a strict-markdown review on stdin.
 # Treats a single `- (none)` bullet as zero findings.
