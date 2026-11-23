@@ -173,7 +173,7 @@ Decisions already recorded in ASF-PROD-BABYSIT-WITH-REVIEW and ASF-SYS-AUTONOMOU
   `valid_review_structure` validation. Same `MAX_REVIEW_CYCLES` default of 6. The
   implementer model escalation documented in `L2-autonomous-dev-system.md:117`
   (`claude-sonnet-5` cycles 1–3, `claude-opus-4-8` cycles 4+) is mirrored too:
-  `_rem_model` is set per cycle at `babysit-builder.sh:1254-1260`.
+  `_rem_model` is set per cycle at `babysit-builder.sh:1253-1261`.
 - **MCP resilience is reused unchanged.** The same retry-with-backoff (0/60s/300s) and
   telltale detection from `ASF-FEAT-MCP-RESILIENCE` applies when `--reviewer codex`.
   Two run-level additions follow from the queue shape:

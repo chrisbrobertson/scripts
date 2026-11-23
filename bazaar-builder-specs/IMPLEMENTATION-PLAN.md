@@ -21,10 +21,10 @@ Gate: none beyond decision 8 (already made).
 
 ## Phase 2 — `lib/bazaar-common.sh` + `bazaar-issues.sh` + `bazaar-build.sh` controllers (BZR-FEAT-CONTROLLER) — DONE 2026-09-19
 
-1. Lib skeleton: shared arg parsing, `--workers`, `--once`, `--interval`, stop file, `BZR_HOME` layout, label bootstrap (`ensure_bzr_labels`, seven labels), comment helper with the "approved" guard.
+1. Lib skeleton: shared arg parsing, `--workers`, `--once`, `--interval`, stop file, `BZR_HOME` layout, label bootstrap (`bzr_ensure_labels`, seven labels), comment helper with the "approved" guard.
 2. Queue read (intake = no `bzr-*` label; sub-issue and PR exclusion), priority sort, live re-check before claim, claim protocol (label, remove, marker with host/pid/start-time).
 3. Dead-pid release and startup release; attempt counter and escalation.
-4. `bazaar-issues.sh` sweeps: bounce, approval (status flip, `codex-review` status, merge, sub-issue reconciliation, `Specs:` line), rejected spec. `bazaar-build.sh` sweeps: merged PR (close parent or requeue for round 2).
+4. `bazaar-issues.sh` sweeps: bounce, approval (status flip, `codex-review` status, merge, sub-issue reconciliation, `Specs:` line), rejected spec. `bazaar-build.sh` sweeps: merged PR (close parent if every sub-issue is closed, requeue to `bzr-ready` for round 2 if an unblocked sub-issue remains, otherwise leave the parent untouched while only blocked sub-issues remain).
 5. Optional Haiku tie-break (`--effort low`) with strict output validation and `none` switch.
 6. `--dry-run`, `--audit`.
 7. Harness cases 1-14 from the controller L3.
@@ -53,7 +53,7 @@ Gates: revert-on-skip and second-round mechanics (assumed; see the build-worker 
 
 ## Phase 5 — rollout
 
-1. `ensure_bzr_labels` on one pilot repo; run both controllers with `--workers 1 --once` from a shell, then from cron on a dev-laptop host.
+1. `bzr_ensure_labels` on one pilot repo; run both controllers with `--workers 1 --once` from a shell, then from cron on a dev-laptop host.
 2. Update `CLAUDE.md` file table and `docs/` with the operator guide.
 3. Retire `babysit-builder.sh` and `babysit-work-prep.sh` (owner, 2026-09-19): delete both scripts, remove their rows from `CLAUDE.md`, add a "superseded by bazaar-builder-specs" note to `babysit-specs/README.md` Status, close `babysit-specs` PR #8 (`L3-work-prep.md`) as superseded. `babysit-with-review.sh` stays.
 4. Move specs to `ready` as the owner sees fit.
@@ -63,9 +63,9 @@ Gates: revert-on-skip and second-round mechanics (assumed; see the build-worker 
 | Phase | New/changed lines (est.) | Notes |
 |---|---|---|
 | 1 | 1,193 lib + 254 harness (actual) | mostly moved code; 12 prompts verbatim |
-| 2 | 470 common + 90 build + 250 issues + 170 fake-gh + 3 harnesses (actual) | new |
-| 3 | 290 worker + 200 harness (actual) | prompts adapted from work-prep |
-| 4 | 345 worker + 190 harness (actual) | prompts adapted from the builder |
+| 2 | 537 common + 122 build + 275 issues + 145 fake-gh + 3 harnesses (actual) | new |
+| 3 | 261 worker + 218 harness (actual) | prompts adapted from work-prep |
+| 4 | 345 worker + 182 harness (actual) | prompts adapted from the builder |
 | 5 | docs | |
 
 Estimates are for scoping only; they are not commitments and will be revised in `log.md` as phases land.
